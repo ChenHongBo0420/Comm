@@ -175,9 +175,9 @@ def square_qam_demod(x, L):
 
 
 def int2bit(d, M):
-    M = np.asarray(M, dtype=np.int)
+    M = np.asarray(M, dtype=int)  # 或 np.int64 / np.int32 根据需要
     d = np.atleast_1d(d).astype(np.uint8)
-    b = np.unpackbits(d[:,None], axis=1)[:,-M:]
+    b = np.unpackbits(d[:, None], axis=1)[:,-M:]
     return b
 
 
