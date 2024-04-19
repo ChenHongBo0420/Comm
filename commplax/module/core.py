@@ -211,7 +211,7 @@ def conv1d(
     return Signal(x, t)
 
 
-def maskconv1d(scope: Scope,
+def conv1d1(scope: Scope,
            signal: Any,
            taps=31,
            mode='valid',
