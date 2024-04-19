@@ -211,6 +211,30 @@ def conv1d(
     return Signal(x, t)
 
 
+def maskconv1d(scope: Scope,
+           signal: Any,
+           taps=31,
+           mode='valid',
+           kernel_init=jnp.zeros,
+           conv_fn=xop.convolve):
+    
+    x, t = signal
+    t = scope.variable('const', 't', t, taps, 1, mode).value
+
+    # Initialize convolution kernel
+    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+
+    # Apply convolution function
+    x_conv = conv_fn(x, h, mode=mode)
+
+    # Define a mask within the function
+    mask = jnp.array([i % 2 == 0 for i in range(x_conv.shape[-1])])
+
+    # Apply mask to the result of the convolution
+    x_masked = jnp.where(mask, x_conv, 0)
+
+    return Signal(data=x_masked, time_info=t)
+             
 def mimoconv1d(
     scope: Scope,
     signal,
