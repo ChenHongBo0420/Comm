@@ -21,7 +21,7 @@ from flax.core import Scope, lift, freeze, unfreeze
 from commplax import comm, xcomm, xop, adaptive_filter as af
 from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
-
+from jax import random
 
 Array = Any
 
@@ -211,25 +211,24 @@ def conv1d(
     return Signal(x, t)
 
 
+def kernel_initializer(rng, shape):
+    return random.normal(rng, shape)  
+
 def conv1d1(scope: Scope,
             signal: Any,
             taps=31,
             mode='valid',
-            kernel_init=jnp.zeros,
+            kernel_init=kernel_initializer, 
             conv_fn=xop.convolve):
     
     x, t = signal
 
-    # Initialize convolution kernel
-    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+    h = scope.param('kernel', kernel_init, (taps, jnp.complex64))
 
-    # Apply convolution function
     x_conv = conv_fn(x, h, mode=mode)
 
-    # Define a mask within the function
-    mask = jnp.array([i % 2 == 0 for i in range(x_conv.shape[-1])])
+    mask = jnp.array([i % 2 == 0 for i in range(x_conv.shape[0])])
 
-    # Apply mask to the result of the convolution
     x_masked = jnp.where(mask, x_conv, jnp.zeros_like(x_conv))
 
     return Signal(data=x_masked, time_info=t)
