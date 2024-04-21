@@ -133,11 +133,13 @@ def square_qam_graydec_int(x, L):
 
 def pamdecision(x, L):
     x = np.asarray(x)
+    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     y = np.atleast_1d((np.round(x / 2 + 0.5) - 0.5) * 2).astype(int)
-    # apply bounds
+
     bd = L - 1
     y[y >  bd] =  bd
     y[y < -bd] = -bd
+
     return y
 
 
