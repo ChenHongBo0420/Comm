@@ -132,15 +132,24 @@ def square_qam_graydec_int(x, L):
 
 
 def pamdecision(x, L):
-    x = np.asarray(x)
-    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    y = np.atleast_1d((np.round(x / 2 + 0.5) - 0.5) * 2).astype(int)
+    try:
+        x = np.asarray(x)
+        print("Original x:", x)  # 打印原始x值
 
-    bd = L - 1
-    y[y >  bd] =  bd
-    y[y < -bd] = -bd
+        if np.any(np.isinf(x)) or np.any(np.isnan(x)):
+            raise ValueError("Input contains NaN or Inf values.")
 
-    return y
+        # 正常处理
+        y = np.atleast_1d((np.round(x / 2 + 0.5) - 0.5) * 2).astype(int)
+        bd = L - 1
+        y[y > bd] = bd
+        y[y < -bd] = -bd
+        return y
+
+    except Exception as e:
+        print("Error processing input:", e)
+        # 返回错误或默认处理
+        return np.zeros_like(x, dtype=int)
 
 
 def square_qam_decision(x, L):
