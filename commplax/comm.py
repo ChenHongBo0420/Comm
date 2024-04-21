@@ -136,11 +136,25 @@ def pamdecision(x, L):
         x = np.asarray(x)
         print("Original x:", x)  # 打印原始x值
 
+        # 检查并处理NaN和无穷大值
         if np.any(np.isinf(x)) or np.any(np.isnan(x)):
+            print("Detected NaN or Inf values in x:", x)
             raise ValueError("Input contains NaN or Inf values.")
 
-        # 正常处理
-        y = np.atleast_1d((np.round(x / 2 + 0.5) - 0.5) * 2).astype(int)
+        # 进行决策逻辑计算
+        intermediate = (x / 2 + 0.5)
+        print("Intermediate values:", intermediate)
+
+        rounded = np.round(intermediate)
+        print("Rounded values:", rounded)
+
+        shifted = (rounded - 0.5) * 2
+        print("Shifted and scaled values:", shifted)
+
+        y = np.atleast_1d(shifted).astype(int)
+        print("Final y values:", y)
+
+        # 应用边界
         bd = L - 1
         y[y > bd] = bd
         y[y < -bd] = -bd
@@ -148,8 +162,8 @@ def pamdecision(x, L):
 
     except Exception as e:
         print("Error processing input:", e)
-        # 返回错误或默认处理
-        return np.zeros_like(x, dtype=int)
+        # 可以选择返回一个错误标志或者处理异常值
+        return np.zeros_like(x, dtype=int)  # 返回全零数组作为错误处理结果
 
 
 def square_qam_decision(x, L):
