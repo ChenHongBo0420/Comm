@@ -202,11 +202,14 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         momentum = 0.999
         trainable_mean = momentum * trainable_mean + (1 - momentum) * mean
         trainable_var = momentum * trainable_var + (1 - momentum) * var
+        scope.put_variable('params', 'trainable_mean', trainable_mean)
+        scope.put_variable('params', 'trainable_var', trainable_var)
+        mean = trainable_mean
+        var = trainable_var
     else:
         mean = trainable_mean
         var = trainable_var
-    return signal / jnp.sqrt(mean)
-    # return (signal - mean) / jnp.sqrt(var + 1e-8)
+    return (signal - mean) / jnp.sqrt(var + 1e-8)
 
 def conv1d(
     scope: Scope,
