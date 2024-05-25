@@ -205,8 +205,8 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     else:
         mean = trainable_mean
         var = trainable_var
-
-    return (signal - mean) / jnp.sqrt(var + 1e-8)
+    return signal / jnp.sqrt(mean)
+    # return (signal - mean) / jnp.sqrt(var + 1e-8)
 
 def conv1d(
     scope: Scope,
