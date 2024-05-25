@@ -214,25 +214,6 @@ def conv1d(
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
-def conv1d1(scope: Scope,
-            signal: Any,
-            taps=31,
-            mode='valid',
-            kernel_init=kernel_initializer, 
-            conv_fn=xop.convolve):
-    
-    x, t = signal
-
-    h = scope.param('kernel', kernel_init, (taps, jnp.complex64))
-
-    x_conv = conv_fn(x, h, mode=mode)
-
-    mask = jnp.array([i % 2 == 0 for i in range(x_conv.shape[0])])
-
-    x_masked = jnp.where(mask, x_conv, jnp.zeros_like(x_conv))
-
-    return Signal(data=x_masked, time_info=t)
-             
 def mimoconv1d(
     scope: Scope,
     signal,
