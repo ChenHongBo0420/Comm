@@ -200,12 +200,12 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
         batch_mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         batch_var = jnp.var(jnp.abs(signal.val)**2, axis=0)
         momentum = 0.999
-        new_trainable_mean = momentum * trainable_mean + (1 - momentum) * batch_mean
-        new_trainable_var = momentum * trainable_var + (1 - momentum) * batch_var
-        scope.put_variable('norm', 'trainable_mean', new_trainable_mean)
-        scope.put_variable('norm', 'trainable_var', new_trainable_var)
-        mean = new_trainable_mean
-        var = new_trainable_var
+        trainable_mean.value = momentum * trainable_mean + (1 - momentum) * batch_mean
+        trainable_var.value = momentum * trainable_var + (1 - momentum) * batch_var
+        # scope.put_variable('norm', 'trainable_mean', new_trainable_mean)
+        # scope.put_variable('norm', 'trainable_var', new_trainable_var)
+        # mean = new_trainable_mean
+        # var = new_trainable_var
     else:
         mean = trainable_mean
         var = trainable_var
