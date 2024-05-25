@@ -200,8 +200,8 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         var = jnp.var(jnp.abs(signal.val)**2, axis=0)
         momentum = 0.999
-        trainable_mean.value = momentum * trainable_mean + (1 - momentum) * mean
-        trainable_var.value = momentum * trainable_var + (1 - momentum) * var
+        trainable_mean = momentum * trainable_mean + (1 - momentum) * mean
+        trainable_var = momentum * trainable_var + (1 - momentum) * var
     else:
         mean = trainable_mean
         var = trainable_var
