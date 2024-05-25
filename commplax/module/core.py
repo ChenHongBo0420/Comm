@@ -220,11 +220,11 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         var = jnp.var(jnp.abs(signal.val)**2, axis=0) 
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-        running_var.value = momentum * running_var.value + (1 - momentum) * var
+        # running_var.value = momentum * running_var.value + (1 - momentum) * var
         
     else:
         mean = running_mean.value
-        var = running_var.value
+        # var = running_var.value
 
     # scaled_signal = normalized_signal * gamma + beta
 
