@@ -208,13 +208,15 @@ def batchpowernorm2(scope, signal, momentum=0.999, mode='train'):
     return (signal - mean) / jnp.sqrt(var + 1e-8)
 
 def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-    gamma = scope.param('gamma', lambda rng, shape: jnp.ones(shape), signal.val.shape[-1])
-    beta = scope.param('beta', lambda rng, shape: jnp.zeros(shape), signal.val.shape[-1])
+    gamma = scope.variable('norm', 'gamma',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+    beta = scope.variable('norm', 'beta',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     running_var = scope.variable('norm', 'running_var',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+                                  lambda *_: 0. + jnp. s(signal.val.shape[-1]), ())
     if mode == 'train':
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         var = jnp.var(jnp.abs(signal.val)**2, axis=0) 
@@ -227,7 +229,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 
     # scaled_signal = normalized_signal * gamma + beta
 
-    return (signal / jnp.sqrt(mean)) * gamma 
+    return (signal / jnp.sqrt(mean)) * gamma + beta 
 
 def conv1d(
     scope: Scope,
