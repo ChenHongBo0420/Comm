@@ -206,6 +206,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         running_var.value = momentum * running_var.value + (1 - momentum) * var
     else:
         mean = running_mean.value
+        var = running_var.value
     return ((signal - mean) / jnp.sqrt(var + 1e-8)) * gamma + beta 
 
 def batchpowernorm4(scope, signal, momentum=0.999, mode='train'):
