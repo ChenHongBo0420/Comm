@@ -224,7 +224,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
       
     s = signal / jnp.sqrt(mean)
     s = s * gamma + beta
-    thresholded_signal = jnp.maximum(s, tau)
+    thresholded_signal = jnp.maximum(s.val, tau)
     return thresholded_signal
 
 def conv1d(
