@@ -217,7 +217,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.param('norm', lambda rng, shape: jnp.ones(shape), signal.val.shape[-1])
     # running_var = scope.variable('norm', 'running_var', lambda *_: 0. + jnp. s(signal.val.shape[-1]), ())
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=-1, keepdims=True)
         var = jnp.var(jnp.abs(signal.val)**2, axis=0) 
         running_mean = momentum * running_mean + (1 - momentum) * mean
         # running_var.value = momentum * running_var.value + (1 - momentum) * var
