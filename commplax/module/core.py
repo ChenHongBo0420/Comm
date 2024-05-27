@@ -207,7 +207,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     else:
         mean = running_mean.value
         var = running_var.value
-    return ((signal) / jnp.sqrt(mean + 1e-8)) 
+    return ((signal) / jnp.sqrt(mean)) 
 
 def batchpowernorm4(scope, signal, momentum=0.999, mode='train'):
     gamma = scope.param('gamma', lambda rng, shape: jnp.ones(shape), signal.val.shape[-1])
