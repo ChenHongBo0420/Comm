@@ -192,7 +192,7 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
     return signal / jnp.sqrt(mean)
 
 
-def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+def batchpowernorm4(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     running_var = scope.variable('norm', 'running_var', lambda: jnp.ones(signal.val.shape[-1]))
@@ -209,12 +209,12 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         var = running_var.value
     return ((signal) / jnp.sqrt(mean)) 
 
-def batchpowernorm4(scope, signal, momentum=0.999, mode='train'):
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     gamma = scope.param('gamma', lambda rng, shape: jnp.ones(shape), signal.val.shape[-1])
     beta = scope.param('beta', lambda rng, shape: jnp.zeros(shape), signal.val.shape[-1])
     
-    running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+    # running_mean = scope.variable('norm', 'running_mean', lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+    running_mean = scope.param('gamma', lambda rng, shape: jnp.ones(shape), signal.val.shape[-1])
     # running_var = scope.variable('norm', 'running_var', lambda *_: 0. + jnp. s(signal.val.shape[-1]), ())
     if mode == 'train':
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
@@ -228,7 +228,7 @@ def batchpowernorm4(scope, signal, momentum=0.999, mode='train'):
 
     # scaled_signal = normalized_signal * gamma + beta
 
-    return (signal / jnp.sqrt(mean)) * gamma + beta 
+    return (signal / jnp.sqrt(mean))
 
 def conv1d(
     scope: Scope,
