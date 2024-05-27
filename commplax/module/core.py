@@ -217,14 +217,14 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0, keepdims=True)
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
       
     s = signal / jnp.sqrt(mean)
     s = s * gamma + beta
-    thresholded_signal = jnp.maximum(s.val, tau)
+    thresholded_signal = jnp.maximum(s, tau)
     return thresholded_signal
 
 def conv1d(
