@@ -233,9 +233,12 @@ def masked_convolve(signal, kernel, mask, mode='valid'):
     """Performs convolution with a mask."""
     signal_len = len(signal)
     kernel_len = len(kernel)
-    result = jnp.zeros(signal_len - kernel_len + 1, dtype=signal.dtype)
+    result_len = signal_len - kernel_len + 1 if mode == 'valid' else signal_len
+    result = jnp.zeros(result_len, dtype=signal.dtype)
 
-    for i in range(signal_len - kernel_len + 1):
+    for i in range(result_len):
+        if mode == 'valid' and i + kernel_len > signal_len:
+            break
         if jnp.all(mask[i:i+kernel_len]):  # Only convolve if the mask is all 1s in the window
             result = result.at[i].set(jnp.dot(signal[i:i+kernel_len], kernel))
     return result
@@ -279,7 +282,8 @@ def mimoconv1d(
     mask = generate_mask(len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
-    y = jnp.zeros_like(x)
+    result_len = len(x) - taps + 1 if mode == 'valid' else len(x)
+    y = jnp.zeros((result_len, dims), dtype=x.dtype)
     for dim in range(dims):
         y = y.at[:, dim].set(conv_fn(x[:, dim], h[:, dim, dim], mask, mode=mode))
     return Signal(y, t)
