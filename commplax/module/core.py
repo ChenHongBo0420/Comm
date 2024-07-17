@@ -238,16 +238,18 @@ def masked_convolve(signal, kernel, mask, mode='valid'):
 
     def body_fun(i, val):
         result, signal, kernel, mask = val
-        cond = jnp.all(mask[i:i+kernel_len])
-        result = jax.lax.cond(
+        mask_slice = lax.dynamic_slice(mask, (i,), (kernel_len,))
+        cond = jnp.all(mask_slice)
+        signal_slice = lax.dynamic_slice(signal, (i,), (kernel_len,))
+        result = lax.cond(
             cond,
-            lambda r: r.at[i].set(jnp.dot(signal[i:i+kernel_len], kernel)),
+            lambda r: r.at[i].set(jnp.dot(signal_slice, kernel)),
             lambda r: r,
             result
         )
         return result, signal, kernel, mask
 
-    result, _, _, _ = jax.lax.fori_loop(0, result_len, body_fun, (result, signal, kernel, mask))
+    result, _, _, _ = lax.fori_loop(0, result_len, body_fun, (result, signal, kernel, mask))
     return result
 
 def generate_mask(key, length, mask_ratio=0.1):
