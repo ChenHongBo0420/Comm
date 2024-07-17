@@ -229,6 +229,7 @@ def kernel_initializer(rng, shape):
 #     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
 #     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
 #     return Signal(y, t)
+
 def masked_convolve(signal, kernel, mask, mode='valid'):
     """Performs convolution with a mask."""
     signal_len = signal.shape[0]
@@ -252,18 +253,17 @@ def masked_convolve(signal, kernel, mask, mode='valid'):
     result, _, _, _ = lax.fori_loop(0, result_len, body_fun, (result, signal, kernel, mask))
     return result
 
-def generate_mask(key, length, mask_ratio=0.1):
-    """Generate a mask with given length and mask ratio."""
+def generate_fixed_mask(length, mask_ratio=0.1):
+    """Generate a fixed mask with given length and mask ratio."""
     mask = jnp.ones(length, dtype=bool)
     num_mask = int(length * mask_ratio)
-    mask_indices = random.choice(key, length, shape=(num_mask,), replace=False)
+    mask_indices = jnp.arange(length)[:num_mask]  # Use fixed indices for masking
     mask = mask.at[mask_indices].set(False)
     return mask
 
 def conv1d(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=masked_convolve):
     x, t = signal
-    key = scope.make_rng('mask')  # Use JAX random key from the scope
-    mask = generate_mask(key, x.shape[0])  # Generate mask using passed RNG
+    mask = generate_fixed_mask(x.shape[0])  # Generate fixed mask
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
     x = conv_fn(x, h, mask, mode=mode)
@@ -271,8 +271,7 @@ def conv1d(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=d
 
 def mimoconv1d(scope: Scope, signal, taps=31, rtap=None, dims=2, mode='valid', kernel_init=zeros, conv_fn=masked_convolve):
     x, t = signal
-    key = scope.make_rng('mask')  # Use JAX random key from the scope
-    mask = generate_mask(key, x.shape[0])  # Generate mask using passed RNG
+    mask = generate_fixed_mask(x.shape[0])  # Generate fixed mask
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
     result_len = x.shape[0] - taps + 1 if mode == 'valid' else x.shape[0]
