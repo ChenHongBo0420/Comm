@@ -22,7 +22,7 @@ from commplax import comm, xcomm, xop, adaptive_filter as af
 from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
 from jax import random
-
+from jax import lax
 Array = Any
 
 
