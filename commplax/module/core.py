@@ -23,6 +23,7 @@ from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
 from jax import random
 from jax import lax
+from flax.core import Scope, init, apply
 Array = Any
 
 
@@ -270,7 +271,7 @@ def conv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
-    key = scope.make_rng('params')  # Use JAX random key from the scope
+    key = scope.make_rng('mask')  # Use JAX random key from the scope
     mask = generate_mask(key, x.shape[0])  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
@@ -289,7 +290,7 @@ def mimoconv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
-    key = scope.make_rng('params')  # Use JAX random key from the scope
+    key = scope.make_rng('mask')  # Use JAX random key from the scope
     mask = generate_mask(key, x.shape[0])  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
@@ -298,6 +299,7 @@ def mimoconv1d(
     for dim in range(dims):
         y = y.at[:, dim].set(conv_fn(x[:, dim], h[:, dim, dim], mask, mode=mode))
     return Signal(y, t)
+
 
       
 def mimofoeaf(scope: Scope,
