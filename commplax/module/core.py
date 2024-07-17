@@ -260,17 +260,19 @@ def generate_mask(key, length, mask_ratio=0.1):
     mask = mask.at[mask_indices].set(False)
     return mask
 
-def conv1d(scope: Scope, signal, rng, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=masked_convolve):
+def conv1d(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=masked_convolve):
     x, t = signal
-    mask = generate_mask(rng, x.shape[0])  # Generate mask using passed RNG
+    key = scope.make_rng('mask')  # Use JAX random key from the scope
+    mask = generate_mask(key, x.shape[0])  # Generate mask using passed RNG
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
     x = conv_fn(x, h, mask, mode=mode)
     return Signal(x, t)
 
-def mimoconv1d(scope: Scope, signal, rng, taps=31, rtap=None, dims=2, mode='valid', kernel_init=zeros, conv_fn=masked_convolve):
+def mimoconv1d(scope: Scope, signal, taps=31, rtap=None, dims=2, mode='valid', kernel_init=zeros, conv_fn=masked_convolve):
     x, t = signal
-    mask = generate_mask(rng, x.shape[0])  # Generate mask using passed RNG
+    key = scope.make_rng('mask')  # Use JAX random key from the scope
+    mask = generate_mask(key, x.shape[0])  # Generate mask using passed RNG
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
     result_len = x.shape[0] - taps + 1 if mode == 'valid' else x.shape[0]
