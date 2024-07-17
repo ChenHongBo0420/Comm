@@ -289,6 +289,8 @@ def mimoconv1d(
     for dim in range(dims):
         y = y.at[:, dim].set(conv_fn(x[:, dim], h[:, dim, dim], mask, mode=mode))
     return Signal(y, t)
+
+
       
 def mimofoeaf(scope: Scope,
               signal,
