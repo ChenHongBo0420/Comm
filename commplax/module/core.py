@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import jax
 import numpy as np
 from jax import numpy as jnp
 from flax import struct
