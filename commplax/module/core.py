@@ -231,16 +231,23 @@ def kernel_initializer(rng, shape):
 
 def masked_convolve(signal, kernel, mask, mode='valid'):
     """Performs convolution with a mask."""
-    signal_len = len(signal)
-    kernel_len = len(kernel)
+    signal_len = signal.shape[0]
+    kernel_len = kernel.shape[0]
     result_len = signal_len - kernel_len + 1 if mode == 'valid' else signal_len
     result = jnp.zeros(result_len, dtype=signal.dtype)
 
-    for i in range(result_len):
-        if mode == 'valid' and i + kernel_len > signal_len:
-            break
-        if jnp.all(mask[i:i+kernel_len]):  # Only convolve if the mask is all 1s in the window
-            result = result.at[i].set(jnp.dot(signal[i:i+kernel_len], kernel))
+    def body_fun(i, val):
+        result, signal, kernel, mask = val
+        cond = jnp.all(mask[i:i+kernel_len])
+        result = jax.lax.cond(
+            cond,
+            lambda r: r.at[i].set(jnp.dot(signal[i:i+kernel_len], kernel)),
+            lambda r: r,
+            result
+        )
+        return result, signal, kernel, mask
+
+    result, _, _, _ = jax.lax.fori_loop(0, result_len, body_fun, (result, signal, kernel, mask))
     return result
 
 def generate_mask(key, length, mask_ratio=0.1):
@@ -262,7 +269,7 @@ def conv1d(
 
     x, t = signal
     key = scope.make_rng('mask')  # Use JAX random key from the scope
-    mask = generate_mask(key, len(x))  # Generate mask internally
+    mask = generate_mask(key, x.shape[0])  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
     x = conv_fn(x, h, mask, mode=mode)
@@ -281,10 +288,10 @@ def mimoconv1d(
 
     x, t = signal
     key = scope.make_rng('mask')  # Use JAX random key from the scope
-    mask = generate_mask(key, len(x))  # Generate mask internally
+    mask = generate_mask(key, x.shape[0])  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
-    result_len = len(x) - taps + 1 if mode == 'valid' else len(x)
+    result_len = x.shape[0] - taps + 1 if mode == 'valid' else x.shape[0]
     y = jnp.zeros((result_len, dims), dtype=x.dtype)
     for dim in range(dims):
         y = y.at[:, dim].set(conv_fn(x[:, dim], h[:, dim, dim], mask, mode=mode))
