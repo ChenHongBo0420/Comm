@@ -243,11 +243,11 @@ def masked_convolve(signal, kernel, mask, mode='valid'):
             result = result.at[i].set(jnp.dot(signal[i:i+kernel_len], kernel))
     return result
 
-def generate_mask(length, mask_ratio=0.1):
+def generate_mask(key, length, mask_ratio=0.1):
     """Generate a mask with given length and mask ratio."""
     mask = jnp.ones(length, dtype=bool)
     num_mask = int(length * mask_ratio)
-    mask_indices = random.choice(random.PRNGKey(0), length, shape=(num_mask,), replace=False)
+    mask_indices = random.choice(key, length, shape=(num_mask,), replace=False)
     mask = mask.at[mask_indices].set(False)
     return mask
 
@@ -261,7 +261,8 @@ def conv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
-    mask = generate_mask(len(x))  # Generate mask internally
+    key = random.PRNGKey(0)
+    mask = generate_mask(key, len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
     x = conv_fn(x, h, mask, mode=mode)
@@ -279,7 +280,8 @@ def mimoconv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
-    mask = generate_mask(len(x))  # Generate mask internally
+    key = random.PRNGKey(0)
+    mask = generate_mask(key, len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
     result_len = len(x) - taps + 1 if mode == 'valid' else len(x)
