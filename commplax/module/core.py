@@ -232,15 +232,25 @@ def kernel_initializer(rng, shape):
 def masked_convolve(signal, kernel, mask, mode='valid'):
     """Performs convolution with a mask."""
     result = np.zeros_like(signal)
-    for i in range(len(signal) - len(kernel) + 1):
-        if np.all(mask[i:i+len(kernel)]):  # Only convolve if the mask is all 1s in the window
-            result[i] = np.dot(signal[i:i+len(kernel)], kernel)
+    kernel_len = len(kernel)
+    signal_len = len(signal)
+    
+    for i in range(signal_len - kernel_len + 1):
+        if np.all(mask[i:i+kernel_len]):  # Only convolve if the mask is all 1s in the window
+            result[i] = np.dot(signal[i:i+kernel_len], kernel)
     return result
+
+def generate_mask(length, mask_ratio=0.1):
+    """Generate a mask with given length and mask ratio."""
+    mask = np.ones(length, dtype=bool)
+    num_mask = int(length * mask_ratio)
+    mask_indices = np.random.choice(length, num_mask, replace=False)
+    mask[mask_indices] = False
+    return mask
 
 def conv1d(
     scope: Scope,
     signal,
-    mask,
     taps=31,
     rtap=None,
     mode='valid',
@@ -248,6 +258,7 @@ def conv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
+    mask = generate_mask(len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
     x = conv_fn(x, h, mask, mode=mode)
@@ -257,7 +268,6 @@ def conv1d(
 def mimoconv1d(
     scope: Scope,
     signal,
-    mask,
     taps=31,
     rtap=None,
     dims=2,
@@ -266,6 +276,7 @@ def mimoconv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
+    mask = generate_mask(len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = np.zeros_like(x)
