@@ -261,7 +261,7 @@ def conv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
-    key = random.PRNGKey(0)
+    key = scope.make_rng('mask')  # Use JAX random key from the scope
     mask = generate_mask(key, len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
@@ -280,7 +280,7 @@ def mimoconv1d(
     conv_fn=masked_convolve):
 
     x, t = signal
-    key = random.PRNGKey(0)
+    key = scope.make_rng('mask')  # Use JAX random key from the scope
     mask = generate_mask(key, len(x))  # Generate mask internally
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
