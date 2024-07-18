@@ -231,12 +231,15 @@ def conv1d(
     conv_results = []
     
     for tap_size in tap_sizes:
-        h = scope.param(f'kernel_{tap_size}', kernel_init, (tap_size,), np.complex64)
+        h = scope.param(f'kernel_{tap_size}', kernel_init, (tap_size,), jnp.complex64)
         conv_result = conv_fn(x, h, mode=mode)
         
         # Adjust the shape of the result if necessary to ensure they can be summed
-        if conv_result.shape != conv_results[0].shape if conv_results else conv_result.shape:
-            conv_result = np.resize(conv_result, conv_results[0].shape if conv_results else conv_result.shape)
+        if conv_results:
+            target_shape = conv_results[0].shape
+            if conv_result.shape != target_shape:
+                pad_width = [(0, max(0, t - s)) for s, t in zip(conv_result.shape, target_shape)]
+                conv_result = jnp.pad(conv_result, pad_width, mode='constant')[:target_shape[0]]
         
         conv_results.append(conv_result)
     
