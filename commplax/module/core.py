@@ -210,6 +210,44 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 
 #     return Signal(x, t)
 
+# def infconv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn=xop.convolve):
+
+#     x, t = signal
+
+#     # Initialize the state variable 't'
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    
+#     # Define different scales (for example: half and quarter of the taps)
+#     tap_sizes = [taps, taps // 2, taps // 4]
+    
+#     # List to store convolution results for different scales
+#     conv_results = []
+    
+#     for tap_size in tap_sizes:
+#         h = scope.param(f'kernel_{tap_size}', kernel_init, (tap_size,), jnp.complex64)
+#         conv_result = conv_fn(x, h, mode=mode)
+        
+#         # Adjust the shape of the result if necessary to ensure they can be summed
+#         if conv_results:
+#             target_shape = conv_results[0].shape
+#             if conv_result.shape != target_shape:
+#                 pad_width = [(0, max(0, t - s)) for s, t in zip(conv_result.shape, target_shape)]
+#                 conv_result = jnp.pad(conv_result, pad_width, mode='constant')[:target_shape[0]]
+        
+#         conv_results.append(conv_result)
+    
+#     # Combine the results of different scales
+#     combined_result = sum(conv_results)
+    
+#     return Signal(combined_result, t)
+
 def conv1d(
     scope: Scope,
     signal,
@@ -246,8 +284,11 @@ def conv1d(
     # Combine the results of different scales
     combined_result = sum(conv_results)
     
+    # Ensure numerical stability
+    combined_result = jnp.nan_to_num(combined_result, nan=0.0, posinf=1e10, neginf=-1e10)
+    
     return Signal(combined_result, t)
-
+      
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
