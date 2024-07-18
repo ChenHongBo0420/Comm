@@ -239,10 +239,10 @@ def masked_convolve(signal, kernel, mask, mode='valid'):
 
     def body_fun(i, val):
         result, signal, kernel, mask = val
-        mask_slice = lax.dynamic_slice(mask, (i,), (kernel_len,))
+        mask_slice = mask[i:i + kernel_len]
         cond = jnp.all(mask_slice)
-        signal_slice = lax.dynamic_slice(signal, (i,), (kernel_len,))
-        result = lax.cond(
+        signal_slice = signal[i:i + kernel_len]
+        result = jax.lax.cond(
             cond,
             lambda r: r.at[i].set(jnp.dot(signal_slice, kernel)),
             lambda r: r,
@@ -261,18 +261,18 @@ def generate_fixed_mask(length, mask_ratio=0.1):
     mask = mask.at[mask_indices].set(False)
     return mask
 
-def conv1d(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=masked_convolve):
+def conv1d(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=lambda *_: jnp.ones((31,), dtype=jnp.complex64), conv_fn=masked_convolve):
     x, t = signal
     mask = generate_fixed_mask(x.shape[0])  # Generate fixed mask
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    t = scope.variable('const', 't', lambda *_: jnp.linspace(0, 1, taps), t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
     x = conv_fn(x, h, mask, mode=mode)
     return Signal(x, t)
 
-def mimoconv1d(scope: Scope, signal, taps=31, rtap=None, dims=2, mode='valid', kernel_init=zeros, conv_fn=masked_convolve):
+def mimoconv1d(scope: Scope, signal, taps=31, rtap=None, dims=2, mode='valid', kernel_init=lambda *_: jnp.zeros((31, 2, 2), dtype=jnp.float32), conv_fn=masked_convolve):
     x, t = signal
     mask = generate_fixed_mask(x.shape[0])  # Generate fixed mask
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    t = scope.variable('const', 't', lambda *_: jnp.linspace(0, 1, taps), t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
     result_len = x.shape[0] - taps + 1 if mode == 'valid' else x.shape[0]
     y = jnp.zeros((result_len, dims), dtype=x.dtype)
