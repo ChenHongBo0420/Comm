@@ -213,24 +213,25 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 def conv1d(
     scope: Scope,
     signal,
-    tap_sizes=[31, 15, 7],
+    taps=31,
     rtap=None,
     mode='valid',
     kernel_init=delta,
     conv_fn=xop.convolve):
 
     x, t = signal
-
-    # Initialize the state variable 't' for the largest tap size
-    t = scope.variable('const', 't', conv1d_t, t, max(tap_sizes), rtap, 1, mode).value
+    
+    # Initialize the state variable 't'
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    
+    # Define different scales (for example: half and quarter of the taps)
+    tap_sizes = [taps, taps//2, taps//4]
     
     # List to store convolution results for different scales
     conv_results = []
     
-    for taps in tap_sizes:
-        h = scope.param(f'kernel_{taps}',
-                        kernel_init,
-                        (taps,), np.complex64)
+    for tap_size in tap_sizes:
+        h = scope.param(f'kernel_{tap_size}', kernel_init, (tap_size,), np.complex64)
         conv_results.append(conv_fn(x, h, mode=mode))
     
     # Combine the results of different scales
