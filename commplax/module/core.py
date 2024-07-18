@@ -192,24 +192,51 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+
+#     return Signal(x, t)
+
 def conv1d(
     scope: Scope,
     signal,
-    taps=31,
+    tap_sizes=[31, 15, 7],
     rtap=None,
     mode='valid',
     kernel_init=delta,
-    conv_fn = xop.convolve):
+    conv_fn=xop.convolve):
 
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
 
-    return Signal(x, t)
-
+    # Initialize the state variable 't' for the largest tap size
+    t = scope.variable('const', 't', conv1d_t, t, max(tap_sizes), rtap, 1, mode).value
+    
+    # List to store convolution results for different scales
+    conv_results = []
+    
+    for taps in tap_sizes:
+        h = scope.param(f'kernel_{taps}',
+                        kernel_init,
+                        (taps,), np.complex64)
+        conv_results.append(conv_fn(x, h, mode=mode))
+    
+    # Combine the results of different scales
+    combined_result = sum(conv_results)
+    
+    return Signal(combined_result, t)
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
