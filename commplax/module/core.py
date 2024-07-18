@@ -192,92 +192,42 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
-# def conv1d(
-#     scope: Scope,
-#     signal,
-#     taps=31,
-#     rtap=None,
-#     mode='valid',
-#     kernel_init=delta,
-#     conv_fn = xop.convolve):
+def conv1d(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn = xop.convolve):
 
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-#     h = scope.param('kernel',
-#                      kernel_init,
-#                      (taps,), np.complex64)
-#     x = conv_fn(x, h, mode=mode)
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel',
+                     kernel_init,
+                     (taps,), np.complex64)
+    x = conv_fn(x, h, mode=mode)
 
-#     return Signal(x, t)
+    return Signal(x, t)
 
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
-# def mimoconv1d(
-#     scope: Scope,
-#     signal,
-#     taps=31,
-#     rtap=None,
-#     dims=2,
-#     mode='valid',
-#     kernel_init=zeros,
-#     conv_fn=xop.convolve):
+def mimoconv1d(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    dims=2,
+    mode='valid',
+    kernel_init=zeros,
+    conv_fn=xop.convolve):
 
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-#     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
-#     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
-#     return Signal(y, t)
-
-def masked_convolve(signal, kernel, mask, mode='valid'):
-    """Performs convolution with a mask."""
-    signal_len = signal.shape[0]
-    kernel_len = kernel.shape[0]
-    result_len = signal_len - kernel_len + 1 if mode == 'valid' else signal_len
-    result = jnp.zeros(result_len, dtype=signal.dtype)
-
-    def body_fun(i, val):
-        result, signal, kernel, mask = val
-        mask_slice = lax.dynamic_slice(mask, (i,), (kernel_len,))
-        cond = jnp.all(mask_slice)
-        signal_slice = lax.dynamic_slice(signal, (i,), (kernel_len,))
-        result = jax.lax.cond(
-            cond,
-            lambda r: r.at[i].set(jnp.dot(signal_slice, kernel)),
-            lambda r: r,
-            result
-        )
-        return result, signal, kernel, mask
-
-    result, _, _, _ = lax.fori_loop(0, result_len, body_fun, (result, signal, kernel, mask))
-    return result
-
-def generate_fixed_mask(length, mask_ratio=0.1):
-    """Generate a fixed mask with given length and mask ratio."""
-    mask = jnp.ones(length, dtype=bool)
-    num_mask = int(length * mask_ratio)
-    mask_indices = jnp.arange(length)[:num_mask]  # Use fixed indices for masking
-    mask = mask.at[mask_indices].set(False)
-    return mask
-
-def conv1d(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=lambda *_: jnp.ones((31,), dtype=jnp.complex64), conv_fn=masked_convolve):
     x, t = signal
-    mask = generate_fixed_mask(x.shape[0])  # Generate fixed mask
-    t = scope.variable('const', 't', lambda *_: jnp.linspace(0, 1, taps), t, taps, rtap, 1, mode).value
-    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
-    x = conv_fn(x, h, mask, mode=mode)
-    return Signal(x, t)
-
-def mimoconv1d(scope: Scope, signal, taps=31, rtap=None, dims=2, mode='valid', kernel_init=lambda *_: jnp.zeros((31, 2, 2), dtype=jnp.float32), conv_fn=masked_convolve):
-    x, t = signal
-    mask = generate_fixed_mask(x.shape[0])  # Generate fixed mask
-    t = scope.variable('const', 't', lambda *_: jnp.linspace(0, 1, taps), t, taps, rtap, 1, mode).value
-    h = scope.param('kernel', kernel_init, (taps, dims, dims), jnp.float32)
-    result_len = x.shape[0] - taps + 1 if mode == 'valid' else x.shape[0]
-    y = jnp.zeros((result_len, dims), dtype=x.dtype)
-    for dim in range(dims):
-        y = y.at[:, dim].set(conv_fn(x[:, dim], h[:, dim, dim], mask, mode=mode))
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
+    y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
       
 def mimofoeaf(scope: Scope,
