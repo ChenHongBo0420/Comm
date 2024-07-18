@@ -220,19 +220,25 @@ def conv1d(
     conv_fn=xop.convolve):
 
     x, t = signal
-    
+
     # Initialize the state variable 't'
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
     # Define different scales (for example: half and quarter of the taps)
-    tap_sizes = [taps, taps//2, taps//4]
+    tap_sizes = [taps, taps // 2, taps // 4]
     
     # List to store convolution results for different scales
     conv_results = []
     
     for tap_size in tap_sizes:
         h = scope.param(f'kernel_{tap_size}', kernel_init, (tap_size,), np.complex64)
-        conv_results.append(conv_fn(x, h, mode=mode))
+        conv_result = conv_fn(x, h, mode=mode)
+        
+        # Adjust the shape of the result if necessary to ensure they can be summed
+        if conv_result.shape != conv_results[0].shape if conv_results else conv_result.shape:
+            conv_result = np.resize(conv_result, conv_results[0].shape if conv_results else conv_result.shape)
+        
+        conv_results.append(conv_result)
     
     # Combine the results of different scales
     combined_result = sum(conv_results)
