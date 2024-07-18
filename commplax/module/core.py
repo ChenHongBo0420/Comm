@@ -239,9 +239,9 @@ def masked_convolve(signal, kernel, mask, mode='valid'):
 
     def body_fun(i, val):
         result, signal, kernel, mask = val
-        mask_slice = mask[i:i + kernel_len]
+        mask_slice = lax.dynamic_slice(mask, (i,), (kernel_len,))
         cond = jnp.all(mask_slice)
-        signal_slice = signal[i:i + kernel_len]
+        signal_slice = lax.dynamic_slice(signal, (i,), (kernel_len,))
         result = jax.lax.cond(
             cond,
             lambda r: r.at[i].set(jnp.dot(signal_slice, kernel)),
@@ -279,7 +279,6 @@ def mimoconv1d(scope: Scope, signal, taps=31, rtap=None, dims=2, mode='valid', k
     for dim in range(dims):
         y = y.at[:, dim].set(conv_fn(x[:, dim], h[:, dim, dim], mask, mode=mode))
     return Signal(y, t)
-
       
 def mimofoeaf(scope: Scope,
               signal,
