@@ -221,6 +221,10 @@ class StateSpaceConv1D:
         self.t = np.zeros((taps, 1))  # 初始状态
 
     def state_update(self, x):
+        # 将输入x填充到与self.t相同的形状
+        if x.shape[0] < self.taps:
+            x = np.pad(x, (0, self.taps - x.shape[0]), 'constant')
+        x = x.reshape(-1, 1)
         # 状态更新方程
         self.t = self.A @ self.t + self.B @ x + np.random.normal(0, self.Q, self.t.shape)
         return self.t
@@ -249,7 +253,7 @@ def mimoconv1d(
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
       
-def conv1d(
+def conv1d_with_ssm(
     scope: Scope,
     signal,
     taps=31,
@@ -269,14 +273,14 @@ def conv1d(
 
     # 使用SSM进行滤波器状态更新和卷积
     y = []
-    for i in range(len(x)):
+    for i in range(len(x) - taps + 1):
         ssm.state_update(x[i:i + taps])
         y.append(ssm.observation())
 
-    y = np.array(y).flatten()[:len(x)]  # 只取有效部分
+    y = np.array(y).flatten()  # 转换为一维数组
 
     return Signal(y, t)
-      
+
 def mimofoeaf(scope: Scope,
               signal,
               framesize=100,
