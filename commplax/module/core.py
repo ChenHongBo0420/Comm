@@ -253,7 +253,7 @@ def mimoconv1d(
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
       
-def conv1d_with_ssm(
+def conv1d(
     scope: Scope,
     signal,
     taps=31,
