@@ -213,26 +213,54 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 class StateSpaceConv1D:
     def __init__(self, taps, process_noise, observation_noise):
         self.taps = taps
-        self.A = np.eye(taps)
-        self.B = np.eye(taps)
-        self.C = np.eye(taps)
+        self.A = jnp.eye(taps)
+        self.B = jnp.eye(taps)
+        self.C = jnp.eye(taps)
         self.Q = process_noise
         self.R = observation_noise
-        self.t = np.zeros((taps, 1))  # 初始状态
+        self.t = jnp.zeros((taps, 1))  # 初始状态
 
     def state_update(self, x):
         # 将输入x填充到与self.t相同的形状
         if x.shape[0] < self.taps:
-            x = np.pad(x, (0, self.taps - x.shape[0]), 'constant')
+            x = jnp.pad(x, (0, self.taps - x.shape[0]), 'constant')
         x = x.reshape(-1, 1)
         # 状态更新方程
-        self.t = self.A @ self.t + self.B @ x + np.random.normal(0, self.Q, self.t.shape)
+        self.t = self.A @ self.t + self.B @ x + random.normal(random.PRNGKey(0), self.t.shape) * self.Q
         return self.t
 
     def observation(self):
         # 观测方程
-        y = self.C @ self.t + np.random.normal(0, self.R, self.t.shape)
+        y = self.C @ self.t + random.normal(random.PRNGKey(0), self.t.shape) * self.R
         return y
+
+def conv1d(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn=xop.convolve):
+
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+
+    # 初始化SSM参数
+    process_noise = 0.1
+    observation_noise = 0.1
+    ssm = StateSpaceConv1D(taps, process_noise, observation_noise)
+
+    # 使用SSM进行滤波器状态更新和卷积
+    y = []
+    for i in range(len(x) - taps + 1):
+        ssm.state_update(x[i:i + taps])
+        y.append(ssm.observation())
+
+    y = jnp.array(y).flatten()  # 转换为一维数组
+
+    return Signal(y, t)
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
