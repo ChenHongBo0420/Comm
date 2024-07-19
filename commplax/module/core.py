@@ -192,25 +192,44 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
-def conv1d(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
 
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
 
-    return Signal(x, t)
+#     return Signal(x, t)
 
-      
+class StateSpaceConv1D:
+    def __init__(self, taps, process_noise, observation_noise):
+        self.taps = taps
+        self.A = np.eye(taps)
+        self.B = np.eye(taps)
+        self.C = np.eye(taps)
+        self.Q = process_noise
+        self.R = observation_noise
+        self.t = np.zeros((taps, 1))  # 初始状态
+
+    def state_update(self, x):
+        # 状态更新方程
+        self.t = self.A @ self.t + self.B @ x + np.random.normal(0, self.Q, self.t.shape)
+        return self.t
+
+    def observation(self):
+        # 观测方程
+        y = self.C @ self.t + np.random.normal(0, self.R, self.t.shape)
+        return y
+
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
@@ -228,6 +247,34 @@ def mimoconv1d(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
+    return Signal(y, t)
+      
+def conv1d(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn=xop.convolve):
+
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
+
+    # 初始化SSM参数
+    process_noise = 0.1
+    observation_noise = 0.1
+    ssm = StateSpaceConv1D(taps, process_noise, observation_noise)
+
+    # 使用SSM进行滤波器状态更新和卷积
+    y = []
+    for i in range(len(x)):
+        ssm.state_update(x[i:i + taps])
+        y.append(ssm.observation())
+
+    y = np.array(y).flatten()[:len(x)]  # 只取有效部分
+
     return Signal(y, t)
       
 def mimofoeaf(scope: Scope,
