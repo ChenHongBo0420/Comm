@@ -230,34 +230,6 @@ def mimoconv1d(
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
-      
-def conv1d(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn=xop.convolve):
-
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-
-    # 初始化SSM参数
-    process_noise = 0.1
-    observation_noise = 0.1
-    ssm = StateSpaceConv1D(taps, process_noise, observation_noise)
-
-    # 使用SSM进行滤波器状态更新和卷积
-    y = []
-    for i in range(len(x) - taps + 1):
-        ssm.state_update(x[i:i + taps])
-        y.append(ssm.observation())
-
-    y = np.array(y).flatten()  # 转换为一维数组
-
-    return Signal(y, t)
 
 def mimofoeaf(scope: Scope,
               signal,
