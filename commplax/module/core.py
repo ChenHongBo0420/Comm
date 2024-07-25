@@ -203,7 +203,6 @@ def conv1d(
 
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    print(f"The value of t is: {t}") 
     h = scope.param('kernel',
                      kernel_init,
                      (taps,), np.complex64)
