@@ -210,12 +210,10 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 
 #     return Signal(x, t)
 
-def separate_gating_output(x):
-    gate_real = jax.nn.sigmoid(x.real)
-    gate_imag = jax.nn.sigmoid(x.imag)
-    gated_real = x.real * gate_real
-    gated_imag = x.imag * gate_imag
-    return gated_real + 1j * gated_imag
+def magnitude_gating_output(x):
+    magnitude = jnp.abs(x)
+    gate = jax.nn.sigmoid(magnitude)
+    return x * gate
 
 def conv1d(
     scope: Scope,
@@ -230,7 +228,7 @@ def conv1d(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
-    x = separate_gating_output(x)  # Apply separate gating to the output
+    x = magnitude_gating_output(x)  # Apply separate gating to the output
 
     return Signal(x, t)
 
