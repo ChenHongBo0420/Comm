@@ -249,7 +249,7 @@ def mimoconv1d(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
-    y = magnitude_gating_output(y)
+    # y = magnitude_gating_output(y)
     return Signal(y, t)
 
 def mimofoeaf(scope: Scope,
@@ -346,6 +346,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
+        c = magnitude_gating_output(c)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 
     return Signal(x, t)
