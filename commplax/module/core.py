@@ -211,8 +211,8 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 #     return Signal(x, t)
 
 def separate_gating(x, h):
-    gate_real = jnp.sigmoid(h.real)
-    gate_imag = jnp.sigmoid(h.imag)
+    gate_real = jax.nn.sigmoid(h.real)
+    gate_imag = jax.nn.sigmoid(h.imag)
     gated_real = x.real * gate_real
     gated_imag = x.imag * gate_imag
     return gated_real + 1j * gated_imag
