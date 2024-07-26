@@ -228,7 +228,7 @@ def conv1d(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
-    x = magnitude_gating_output(x)  # Apply separate gating to the output
+    # x = magnitude_gating_output(x)  # Apply separate gating to the output
 
     return Signal(x, t)
 
@@ -249,6 +249,7 @@ def mimoconv1d(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
+    y = magnitude_gating_output(y)
     return Signal(y, t)
 
 def mimofoeaf(scope: Scope,
