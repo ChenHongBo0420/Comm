@@ -229,9 +229,8 @@ def conv1d(
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    h = jax.nn.sigmoid(h)
     x = conv_fn(x, h, mode=mode)
-
+    x = jax.nn.sigmoid(h)
     return Signal(x, t)
 
 def kernel_initializer(rng, shape):
