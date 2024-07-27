@@ -337,8 +337,6 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    alpha_r = scope.param('alpha_r', lambda rng, shape: jnp.full(shape, 0.25), (1,))
-    alpha_i = scope.param('alpha_i', lambda rng, shape: jnp.full(shape, 0.25), (1,))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
