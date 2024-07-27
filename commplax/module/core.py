@@ -23,7 +23,6 @@ from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
 from jax import random
 from jax import lax
-from flax import linen as nn
 from flax.core import Scope, init, apply
 Array = Any
 
@@ -215,11 +214,6 @@ def magnitude_gating_output(x):
     magnitude = jnp.abs(x)
     gate = jax.nn.sigmoid(magnitude)
     return x * gate
-  
-class Nonlinearity(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        return nn.relu(x)
       
 def conv1d(
     scope: Scope,
@@ -344,13 +338,12 @@ def fdbp(
 
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    nonlinearity = Nonlinearity()
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = scope.child(nonlinearity, name='Nonlinearity_%d' % i)(x)
+        x = jax.nn.relu(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 
     return Signal(x, t)
