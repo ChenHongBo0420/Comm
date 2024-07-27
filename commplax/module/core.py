@@ -23,6 +23,7 @@ from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
 from jax import random
 from jax import lax
+from flax import linen as nn
 from flax.core import Scope, init, apply
 Array = Any
 
