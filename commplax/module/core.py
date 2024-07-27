@@ -210,25 +210,39 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 
 #     return Signal(x, t)
 
-def magnitude_gating_output(x):
-    magnitude = jnp.abs(x)
-    gate = jax.nn.sigmoid(magnitude)
-    return x * gate
       
 def conv1d(
-    scope: Scope,
+    scope,
     signal,
     taps=31,
     rtap=None,
     mode='valid',
-    kernel_init=delta,
-    conv_fn=xop.convolve):
+    kernel_init=lambda rng, shape: random.normal(rng, shape),
+    conv_fn=convolve,
+    groups=2):
 
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
-
+    t = scope.variable('const', 't', lambda x: x, t, taps, rtap, 1, mode).value
+    
+    # 分组卷积实现
+    in_channels = x.shape[0]
+    assert in_channels % groups == 0, "输入通道数必须能被组数整除"
+    group_size = in_channels // groups
+    
+    # 初始化卷积核
+    h = scope.param('kernel', kernel_init, (groups, group_size, taps), jnp.complex64)
+    
+    # 对每组进行卷积
+    output = []
+    for g in range(groups):
+        x_group = x[g * group_size:(g + 1) * group_size]
+        h_group = h[g]
+        x_group_conv = conv_fn(x_group, h_group, mode=mode)
+        output.append(x_group_conv)
+    
+    # 拼接所有组的卷积结果
+    x = jnp.concatenate(output, axis=0)
+    
     return Signal(x, t)
 
 def kernel_initializer(rng, shape):
