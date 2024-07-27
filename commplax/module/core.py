@@ -222,7 +222,10 @@ def conv1d(
     groups=2):
 
     x, t = signal
-    t = scope.variable('const', 't', lambda x: x, t, taps, rtap, 1, mode).value
+    def conv1d_t_initializer(t, taps, rtap, _, mode):
+        return t
+
+    t = scope.variable('const', 't', conv1d_t_initializer, t, taps, rtap, 1, mode).value
     
     # 分组卷积实现
     in_channels = x.shape[0]
