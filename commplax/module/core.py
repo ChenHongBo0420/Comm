@@ -325,7 +325,15 @@ def mimoaf(
     state.value = (af_step, af_stats)
     return Signal(y, t)
 
+class PReLU(nn.Module):
+    alpha_init: float = 0.25  
 
+    def setup(self):
+        self.alpha = self.param('alpha', lambda rng, shape: jnp.full(shape, self.alpha_init), (1,))
+
+    def __call__(self, x):
+        return jnp.where(x >= 0, x, self.alpha * x)
+      
 def fdbp(
     scope: Scope,
     signal,
@@ -335,12 +343,12 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss):
-
+    prelu = PReLU()
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        x = jnp.tanh(x)
+        x = scope.child(prelu, name='PReLU_%d' % i)(x)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
