@@ -325,12 +325,8 @@ def mimoaf(
     state.value = (af_step, af_stats)
     return Signal(y, t)
 
-def cprelu(x, alpha_r, alpha_i):
-    real = jnp.real(x)
-    imag = jnp.imag(x)
-    real = jnp.where(real >= 0, real, alpha_r * real)
-    imag = jnp.where(imag >= 0, imag, alpha_i * imag)
-    return real + 1j * imag
+def leaky_relu(x, alpha=0.01):
+    return jnp.where(x > 0, x, alpha * x)
       
 def fdbp(
     scope: Scope,
@@ -347,7 +343,7 @@ def fdbp(
     alpha_i = scope.param('alpha_i', lambda rng, shape: jnp.full(shape, 0.25), (1,))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        x = cprelu(x, alpha_r, alpha_i)
+        x = leaky_relu(x)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
