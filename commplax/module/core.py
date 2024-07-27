@@ -218,34 +218,15 @@ def conv1d(
     rtap=None,
     mode='valid',
     kernel_init=delta,
-    conv_fn=xop.convolve,
-    groups=2):
+    conv_fn = xop.convolve):
 
     x, t = signal
-    def conv1d_t_initializer(t, taps, rtap, _, mode):
-        return t
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel',
+                     kernel_init,
+                     (taps,), np.complex64)
+    x = conv_fn(x, h, mode=mode)
 
-    t = scope.variable('const', 't', conv1d_t_initializer, t, taps, rtap, 1, mode).value
-    
-    # 分组卷积实现
-    in_channels = x.shape[0]
-    assert in_channels % groups == 0, "输入通道数必须能被组数整除"
-    group_size = in_channels // groups
-    
-    # 初始化卷积核
-    h = scope.param('kernel', kernel_init, (groups, group_size, taps), jnp.complex64)
-    
-    # 对每组进行卷积
-    output = []
-    for g in range(groups):
-        x_group = x[g * group_size:(g + 1) * group_size]
-        h_group = h[g]
-        x_group_conv = conv_fn(x_group, h_group, mode=mode)
-        output.append(x_group_conv)
-    
-    # 拼接所有组的卷积结果
-    x = jnp.concatenate(output, axis=0)
-    
     return Signal(x, t)
 
 def kernel_initializer(rng, shape):
@@ -343,6 +324,25 @@ def mimoaf(
     return Signal(y, t)
 
       
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+
+#     return Signal(x, t)
 def fdbp(
     scope: Scope,
     signal,
@@ -351,14 +351,34 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss):
+    n_init=gauss,
+    groups=1):  # 添加 groups 参数
+
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    # 分组卷积函数
+    def grouped_conv1d(x, h, mode):
+        in_channels = x.shape[0]
+        assert in_channels % groups == 0, "输入通道数必须能被组数整除"
+        group_size = in_channels // groups
+
+        output = []
+        for g in range(groups):
+            x_group = x[g * group_size:(g + 1) * group_size]
+            h_group = h[g]
+            x_group_conv = jnp.convolve(x_group, h_group, mode=mode)
+            output.append(x_group_conv)
+        return jnp.concatenate(output, axis=0)
+
+    dconv = vmap(wpartial(grouped_conv1d, mode='valid'))
+
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
+        h_d = scope.param(f'kernel_d_{i}', d_init, (groups, dtaps // groups), jnp.complex64)
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t), h_d)
+
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td),
+                                                           taps=ntaps,
+                                                           kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 
     return Signal(x, t)
