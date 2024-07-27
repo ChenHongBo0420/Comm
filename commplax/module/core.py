@@ -325,14 +325,12 @@ def mimoaf(
     state.value = (af_step, af_stats)
     return Signal(y, t)
 
-class PReLU(nn.Module):
-    alpha_init: float = 0.25  
-
-    def setup(self):
-        self.alpha = self.param('alpha', lambda rng, shape: jnp.full(shape, self.alpha_init), (1,))
-
-    def __call__(self, x):
-        return jnp.where(x >= 0, x, self.alpha * x)
+def cprelu(x, alpha_r, alpha_i):
+    real = jnp.real(x)
+    imag = jnp.imag(x)
+    real = jnp.where(real >= 0, real, alpha_r * real)
+    imag = jnp.where(imag >= 0, imag, alpha_i * imag)
+    return real + 1j * imag
       
 def fdbp(
     scope: Scope,
@@ -343,12 +341,13 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss):
-    prelu = PReLU()
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    alpha_r = scope.param('alpha_r', lambda rng, shape: jnp.full(shape, 0.25), (1,))
+    alpha_i = scope.param('alpha_i', lambda rng, shape: jnp.full(shape, 0.25), (1,))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        x = scope.child(prelu, name='PReLU_%d' % i)(x)
+        x = cprelu(x, alpha_r, alpha_i)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
