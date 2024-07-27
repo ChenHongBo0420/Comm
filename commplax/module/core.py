@@ -212,13 +212,13 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 
       
 def conv1d(
-    scope,
+    scope: Scope,
     signal,
     taps=31,
     rtap=None,
     mode='valid',
-    kernel_init=lambda rng, shape: random.normal(rng, shape),
-    conv_fn=convolve,
+    kernel_init=delta,
+    conv_fn=xop.convolve,
     groups=2):
 
     x, t = signal
