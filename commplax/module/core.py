@@ -344,7 +344,7 @@ def fdbp(
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         x = leaky_relu(x)
-        x = jnp.clip(x, -clip_value, clip_value)
+        x = jnp.clip(x, -10.0, 10.0)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
