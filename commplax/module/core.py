@@ -342,7 +342,7 @@ def channel_shuffle(x, groups):
 
 def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_init=gauss):
     x, t = signal
-    dconv = vmap(lambda signal: conv1d(scope, signal, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
