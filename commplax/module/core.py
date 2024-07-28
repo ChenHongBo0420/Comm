@@ -345,19 +345,10 @@ def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_ini
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # 通道洗牌前的信号形状
-        print("Before Shuffle: ", x.shape)
-        
-        # 通道洗牌
-        x = channel_shuffle(x, groups=2)
-        
-        # 通道洗牌后的信号形状
-        print("After Shuffle: ", x.shape)
-        
+        # x = channel_shuffle(x, groups=2)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    
+        x = channel_shuffle(x, groups=2)
     return Signal(x, t)
 
 
