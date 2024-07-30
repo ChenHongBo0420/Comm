@@ -364,7 +364,7 @@ def mimoaf(
 
 def state_transition_layer(x, hidden_size, key):
     batch_size, seq_len, input_dim = x.shape
-    
+    hidden_size =  8
     # Initialize weights
     Wxh_key, Whh_key, Why_key = random.split(key, 3)
     Wxh = random.normal(Wxh_key, (input_dim, hidden_size))
@@ -388,7 +388,7 @@ def channel_shuffle(x, groups):
     assert channels % groups == 0, "channels should be divisible by groups"
     channels_per_group = channels // groups
     x = x.reshape(batch_size, groups, channels_per_group)
-    x = state_transition_layer(x, hidden_size=8, key)
+    x = state_transition_layer(x, hidden_size, key)
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
   
