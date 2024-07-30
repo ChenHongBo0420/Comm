@@ -23,8 +23,7 @@ from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
 from jax import random
 from jax import lax
-from flax.linen import Dense, compact
-from flax.linen.module import Module
+from flax import linen as nn
 from functools import partial as wpartial
 from flax.core import Scope, init, apply
 Array = Any
@@ -314,15 +313,78 @@ def mimoaf(
     return Signal(y, t)
 
       
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0])
+#     return Signal(x, t)
+
+# def channel_shuffle(x, groups):
+#     batch_size, channels = x.shape
+#     assert channels % groups == 0, "channels should be divisible by groups"
+#     channels_per_group = channels // groups
+#     x = x.reshape(batch_size, groups, channels_per_group)
+#     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+#     return x
+
+class GRULayer(nn.Module):
+    hidden_size: int
+
+    def setup(self):
+        self.gru = nn.GRUCell()
+
+    def __call__(self, x, hidden_state):
+        batch_size, seq_len, channels = x.shape
+        outputs = []
+        for t in range(seq_len):
+            hidden_state, output = self.gru(x[:, t, :], hidden_state)
+            outputs.append(output)
+        outputs = jnp.stack(outputs, axis=1)
+        return outputs, hidden_state
+
+def channel_shuffle_with_gru(x, groups, hidden_size):
+    batch_size, seq_len = x.shape
+    channels = 2  # Since the second dimension is polarization states
+    assert channels % groups == 0, "channels should be divisible by groups"
+    channels_per_group = channels // groups
+
+    x = x.reshape(batch_size, groups, channels_per_group)
+    
+    # Initialize GRU layer
+    gru_layer = GRULayer(hidden_size=hidden_size)
+    hidden_state = jnp.zeros((batch_size, hidden_size))
+    
+    # Apply GRU layer
+    x = x.reshape(batch_size, channels_per_group, groups)
+    x, hidden_state = gru_layer(x, hidden_state)
+
+    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+    return x
+
 def fdbp(
     scope: Scope,
-    signal,
+    signal: Tuple[jnp.ndarray, jnp.ndarray],
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss):
+    n_init=gauss,
+    groups=2,
+    hidden_size=8):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
@@ -330,17 +392,12 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0])
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+        # Apply channel shuffle with GRU
+        x = channel_shuffle_with_gru(x, groups, hidden_size)
+        
     return Signal(x, t)
-
-def channel_shuffle(x, groups):
-    batch_size, channels = x.shape
-    assert channels % groups == 0, "channels should be divisible by groups"
-    channels_per_group = channels // groups
-    x = x.reshape(batch_size, groups, channels_per_group)
-    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
-    return x
-
 
 
 
