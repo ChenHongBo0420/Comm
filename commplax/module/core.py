@@ -342,9 +342,9 @@ def mimoaf(
 #     return x
 
 
-def apply_gru(x, hidden_size=8):
+def apply_gru(x, hidden_size):
     batch_size, seq_len, channels = x.shape
-    gru_cell = nn.GRUCell()
+    gru_cell = nn.GRUCell(features=hidden_size)
     hidden_state = jnp.zeros((batch_size, hidden_size))
     
     outputs = []
