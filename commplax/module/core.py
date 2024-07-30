@@ -314,34 +314,24 @@ def mimoaf(
     return Signal(y, t)
 
       
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         check_array(x, "x1")
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#         check_array(x, "x2")
-#     return Signal(x, t)
-
-# def channel_shuffle(x, groups):
-#     batch_size, channels = x.shape
-#     assert channels % groups == 0, "channels should be divisible by groups"
-#     channels_per_group = channels // groups
-#     x = x.reshape(batch_size, groups, channels_per_group)
-#     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
-#     return x
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss):
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0])
+    return Signal(x, t)
 
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
@@ -351,46 +341,6 @@ def channel_shuffle(x, groups):
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
 
-class SelfAttention(Module):
-    num_heads: int
-    key_size: int
-    value_size: int
-
-    @compact
-    def __call__(self, x):
-        batch_size, channels = x.shape
-        query = Dense(self.num_heads * self.key_size)(x).reshape(batch_size, -1, self.num_heads, self.key_size)
-        key = Dense(self.num_heads * self.key_size)(x).reshape(batch_size, -1, self.num_heads, self.key_size)
-        value = Dense(self.num_heads * self.value_size)(x).reshape(batch_size, -1, self.num_heads, self.value_size)
-
-        scores = jnp.einsum('...qk,...kv->...qv', query, key) / jnp.sqrt(self.key_size)
-        attention_weights = jax.nn.softmax(scores, axis=-1)
-        attended = jnp.einsum('...qv,...v->...q', attention_weights, value).reshape(batch_size, -1)
-
-        return Dense(channels)(attended)
-
-      
-def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_init=gauss):
-    x, t = signal
-    x = channel_shuffle(x, groups=2)
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    attention_layer = SelfAttention(num_heads=8, key_size=16, value_size=16)
-    
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # Applying attention mechanism after each DConv
-        x = attention_layer()(x)
-        
-        x = channel_shuffle(x, groups=2)
-        
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        
-        # Applying attention mechanism after each NConv
-        x = attention_layer()(x)
-
-    return Signal(x, t)
 
 
 
