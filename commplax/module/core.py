@@ -362,19 +362,17 @@ def mimoaf(
     
 #     return outputs
 
-def se_attention(x, reduction_ratio=2):
+def se_attention(x):
     batch_size, channels = x.shape
     
-    # Squeeze operation
-    z = jnp.mean(x, axis=0, keepdims=True)
+    # Since we only have 2 channels, we will calculate the attention directly
+    z = jnp.mean(x, axis=0, keepdims=True)  # Global average pooling
+    
+    # Generate weights
+    w = random.normal(random.PRNGKey(0), (channels,))
     
     # Excitation operation
-    hidden_units = max(channels // reduction_ratio, 1)
-    w1 = random.normal(random.PRNGKey(0), (channels, hidden_units))
-    w2 = random.normal(random.PRNGKey(1), (hidden_units, channels))
-    
-    z = jax.nn.relu(jnp.dot(z, w1))
-    z = jax.nn.sigmoid(jnp.dot(z, w2))
+    z = jax.nn.sigmoid(jnp.dot(z, w))
     
     # Scale the input
     x = x * z
