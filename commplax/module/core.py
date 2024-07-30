@@ -342,13 +342,34 @@ def mimoaf(
 #     return x
 
 
-def simple_rnn(x, hidden_size):
-    batch_size, seq_len, channels = x.shape
+# def simple_rnn(x, hidden_size):
+#     batch_size, seq_len, channels = x.shape
+    
+#     # Initialize weights
+#     Wxh = random.normal(random.PRNGKey(0), (channels, hidden_size))
+#     Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
+#     Why = random.normal(random.PRNGKey(2), (hidden_size, channels))
+    
+#     # Initialize hidden state
+#     h = jnp.zeros((batch_size, hidden_size))
+    
+#     outputs = []
+#     for t in range(seq_len):
+#         h = jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh)
+#         y = jnp.dot(h, Why)
+#         outputs.append(y)
+#     outputs = jnp.stack(outputs, axis=1)
+    
+#     return outputs
+
+def state_transition_layer(x, hidden_size, key):
+    batch_size, seq_len, input_dim = x.shape
     
     # Initialize weights
-    Wxh = random.normal(random.PRNGKey(0), (channels, hidden_size))
-    Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
-    Why = random.normal(random.PRNGKey(2), (hidden_size, channels))
+    Wxh_key, Whh_key, Why_key = random.split(key, 3)
+    Wxh = random.normal(Wxh_key, (input_dim, hidden_size))
+    Whh = random.normal(Whh_key, (hidden_size, hidden_size))
+    Why = random.normal(Why_key, (hidden_size, input_dim))  # input_dim here should be 2
     
     # Initialize hidden state
     h = jnp.zeros((batch_size, hidden_size))
@@ -361,13 +382,13 @@ def simple_rnn(x, hidden_size):
     outputs = jnp.stack(outputs, axis=1)
     
     return outputs
-
+      
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
     assert channels % groups == 0, "channels should be divisible by groups"
     channels_per_group = channels // groups
     x = x.reshape(batch_size, groups, channels_per_group)
-    x = simple_rnn(x, hidden_size=8)
+    x = state_transition_layer(x, hidden_size=8)
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
   
