@@ -383,15 +383,7 @@ def state_transition_layer(x, hidden_size, key):
     
     return outputs
       
-def channel_shuffle(x, groups):
-    batch_size, channels = x.shape
-    assert channels % groups == 0, "channels should be divisible by groups"
-    channels_per_group = channels // groups
-    x = x.reshape(batch_size, groups, channels_per_group)
-    x = state_transition_layer(x, hidden_size, key)
-    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
-    return x
-  
+
 def fdbp(
     scope: Scope,
     signal,
@@ -413,8 +405,12 @@ def fdbp(
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         # Apply channel shuffle with GRU
-        x = channel_shuffle(x, 2)
-        
+      
+        batch_size, channels = x.shape
+        channels_per_group = channels // 2
+        x = x.reshape(batch_size, 2, channels_per_group)
+        x = state_transition_layer(x, hidden_size, key)
+        x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return Signal(x, t)
 
 
