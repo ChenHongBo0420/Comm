@@ -400,9 +400,8 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss
-    hidden_size=8
-    ):
+    n_init=gauss,
+    hidden_size=8):
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
