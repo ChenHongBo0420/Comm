@@ -376,15 +376,13 @@ def channel_shuffle_with_gru(x, groups, hidden_size):
 
 def fdbp(
     scope: Scope,
-    signal: Tuple[jnp.ndarray, jnp.ndarray],
+    signal,
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    groups=2,
-    hidden_size=8):
+    n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
@@ -395,7 +393,7 @@ def fdbp(
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         # Apply channel shuffle with GRU
-        x = channel_shuffle_with_gru(x, groups, hidden_size)
+        x = channel_shuffle_with_gru(x, 2, 8)
         
     return Signal(x, t)
 
