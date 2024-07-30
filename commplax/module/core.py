@@ -373,7 +373,12 @@ def energy_attention(x):
     x = x * attention_weights
     
     return x
-
+  
+def preprocess(x):
+    # Replace NaN and inf values with 0
+    x = jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    return x
+  
 def fdbp(
     scope: Scope,
     signal,
@@ -398,7 +403,7 @@ def fdbp(
       
         batch_size, channels = x.shape
         x = energy_attention(x)
-        
+        x = preprocess(x)
     return Signal(x, t)
 
 
