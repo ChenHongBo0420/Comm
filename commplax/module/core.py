@@ -23,7 +23,8 @@ from commplax.util import wrapped_partial as wpartial
 from typing import Any, NamedTuple, Iterable, Callable, Optional
 from jax import random
 from jax import lax
-import haiku as hk
+from flax.linen import Dense, compact
+from flax.linen.module import Module
 from functools import partial as wpartial
 from flax.core import Scope, init, apply
 Array = Any
@@ -341,6 +342,7 @@ def mimoaf(
 #     x = x.reshape(batch_size, groups, channels_per_group)
 #     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
 #     return x
+
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
     assert channels % groups == 0, "channels should be divisible by groups"
@@ -349,27 +351,28 @@ def channel_shuffle(x, groups):
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
 
-class SelfAttention(hk.Module):
-    def __init__(self, num_heads, key_size, value_size):
-        super().__init__()
-        self.num_heads = num_heads
-        self.key_size = key_size
-        self.value_size = value_size
+class SelfAttention(Module):
+    num_heads: int
+    key_size: int
+    value_size: int
 
+    @compact
     def __call__(self, x):
         batch_size, channels = x.shape
-        query = hk.Linear(self.num_heads * self.key_size)(x).reshape(batch_size, -1, self.num_heads, self.key_size)
-        key = hk.Linear(self.num_heads * self.key_size)(x).reshape(batch_size, -1, self.num_heads, self.key_size)
-        value = hk.Linear(self.num_heads * self.value_size)(x).reshape(batch_size, -1, self.num_heads, self.value_size)
+        query = Dense(self.num_heads * self.key_size)(x).reshape(batch_size, -1, self.num_heads, self.key_size)
+        key = Dense(self.num_heads * self.key_size)(x).reshape(batch_size, -1, self.num_heads, self.key_size)
+        value = Dense(self.num_heads * self.value_size)(x).reshape(batch_size, -1, self.num_heads, self.value_size)
 
         scores = jnp.einsum('...qk,...kv->...qv', query, key) / jnp.sqrt(self.key_size)
         attention_weights = jax.nn.softmax(scores, axis=-1)
         attended = jnp.einsum('...qv,...v->...q', attention_weights, value).reshape(batch_size, -1)
 
-        return hk.Linear(channels)(attended)
+        return Dense(channels)(attended)
+
       
 def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_init=gauss):
     x, t = signal
+    x = channel_shuffle(x, groups=2)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     attention_layer = SelfAttention(num_heads=8, key_size=16, value_size=16)
     
@@ -377,7 +380,7 @@ def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_ini
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
         # Applying attention mechanism after each DConv
-        x = attention_layer(x)
+        x = attention_layer()(x)
         
         x = channel_shuffle(x, groups=2)
         
@@ -385,9 +388,10 @@ def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_ini
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         # Applying attention mechanism after each NConv
-        x = attention_layer(x)
+        x = attention_layer()(x)
 
     return Signal(x, t)
+
 
 
 def identity(scope, inputs):
