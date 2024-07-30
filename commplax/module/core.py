@@ -362,26 +362,24 @@ def mimoaf(
     
 #     return outputs
 
-def state_transition_layer(x, hidden_size, key):
-    batch_size, seq_len, input_dim = x.shape
-    hidden_size =  8
-    # Initialize weights
-    Wxh_key, Whh_key, Why_key = random.split(key, 3)
-    Wxh = random.normal(Wxh_key, (input_dim, hidden_size))
-    Whh = random.normal(Whh_key, (hidden_size, hidden_size))
-    Why = random.normal(Why_key, (hidden_size, input_dim))  # input_dim here should be 2
+def se_attention(x, reduction_ratio=2):
+    batch_size, channels = x.shape
     
-    # Initialize hidden state
-    h = jnp.zeros((batch_size, hidden_size))
+    # Squeeze operation
+    z = jnp.mean(x, axis=0, keepdims=True)
     
-    outputs = []
-    for t in range(seq_len):
-        h = jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh)
-        y = jnp.dot(h, Why)
-        outputs.append(y)
-    outputs = jnp.stack(outputs, axis=1)
+    # Excitation operation
+    hidden_units = max(channels // reduction_ratio, 1)
+    w1 = random.normal(random.PRNGKey(0), (channels, hidden_units))
+    w2 = random.normal(random.PRNGKey(1), (hidden_units, channels))
     
-    return outputs
+    z = jax.nn.relu(jnp.dot(z, w1))
+    z = jax.nn.sigmoid(jnp.dot(z, w2))
+    
+    # Scale the input
+    x = x * z
+    
+    return x
       
 
 def fdbp(
@@ -407,10 +405,8 @@ def fdbp(
         # Apply channel shuffle with GRU
       
         batch_size, channels = x.shape
-        channels_per_group = channels // 2
-        x = x.reshape(batch_size, 2, channels_per_group)
-        x = state_transition_layer(x, hidden_size, key)
-        x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+        x = se_attention(x)
+        
     return Signal(x, t)
 
 
