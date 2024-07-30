@@ -342,15 +342,22 @@ def mimoaf(
 #     return x
 
 
-def apply_gru(x, hidden_size):
+def simple_rnn(x, hidden_size):
     batch_size, seq_len, channels = x.shape
-    gru_cell = nn.GRUCell(features=hidden_size)
-    hidden_state = jnp.zeros((batch_size, hidden_size))
+    
+    # Initialize weights
+    Wxh = random.normal(random.PRNGKey(0), (channels, hidden_size))
+    Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
+    Why = random.normal(random.PRNGKey(2), (hidden_size, channels))
+    
+    # Initialize hidden state
+    h = jnp.zeros((batch_size, hidden_size))
     
     outputs = []
     for t in range(seq_len):
-        hidden_state, output = gru_cell(hidden_state, x[:, t, :])
-        outputs.append(output)
+        h = jnp.tanh(jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh))
+        y = jnp.dot(h, Why)
+        outputs.append(y)
     outputs = jnp.stack(outputs, axis=1)
     
     return outputs
@@ -360,7 +367,7 @@ def channel_shuffle(x, groups):
     assert channels % groups == 0, "channels should be divisible by groups"
     channels_per_group = channels // groups
     x = x.reshape(batch_size, groups, channels_per_group)
-    x = apply_gru(x, hidden_size=8)
+    x = simple_rnn(x, hidden_size=8)
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
   
