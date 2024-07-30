@@ -388,7 +388,7 @@ def channel_shuffle(x, groups):
     assert channels % groups == 0, "channels should be divisible by groups"
     channels_per_group = channels // groups
     x = x.reshape(batch_size, groups, channels_per_group)
-    x = state_transition_layer(x, hidden_size, key)
+    x = state_transition_layer(x, hidden_size=8, key)
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
   
