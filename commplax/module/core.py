@@ -362,23 +362,17 @@ def mimoaf(
     
 #     return outputs
 
-def se_attention(x):
-    batch_size, channels = x.shape
+def energy_attention(x):
+    # Compute energy for each channel
+    energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
     
-    # Since we only have 2 channels, we will calculate the attention directly
-    z = jnp.mean(x, axis=0, keepdims=True)  # Global average pooling
+    # Normalize energy to get attention weights
+    attention_weights = energy / jnp.sum(energy)
     
-    # Generate weights
-    w = random.normal(random.PRNGKey(0), (channels,))
-    
-    # Excitation operation
-    z = jax.nn.sigmoid(jnp.dot(z, w))
-    
-    # Scale the input
-    x = x * z
+    # Scale the input by attention weights
+    x = x * attention_weights
     
     return x
-      
 
 def fdbp(
     scope: Scope,
@@ -403,7 +397,7 @@ def fdbp(
         # Apply channel shuffle with GRU
       
         batch_size, channels = x.shape
-        x = se_attention(x)
+        x = energy_attention(x)
         
     return Signal(x, t)
 
