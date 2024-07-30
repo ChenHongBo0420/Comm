@@ -355,7 +355,7 @@ def simple_rnn(x, hidden_size):
     
     outputs = []
     for t in range(seq_len):
-        h = jnp.tanh(jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh))
+        h = jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh)
         y = jnp.dot(h, Why)
         outputs.append(y)
     outputs = jnp.stack(outputs, axis=1)
