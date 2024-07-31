@@ -405,7 +405,7 @@ def fdbp(
         # Apply channel shuffle with GRU
         key1, key2 = random.split(key)
         x = encoder(x, hidden_size, key1)
-        x = decoder(x, hidden_size, key2)
+        # x = decoder(x, hidden_size, key2)
       
     return Signal(x, t)
 
