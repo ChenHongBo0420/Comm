@@ -213,10 +213,19 @@ def conv1d(
 
     return Signal(x, t)
 
-def check_array(x, name="Array"):
-    print(f"{name} shape: {x.shape}")
-    print(f"{name} ndim: {x.ndim}")
-    print(f"{name} size: {x.size}")      
+def print_statistics(x_list, c_list):
+    for i, (x, c) in enumerate(zip(x_list, c_list)):
+        print(f"Step {i+1} - Statistics of x:")
+        print(f"  Min: {jnp.min(x)}")
+        print(f"  Max: {jnp.max(x)}")
+        print(f"  Mean: {jnp.mean(x)}")
+        print(f"  Std: {jnp.std(x)}\n")
+        
+        print(f"Step {i+1} - Statistics of c:")
+        print(f"  Min: {jnp.min(c)}")
+        print(f"  Max: {jnp.max(c)}")
+        print(f"  Mean: {jnp.mean(c)}")
+        print(f"  Std: {jnp.std(c)}\n")  
 
 
 def kernel_initializer(rng, shape):
@@ -386,12 +395,12 @@ def fdbp(
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        # x = energy_attention(x)
+        
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = encoder(x, hidden_size)
+        print_statistics(i+1, x, c)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
         
