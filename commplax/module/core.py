@@ -359,9 +359,9 @@ def mimoaf(
 
 def dense_layer(x, features):
     input_dim = x.shape[-1]
-    # 使用固定的高斯初始化
+    # 使用固定的小权重初始化
     W = jnp.exp(-0.5 * (jnp.arange(input_dim) - input_dim // 2) ** 2 / (input_dim // 2) ** 2)
-    W = jnp.tile(W[:, None], (1, features))
+    W = jnp.tile(W[:, None], (1, features)) * 0.01  # 缩小权重初始化值
     return jnp.dot(x, W)
 
 def encoder(x, hidden_size):
@@ -369,12 +369,20 @@ def encoder(x, hidden_size):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
+    # 对实部和虚部分别进行归一化
+    x_real = (x_real - jnp.mean(x_real)) / jnp.std(x_real)
+    x_imag = (x_imag - jnp.mean(x_imag)) / jnp.std(x_imag)
+    
     # 分别进行全连接层变换
     x_real = dense_layer(x_real, hidden_size)
     x_imag = dense_layer(x_imag, hidden_size)
     
     # 重新组合为复数信号
     x = x_real + 1j * x_imag
+    
+    # 对结果进行归一化
+    x = (x - jnp.mean(x)) / jnp.std(x)
+    
     return x
   
 def fdbp(
