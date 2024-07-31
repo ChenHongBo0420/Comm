@@ -364,7 +364,7 @@ def mimoaf(
 
 def energy_attention(x):
     # Compute energy for each channel
-    energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
+    energy = jnp.sum(jnp.abs(x)**2, axis=-1, keepdims=True)
     
     # Normalize energy to get attention weights
     attention_weights = energy / jnp.sum(energy)
@@ -372,11 +372,6 @@ def energy_attention(x):
     # Scale the input by attention weights
     x = x * attention_weights
     
-    return x
-  
-def preprocess(x):
-    # Replace NaN and inf values with 0
-    x = jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
     return x
   
 def fdbp(
@@ -403,7 +398,6 @@ def fdbp(
       
         batch_size, channels = x.shape
         x = energy_attention(x)
-        x = preprocess(x)
     return Signal(x, t)
 
 
