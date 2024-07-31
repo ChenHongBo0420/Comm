@@ -366,7 +366,7 @@ def dense_layer(x, features, key):
     input_dim = x.shape[-1]
     W = random.normal(key, (input_dim, features))
     b = jnp.zeros(features)
-    return jnp.dot(x, W) + b
+    return jnp.dot(x, W)
 
 def encoder(x, hidden_size, key):
     key1, key2 = random.split(key)
