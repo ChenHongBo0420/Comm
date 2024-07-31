@@ -363,8 +363,8 @@ def mimoaf(
 #     return outputs
 
 def energy_attention(x):
-    # Compute energy for each channel
-    energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
+    # Compute energy for each channel using global average pooling
+    energy = jnp.mean(jnp.abs(x)**2, axis=0, keepdims=True)
     
     # Normalize energy to get attention weights
     attention_weights = energy / jnp.sum(energy)
@@ -373,7 +373,7 @@ def energy_attention(x):
     x = x * attention_weights
     
     return x
-  
+
 def fdbp(
     scope: Scope,
     signal,
