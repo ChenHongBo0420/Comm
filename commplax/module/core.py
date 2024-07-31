@@ -364,7 +364,7 @@ def mimoaf(
   
 def dense_layer(x, features):
     input_dim = x.shape[-1]
-    W = jnp.ones((input_dim, features)) * jnp.sqrt(2 / input_dim)
+    W = jnp.zeros((input_dim, features)) * jnp.sqrt(2 / input_dim)
     return jnp.dot(x, W)
 
 def encoder(x, hidden_size):
