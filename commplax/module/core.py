@@ -361,19 +361,24 @@ def mimoaf(
 #     outputs = jnp.stack(outputs, axis=1)
     
 #     return outputs
-
+  
 def energy_attention(x):
-    # Compute energy for each channel using global average pooling
-    energy = jnp.mean(jnp.abs(x)**2, axis=0, keepdims=True)
+    # Compute the energy for each channel (along the first dimension)
+    signal_energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
     
-    # Normalize energy to get attention weights
-    # attention_weights = energy / jnp.sum(energy)
+    # Compute noise energy (assuming noise is the difference from the mean signal)
+    mean_signal = jnp.mean(x, axis=0, keepdims=True)
+    noise_energy = jnp.sum(jnp.abs(x - mean_signal)**2, axis=0, keepdims=True)
+    
+    # Compute the SI-SNR based attention weights
+    si_snr = signal_energy / (noise_energy + 1e-8)  # Add epsilon to avoid division by zero
+    attention_weights = si_snr / jnp.sum(si_snr)
     
     # Scale the input by attention weights
-    x = x * energy
+    x = x * attention_weights
     
     return x
-
+  
 def fdbp(
     scope: Scope,
     signal,
