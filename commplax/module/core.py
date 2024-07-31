@@ -381,7 +381,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_size=8):
+    hidden_size=2):
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
@@ -395,9 +395,7 @@ def fdbp(
 
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
-        key1, key2 = random.split(key)
         x = encoder(x, hidden_size, key1)
-        # x = decoder(x, hidden_size, key2)
       
     return Signal(x, t)
 
