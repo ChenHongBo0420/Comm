@@ -395,7 +395,7 @@ def fdbp(
 
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
-        x = encoder(x, hidden_size, key1)
+        x = encoder(x, hidden_size)
       
     return Signal(x, t)
 
