@@ -364,7 +364,7 @@ def mimoaf(
 
 def energy_attention(x):
     # Compute energy for each channel
-    energy = jnp.sum(jnp.abs(x)**2, axis=-1, keepdims=True)
+    energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
     
     # Normalize energy to get attention weights
     attention_weights = energy / jnp.sum(energy)
