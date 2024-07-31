@@ -362,16 +362,24 @@ def mimoaf(
     
 #     return outputs
   
-def energy_attention(x):
-    # Compute the energy for each channel (along the first dimension)
-    energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
-    
-    # Normalize energy to get attention weights
-    attention_weights = energy / jnp.sum(energy)
-    
-    # Scale the input by attention weights
-    x = x * attention_weights
-    
+def dense_layer(x, features, key):
+    input_dim = x.shape[-1]
+    W = random.normal(key, (input_dim, features))
+    b = jnp.zeros(features)
+    return jnp.dot(x, W) + b
+
+def encoder(x, hidden_size, key):
+    key1, key2 = random.split(key)
+    x = dense_layer(x, hidden_size, key1)
+    x = jax.nn.relu(x)
+    x = dense_layer(x, hidden_size, key2)
+    return x
+
+def decoder(x, hidden_size, key):
+    key1, key2 = random.split(key)
+    x = dense_layer(x, hidden_size, key1)
+    x = jax.nn.relu(x)
+    x = dense_layer(x, 2, key2)  # Assuming 2 channels for polarization states
     return x
   
 def fdbp(
@@ -397,8 +405,10 @@ def fdbp(
 
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
-        batch_size, channels = x.shape
-        x = energy_attention(x)
+        key1, key2 = random.split(key)
+        x = encoder(x, hidden_size, key1)
+        x = decoder(x, hidden_size, key2)
+      
     return Signal(x, t)
 
 
