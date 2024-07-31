@@ -404,7 +404,7 @@ def fdbp(
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
         batch_size, channels = x.shape
-        # x = energy_attention(x)
+        x = energy_attention(x)
     return Signal(x, t)
 
 
