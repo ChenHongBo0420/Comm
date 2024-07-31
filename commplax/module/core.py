@@ -357,21 +357,21 @@ def mimoaf(
 #     return outputs
   
 
-def dense_layer(x, features, key):
+def dense_layer(x, features):
     input_dim = x.shape[-1]
-    W = random.normal(key, (input_dim, features))
+    # 使用固定的高斯初始化
+    W = jnp.exp(-0.5 * (jnp.arange(input_dim) - input_dim // 2) ** 2 / (input_dim // 2) ** 2)
+    W = jnp.tile(W[:, None], (1, features))
     return jnp.dot(x, W)
 
-def encoder(x, hidden_size, key):
-    key1, key2 = random.split(key)
-    
+def encoder(x, hidden_size):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
     # 分别进行全连接层变换
-    x_real = dense_layer(x_real, hidden_size, key1)
-    x_imag = dense_layer(x_imag, hidden_size, key2)
+    x_real = dense_layer(x_real, hidden_size)
+    x_imag = dense_layer(x_imag, hidden_size)
     
     # 重新组合为复数信号
     x = x_real + 1j * x_imag
@@ -396,7 +396,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = encoder(x, hidden_size, key)
+        x = encoder(x, hidden_size)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
         
