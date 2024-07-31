@@ -367,10 +367,10 @@ def energy_attention(x):
     energy = jnp.mean(jnp.abs(x)**2, axis=0, keepdims=True)
     
     # Normalize energy to get attention weights
-    attention_weights = energy / jnp.sum(energy)
+    # attention_weights = energy / jnp.sum(energy)
     
     # Scale the input by attention weights
-    x = x * attention_weights
+    x = x * energy
     
     return x
 
