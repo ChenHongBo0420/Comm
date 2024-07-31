@@ -392,12 +392,13 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
+        c = energy_attention(c)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         # Apply channel shuffle with GRU
       
         batch_size, channels = x.shape
-        x = energy_attention(x)
+        # x = energy_attention(x)
     return Signal(x, t)
 
 
