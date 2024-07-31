@@ -371,7 +371,7 @@ def dense_layer(x, features, key):
 def encoder(x, hidden_size, key):
     key1, key2 = random.split(key)
     x = dense_layer(x, hidden_size, key1)
-    x = dense_layer(x, hidden_size, key2)
+    x = dense_layer(x, 2, key2)
     return x
 
 def decoder(x, hidden_size, key):
