@@ -213,20 +213,6 @@ def conv1d(
 
     return Signal(x, t)
 
-def print_statistics(step, x, c):
-    print(f"Step {step} - Statistics of x:")
-    print(f"  Min: {jnp.min(x)}")
-    print(f"  Max: {jnp.max(x)}")
-    print(f"  Mean: {jnp.mean(x)}")
-    print(f"  Std: {jnp.std(x)}\n")
-    
-    print(f"Step {step} - Statistics of c:")
-    print(f"  Min: {jnp.min(c)}")
-    print(f"  Max: {jnp.max(c)}")
-    print(f"  Mean: {jnp.mean(c)}")
-    print(f"  Std: {jnp.std(c)}\n")
-
-
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
@@ -370,15 +356,26 @@ def mimoaf(
     
 #     return outputs
   
-def dense_layer(x, features):
+
+def dense_layer(x, features, key):
     input_dim = x.shape[-1]
-    W = jnp.zeros((input_dim, features)) * jnp.sqrt(2 / input_dim)
+    W = random.normal(key, (input_dim, features))
     return jnp.dot(x, W)
 
-def encoder(x, hidden_size):
-    x = dense_layer(x, hidden_size)
+def encoder(x, hidden_size, key):
+    key1, key2 = random.split(key)
+    
+    # 分离实部和虚部
+    x_real = jnp.real(x)
+    x_imag = jnp.imag(x)
+    
+    # 分别进行全连接层变换
+    x_real = dense_layer(x_real, hidden_size, key1)
+    x_imag = dense_layer(x_imag, hidden_size, key2)
+    
+    # 重新组合为复数信号
+    x = x_real + 1j * x_imag
     return x
-
   
 def fdbp(
     scope: Scope,
@@ -399,7 +396,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        print_statistics(i+1, x, c)
+        x = encoder(x, hidden_size, key)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
         
