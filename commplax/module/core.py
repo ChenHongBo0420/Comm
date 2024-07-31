@@ -213,19 +213,18 @@ def conv1d(
 
     return Signal(x, t)
 
-def print_statistics(x_list, c_list):
-    for i, (x, c) in enumerate(zip(x_list, c_list)):
-        print(f"Step {i+1} - Statistics of x:")
-        print(f"  Min: {jnp.min(x)}")
-        print(f"  Max: {jnp.max(x)}")
-        print(f"  Mean: {jnp.mean(x)}")
-        print(f"  Std: {jnp.std(x)}\n")
-        
-        print(f"Step {i+1} - Statistics of c:")
-        print(f"  Min: {jnp.min(c)}")
-        print(f"  Max: {jnp.max(c)}")
-        print(f"  Mean: {jnp.mean(c)}")
-        print(f"  Std: {jnp.std(c)}\n")  
+def print_statistics(step, x, c):
+    print(f"Step {step} - Statistics of x:")
+    print(f"  Min: {jnp.min(x)}")
+    print(f"  Max: {jnp.max(x)}")
+    print(f"  Mean: {jnp.mean(x)}")
+    print(f"  Std: {jnp.std(x)}\n")
+    
+    print(f"Step {step} - Statistics of c:")
+    print(f"  Min: {jnp.min(c)}")
+    print(f"  Max: {jnp.max(c)}")
+    print(f"  Mean: {jnp.mean(c)}")
+    print(f"  Std: {jnp.std(c)}\n")
 
 
 def kernel_initializer(rng, shape):
