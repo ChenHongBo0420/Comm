@@ -363,17 +363,11 @@ def mimoaf(
 #     return outputs
   
 def energy_attention(x):
-    # Compute the difference between the two polarization states
-    diff = jnp.abs(x[:, 0] - x[:, 1])
+    # Compute the energy for each channel (along the first dimension)
+    energy = jnp.sum(jnp.abs(x)**2, axis=0, keepdims=True)
     
-    # Compute the energy of the difference
-    energy_diff = jnp.sum(diff**2)
-    
-    # Normalize the energy to get attention weights
-    attention_weights = energy_diff / (energy_diff + 1e-8)
-    
-    # Create attention weights for both polarization states
-    attention_weights = jnp.array([attention_weights, 1 - attention_weights])
+    # Normalize energy to get attention weights
+    attention_weights = energy / jnp.sum(energy)
     
     # Scale the input by attention weights
     x = x * attention_weights
