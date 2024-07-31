@@ -362,22 +362,15 @@ def mimoaf(
     
 #     return outputs
   
-def dense_layer(x, features, key):
+def dense_layer(x, features):
     input_dim = x.shape[-1]
-    W = random.normal(key, (input_dim, features))
-    b = jnp.zeros(features)
+    W = jnp.ones((input_dim, features)) * jnp.sqrt(2 / input_dim)
     return jnp.dot(x, W)
 
-def encoder(x, hidden_size, key):
-    key1, key2 = random.split(key)
-    x = dense_layer(x, 2, key1)
+def encoder(x, hidden_size):
+    x = dense_layer(x, hidden_size)
     return x
 
-def decoder(x, hidden_size, key):
-    key1, key2 = random.split(key)
-    x = dense_layer(x, hidden_size, key1)
-    x = dense_layer(x, 2, key2)  # Assuming 2 channels for polarization states
-    return x
   
 def fdbp(
     scope: Scope,
