@@ -376,7 +376,9 @@ def mimoaf(
 #     x = x * attention
 #     return x
 # ############### 
-
+def max_pool(x):
+    return jnp.max(x, axis=0, keepdims=True)
+  
 def single_attention(x):
     # 只使用最大池化
     pooled = max_pool(x)
