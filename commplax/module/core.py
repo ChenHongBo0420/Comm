@@ -377,38 +377,29 @@ def mimoaf(
 #     return x
 # ############### 
 
-def self_attention(x):
-    # 获取输入的形状
-    batch_size, channels = x.shape
-
-    # 初始化查询、键、值矩阵
-    key = random.PRNGKey(0)
-    W_q = random.normal(key, (channels, channels))
-    W_k = random.normal(key, (channels, channels))
-    W_v = random.normal(key, (channels, channels))
-
-    # 计算查询、键、值
-    Q = jnp.dot(x, W_q)
-    K = jnp.dot(x, W_k)
-    V = jnp.dot(x, W_v)
-
+def squeeze_excite_attention(x):
+    # 对输入进行全局平均池化
+    avg_pool = jnp.mean(x, axis=0, keepdims=True)
+    
     # 计算注意力权重
-    attention_scores = jnp.dot(Q, K.T) / jnp.sqrt(channels)
-    attention_weights = jax.nn.softmax(attention_scores, axis=-1)
-
-    # 计算加权值
-    attention_output = jnp.dot(attention_weights, V)
-
-    return attention_output
+    attention = jnp.tanh(avg_pool)
+    
+    # 扩展到与输入相同的形状
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    
+    # 应用注意力权重
+    x = x * attention
+    
+    return x
 
 def complex_channel_attention(x):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 分别对实部和虚部应用自注意力机制
-    x_real = self_attention(x_real)
-    x_imag = self_attention(x_imag)
+    # 分别对实部和虚部应用SE注意力机制
+    x_real = squeeze_excite_attention(x_real)
+    x_imag = squeeze_excite_attention(x_imag)
     
     # 重新组合为复数信号
     x = x_real + 1j * x_imag
