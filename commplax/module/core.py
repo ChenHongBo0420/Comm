@@ -379,7 +379,7 @@ def mimoaf(
 
 def squeeze_excite_attention(x):
     # 对输入进行全局平均池化
-    avg_pool = jnp.mean(x, axis=0, keepdims=True)
+    avg_pool = jnp.max(x, axis=0, keepdims=True)
     
     # 计算注意力权重
     attention = jnp.tanh(avg_pool)
