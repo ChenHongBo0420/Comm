@@ -357,26 +357,49 @@ def mimoaf(
 #     return outputs
   
 
-def pool_attention(x):
-    # 全局平均池化
-    pooled = jnp.mean(x, axis=0, keepdims=True)
-    # 计算注意力权重
-    attention_weights = pooled / (jnp.sum(pooled) + 1e-8)
-    # 应用注意力权重
-    x = x * attention_weights
-    return x
+def avg_max_pool(x):
+    avg_pool = jnp.mean(x, axis=0, keepdims=True)
+    max_pool = jnp.max(x, axis=0, keepdims=True)
+    return avg_pool, max_pool
 
-def encoder(x):
+def complex_fc(x, features):
+    input_dim = x.shape[-1]
+    W = jnp.exp(-0.5 * (jnp.arange(input_dim) - input_dim // 2) ** 2 / (input_dim // 2) ** 2)
+    W = jnp.tile(W[:, None], (1, features)) * 0.01
+    return jnp.dot(x, W)
+
+def complex_channel_attention(x, reduction_ratio=16):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 对实部和虚部分别进行池化注意力
-    x_real = pool_attention(x_real)
-    x_imag = pool_attention(x_imag)
+    # 对实部和虚部分别进行平均池化和最大池化
+    avg_pool_real, max_pool_real = avg_max_pool(x_real)
+    avg_pool_imag, max_pool_imag = avg_max_pool(x_imag)
+    
+    # 合并池化结果
+    pooled_real = jnp.concatenate([avg_pool_real, max_pool_real], axis=0)
+    pooled_imag = jnp.concatenate([avg_pool_imag, max_pool_imag], axis=0)
+    
+    # 通过共享的全连接层处理
+    fc_real = complex_fc(pooled_real, x_real.shape[-1] // reduction_ratio)
+    fc_imag = complex_fc(pooled_imag, x_imag.shape[-1] // reduction_ratio)
+    
+    # 激活和重塑
+    fc_real = jnp.tanh(fc_real)
+    fc_imag = jnp.tanh(fc_imag)
+    
+    # 通过另一个全连接层还原维度
+    fc_real = complex_fc(fc_real, x_real.shape[-1])
+    fc_imag = complex_fc(fc_imag, x_imag.shape[-1])
+    
+    # 计算复杂通道注意力
+    attention_real = jnp.tanh(fc_real)
+    attention_imag = jnp.tanh(fc_imag)
     
     # 重新组合为复数信号
-    x = x_real + 1j * x_imag
+    attention = attention_real + 1j * attention_imag
+    x = x * attention
     
     return x
   
@@ -399,7 +422,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = encoder(x)
+        x = complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
         
