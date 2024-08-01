@@ -377,17 +377,9 @@ def mimoaf(
 #     return x
 # ############### 
 
-def avg_max_pool(x):
-    avg_pool = jnp.mean(x, axis=0, keepdims=True)
-    max_pool = jnp.max(x, axis=0, keepdims=True)
-    return avg_pool, max_pool
-
 def single_attention(x):
-    # 平均池化和最大池化
-    avg_pool, max_pool = avg_max_pool(x)
-    
-    # 合并池化结果
-    pooled = avg_pool + max_pool
+    # 只使用最大池化
+    pooled = max_pool(x)
     
     # 计算注意力权重
     attention = jnp.tanh(pooled)
