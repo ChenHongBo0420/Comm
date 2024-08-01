@@ -399,9 +399,12 @@ def complex_channel_attention(x, reduction_ratio=16):
     
     # 重新组合为复数信号
     attention = attention_real + 1j * attention_imag
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    
     x = x * attention
     
     return x
+
   
 def fdbp(
     scope: Scope,
