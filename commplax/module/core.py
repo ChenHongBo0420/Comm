@@ -357,31 +357,26 @@ def mimoaf(
 #     return outputs
   
 
-def dense_layer(x, features):
-    input_dim = x.shape[-1]
-    # 使用固定的小权重初始化
-    W = jnp.exp(-0.5 * (jnp.arange(input_dim) - input_dim // 2) ** 2 / (input_dim // 2) ** 2)
-    W = jnp.tile(W[:, None], (1, features)) * 0.01  # 缩小权重初始化值
-    return jnp.dot(x, W)
+def pool_attention(x):
+    # 全局平均池化
+    pooled = jnp.mean(x, axis=0, keepdims=True)
+    # 计算注意力权重
+    attention_weights = pooled / (jnp.sum(pooled) + 1e-8)
+    # 应用注意力权重
+    x = x * attention_weights
+    return x
 
-def encoder(x, hidden_size):
+def encoder(x):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 对实部和虚部分别进行归一化
-    x_real = (x_real - jnp.mean(x_real)) / jnp.std(x_real)
-    x_imag = (x_imag - jnp.mean(x_imag)) / jnp.std(x_imag)
-    
-    # 分别进行全连接层变换
-    x_real = dense_layer(x_real, hidden_size)
-    x_imag = dense_layer(x_imag, hidden_size)
+    # 对实部和虚部分别进行池化注意力
+    x_real = pool_attention(x_real)
+    x_imag = pool_attention(x_imag)
     
     # 重新组合为复数信号
     x = x_real + 1j * x_imag
-    
-    # 对结果进行归一化
-    x = (x - jnp.mean(x)) / jnp.std(x)
     
     return x
   
@@ -404,7 +399,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = encoder(x, hidden_size)
+        x = encoder(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # Apply channel shuffle with GRU
         
