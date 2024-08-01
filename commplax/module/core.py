@@ -357,25 +357,6 @@ def mimoaf(
 #     return outputs
 
 # ############### 
-# def avg_max_pool(x):
-#     avg_pool = jnp.mean(x, axis=0, keepdims=True)
-#     max_pool = jnp.max(x, axis=0, keepdims=True)
-#     return avg_pool, max_pool
-
-# def complex_channel_attention(x):
-#     x_real = jnp.real(x)
-#     x_imag = jnp.imag(x)
-#     avg_pool_real, max_pool_real = avg_max_pool(x_real)
-#     avg_pool_imag, max_pool_imag = avg_max_pool(x_imag)
-#     pooled_real = avg_pool_real + max_pool_real
-#     pooled_imag = avg_pool_imag + max_pool_imag
-#     attention_real = jnp.tanh(pooled_real)
-#     attention_imag = jnp.tanh(pooled_imag)
-#     attention = attention_real + 1j * attention_imag
-#     attention = jnp.tile(attention, (x.shape[0], 1))
-#     x = x * attention
-#     return x
-# ############### 
 
 def squeeze_excite_attention(x):
     # 对输入进行全局平均池化
@@ -405,7 +386,7 @@ def complex_channel_attention(x):
     x = x_real + 1j * x_imag
     
     return x
-  
+# ###############  
 def fdbp(
     scope: Scope,
     signal,
@@ -425,9 +406,9 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         # x = complex_channel_attention(x)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        x = complex_channel_attention(x)
         
       
     return Signal(x, t)
