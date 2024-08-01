@@ -355,37 +355,64 @@ def mimoaf(
 #     outputs = jnp.stack(outputs, axis=1)
     
 #     return outputs
-  
+
+# ############### 
+# def avg_max_pool(x):
+#     avg_pool = jnp.mean(x, axis=0, keepdims=True)
+#     max_pool = jnp.max(x, axis=0, keepdims=True)
+#     return avg_pool, max_pool
+
+# def complex_channel_attention(x):
+#     x_real = jnp.real(x)
+#     x_imag = jnp.imag(x)
+#     avg_pool_real, max_pool_real = avg_max_pool(x_real)
+#     avg_pool_imag, max_pool_imag = avg_max_pool(x_imag)
+#     pooled_real = avg_pool_real + max_pool_real
+#     pooled_imag = avg_pool_imag + max_pool_imag
+#     attention_real = jnp.tanh(pooled_real)
+#     attention_imag = jnp.tanh(pooled_imag)
+#     attention = attention_real + 1j * attention_imag
+#     attention = jnp.tile(attention, (x.shape[0], 1))
+#     x = x * attention
+#     return x
+# ############### 
+
 def avg_max_pool(x):
     avg_pool = jnp.mean(x, axis=0, keepdims=True)
     max_pool = jnp.max(x, axis=0, keepdims=True)
     return avg_pool, max_pool
+
+def single_attention(x):
+    # 平均池化和最大池化
+    avg_pool, max_pool = avg_max_pool(x)
+    
+    # 合并池化结果
+    pooled = avg_pool + max_pool
+    
+    # 计算注意力权重
+    attention = jnp.tanh(pooled)
+    
+    # 扩展到与输入相同的形状
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    
+    # 应用注意力权重
+    x = x * attention
+    
+    return x
 
 def complex_channel_attention(x):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 对实部和虚部分别进行平均池化和最大池化
-    avg_pool_real, max_pool_real = avg_max_pool(x_real)
-    avg_pool_imag, max_pool_imag = avg_max_pool(x_imag)
-    
-    # 合并池化结果
-    pooled_real = avg_pool_real + max_pool_real
-    pooled_imag = avg_pool_imag + max_pool_imag
-    
-    # 计算复杂通道注意力
-    attention_real = jnp.tanh(pooled_real)
-    attention_imag = jnp.tanh(pooled_imag)
+    # 分别对实部和虚部应用单独注意力
+    x_real = single_attention(x_real)
+    x_imag = single_attention(x_imag)
     
     # 重新组合为复数信号
-    attention = attention_real + 1j * attention_imag
-    attention = jnp.tile(attention, (x.shape[0], 1))
-    
-    x = x * attention
+    x = x_real + 1j * x_imag
     
     return x
-
   
 def fdbp(
     scope: Scope,
