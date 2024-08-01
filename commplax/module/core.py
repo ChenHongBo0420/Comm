@@ -356,19 +356,12 @@ def mimoaf(
     
 #     return outputs
   
-
 def avg_max_pool(x):
     avg_pool = jnp.mean(x, axis=0, keepdims=True)
     max_pool = jnp.max(x, axis=0, keepdims=True)
     return avg_pool, max_pool
 
-def complex_fc(x, features):
-    input_dim = x.shape[-1]
-    W = jnp.exp(-0.5 * (jnp.arange(input_dim) - input_dim // 2) ** 2 / (input_dim // 2) ** 2)
-    W = jnp.tile(W[:, None], (1, features)) * 0.01
-    return jnp.dot(x, W)
-
-def complex_channel_attention(x, reduction_ratio=16):
+def complex_channel_attention(x):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
@@ -378,24 +371,12 @@ def complex_channel_attention(x, reduction_ratio=16):
     avg_pool_imag, max_pool_imag = avg_max_pool(x_imag)
     
     # 合并池化结果
-    pooled_real = jnp.concatenate([avg_pool_real, max_pool_real], axis=0)
-    pooled_imag = jnp.concatenate([avg_pool_imag, max_pool_imag], axis=0)
-    
-    # 通过共享的全连接层处理
-    fc_real = complex_fc(pooled_real, x_real.shape[-1] // reduction_ratio)
-    fc_imag = complex_fc(pooled_imag, x_imag.shape[-1] // reduction_ratio)
-    
-    # 激活和重塑
-    fc_real = jnp.tanh(fc_real)
-    fc_imag = jnp.tanh(fc_imag)
-    
-    # 通过另一个全连接层还原维度
-    fc_real = complex_fc(fc_real, x_real.shape[-1])
-    fc_imag = complex_fc(fc_imag, x_imag.shape[-1])
+    pooled_real = avg_pool_real + max_pool_real
+    pooled_imag = avg_pool_imag + max_pool_imag
     
     # 计算复杂通道注意力
-    attention_real = jnp.tanh(fc_real)
-    attention_imag = jnp.tanh(fc_imag)
+    attention_real = jnp.tanh(pooled_real)
+    attention_imag = jnp.tanh(pooled_imag)
     
     # 重新组合为复数信号
     attention = attention_real + 1j * attention_imag
