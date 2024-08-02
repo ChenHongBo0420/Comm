@@ -374,34 +374,6 @@ def mimoaf(
 #     return x
 # ###############  
 
-def max_pool(x):
-    return jnp.max(x, axis=0, keepdims=True)
-
-def squeeze_excite_attention(x):
-    max_pooling = max_pool(x)
-    attention = jnp.tanh(max_pooling)
-    attention = jnp.tile(attention, (x.shape[0], 1))
-    x = x * attention
-    
-    return x
-
-def complex_channel_attention(x):
-    # 分离实部和虚部
-    x_real = jnp.real(x)
-    x_imag = jnp.imag(x)
-    
-    # 分别对实部和虚部应用SE注意力机制
-    x_real = squeeze_excite_attention(x_real)
-    x_imag = squeeze_excite_attention(x_imag)
-    
-    # 重新组合为复数信号
-    x = x_real + 1j * x_imag
-    
-    return x
-
-def residual_block(x, func, alpha=0.5):
-    return alpha * x + func(x)
-
 
 def fdbp(
     scope: Scope,
