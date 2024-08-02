@@ -436,7 +436,7 @@ def fdbp(
         x = x_real + 1j * x_imag
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        print(f"Step {i} - x_real shape: {x_real.shape}, hidden_state shape: {hidden_state.shape}")
+
     return Signal(x, t)
 
 
