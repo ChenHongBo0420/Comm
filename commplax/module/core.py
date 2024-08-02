@@ -419,20 +419,23 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    rnn = RWKV(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1], key=key)
+    hidden_state_real = jnp.zeros((x.shape[0], hidden_size))
+    hidden_state_imag = jnp.zeros((x.shape[0], hidden_size))
     for i in range(steps):
-        hidden_state = jnp.zeros((x.shape[0], hidden_size))
-        rnn = RWKV(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1], key=key)
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
         
-        x_real, hidden_state_real = rnn(x_real, hidden_state)
-        x_imag, hidden_state_imag = rnn(x_imag, hidden_state)
+        x_real = jnp.real(x)
+        x_imag = jnp.imag(x)
+        
+        x_real, hidden_state_real = rnn(x_real, hidden_state_real)
+        x_imag, hidden_state_imag = rnn(x_imag, hidden_state_imag)
         
         x = x_real + 1j * x_imag
-        hidden_state = hidden_state_real + 1j * hidden_state_imag
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         print(f"Step {i} - x_real shape: {x_real.shape}, hidden_state shape: {hidden_state.shape}")
