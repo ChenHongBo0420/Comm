@@ -377,33 +377,30 @@ def mimoaf(
 def max_pool(x):
     return jnp.max(x, axis=0, keepdims=True)
 
-def multi_head_attention(x, num_heads=4):
-    # 分割输入到多个头
-    split_x = jnp.array_split(x, num_heads, axis=-1)
-    attention_heads = []
-
-    for i in range(num_heads):
-        max_pooling = max_pool(split_x[i])
-        attention = jnp.tanh(max_pooling)
-        attention = jnp.tile(attention, (split_x[i].shape[0], 1))
-        attention_heads.append(split_x[i] * attention)
-
-    # 连接所有头
-    attention_output = jnp.concatenate(attention_heads, axis=-1)
-    return attention_output
-
 def squeeze_excite_attention(x):
-    return multi_head_attention(x, num_heads=4)
+    max_pooling = max_pool(x)
+    attention = jnp.tanh(max_pooling)
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    x = x * attention
+    
+    return x
 
 def complex_channel_attention(x):
+    # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
+    # 分别对实部和虚部应用SE注意力机制
     x_real = squeeze_excite_attention(x_real)
     x_imag = squeeze_excite_attention(x_imag)
     
+    # 重新组合为复数信号
     x = x_real + 1j * x_imag
+    
     return x
+
+def residual_block(x, func, alpha=0.5):
+    return alpha * x + func(x)
 
 
 def fdbp(
@@ -424,7 +421,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
+        x = residual_block(x, complex_channel_attention, alpha=0.5)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         
