@@ -374,16 +374,36 @@ def mimoaf(
 #     return x
 # ###############  
 
-class LinearRNN:
-    def __init__(self, input_dim, hidden_size, output_dim):
+# class LinearRNN:
+#     def __init__(self, input_dim, hidden_size, output_dim):
+#         self.hidden_size = hidden_size
+#         self.Wxh = random.normal(random.PRNGKey(0), (input_dim, hidden_size))
+#         self.Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
+#         self.Why = random.normal(random.PRNGKey(2), (hidden_size, output_dim))
+        
+#     def __call__(self, x, hidden_state):
+#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+#         output = jnp.dot(hidden_state, self.Why)
+#         return output, hidden_state
+      
+
+class RWKV:
+    def __init__(self, input_dim, hidden_size, output_dim, key):
         self.hidden_size = hidden_size
-        self.Wxh = random.normal(random.PRNGKey(0), (input_dim, hidden_size))
-        self.Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
-        self.Why = random.normal(random.PRNGKey(2), (hidden_size, output_dim))
+        k1, k2, k3, k4, k5 = random.split(key, 5)
+        self.Wr = random.normal(k1, (input_dim, hidden_size))
+        self.Ur = random.normal(k2, (hidden_size, hidden_size))
+        self.Wk = random.normal(k3, (input_dim, hidden_size))
+        self.Uk = random.normal(k4, (hidden_size, hidden_size))
+        self.Wv = random.normal(k5, (input_dim, output_dim))
         
     def __call__(self, x, hidden_state):
-        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-        output = jnp.dot(hidden_state, self.Why)
+        r = jax.nn.sigmoid(jnp.dot(x, self.Wr) + jnp.dot(hidden_state, self.Ur))
+        k = jax.nn.tanh(jnp.dot(x, self.Wk) + jnp.dot(hidden_state, self.Uk))
+        v = jnp.dot(x, self.Wv)
+        
+        hidden_state = r * hidden_state + (1 - r) * k
+        output = hidden_state * v
         return output, hidden_state
       
 def fdbp(
@@ -398,15 +418,16 @@ def fdbp(
     hidden_size=2):
     x, t = signal
     key = random.PRNGKey(0)
-    rnn = LinearRNN(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1])
+    dconv = vmap(partial(conv1d, taps=dtaps, kernel_init=d_init))
+    rnn = RWKV(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1], key=key)
+    
+    # 初始化隐藏状态，确保其形状与输入数据批次大小和隐藏层大小匹配
     hidden_state = jnp.zeros((x.shape[0], hidden_size))
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        # x = complex_channel_attention(x)
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
         
@@ -415,12 +436,10 @@ def fdbp(
         
         x = x_real + 1j * x_imag
         hidden_state = hidden_state_real + 1j * hidden_state_imag
+        
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
-        
-      
     return Signal(x, t)
-
 
 
 def identity(scope, inputs):
