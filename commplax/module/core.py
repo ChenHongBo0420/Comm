@@ -400,16 +400,16 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    x = complex_channel_attention(x)
     for i in range(steps):
-        # x = complex_channel_attention(x)
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        x1 = x
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        
+        x = complex_channel_attention(x)
+        x = x + x1 
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        # x = complex_channel_attention(x)
+        
         
       
     return Signal(x, t)
