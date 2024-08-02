@@ -374,38 +374,18 @@ def mimoaf(
 #     return x
 # ###############  
 
-# class LinearRNN:
-#     def __init__(self, input_dim, hidden_size, output_dim):
-#         self.hidden_size = hidden_size
-#         self.Wxh = random.normal(random.PRNGKey(0), (input_dim, hidden_size))
-#         self.Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
-#         self.Why = random.normal(random.PRNGKey(2), (hidden_size, output_dim))
-        
-#     def __call__(self, x, hidden_state=None):
-#         if hidden_state is None:
-#             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
-        
-#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-#         output = jnp.dot(hidden_state, self.Why)
-#         return output, hidden_state
+from jax.nn.initializers import glorot_uniform
 
 class LinearRNN:
     def __init__(self, input_dim, hidden_size, output_dim):
         self.hidden_size = hidden_size
-        self.Wxh = self._init_weights(input_dim, hidden_size)
-        self.Whh = self._init_weights(hidden_size, hidden_size)
-        self.Why = self._init_weights(hidden_size, output_dim)
+        self.Wxh = glorot_uniform()(random.PRNGKey(0), (input_dim, hidden_size))
+        self.Whh = glorot_uniform()(random.PRNGKey(1), (hidden_size, hidden_size))
+        self.Why = glorot_uniform()(random.PRNGKey(2), (hidden_size, output_dim))
         
-    def _init_weights(self, input_dim, output_dim):
-        # 在复平面的单位圆上均匀取点
-        key = random.PRNGKey(0)
-        angles = random.uniform(key, (input_dim, output_dim), minval=0.0, maxval=2.0 * jnp.pi)
-        weights = jnp.exp(1j * angles)
-        return weights
-
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
-            hidden_state = jnp.zeros((x.shape[0], self.hidden_size), dtype=jnp.complex64)
+            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
