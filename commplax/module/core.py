@@ -422,8 +422,6 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    hidden_state_real = None
-    hidden_state_imag = None
     rnn = LinearRNN(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1])
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
@@ -431,8 +429,8 @@ def fdbp(
         
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
-        x_real, hidden_state_real = rnn(x_real, hidden_state_real)
-        x_imag, hidden_state_imag = rnn(x_imag, hidden_state_imag)
+        x_real, hidden_state_real = rnn(x_real)
+        x_imag, hidden_state_imag = rnn(x_imag)
         x = x_real + 1j * x_imag
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
