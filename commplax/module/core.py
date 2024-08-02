@@ -358,12 +358,27 @@ def mimoaf(
 
 # ############### 
 
+# def squeeze_excite_attention(x):
+#     avg_pool = jnp.max(x, axis=0, keepdims=True)
+#     attention = jnp.tanh(avg_pool)
+#     attention = jnp.tile(attention, (x.shape[0], 1))
+#     x = x * attention
+#     return x
+
+# def complex_channel_attention(x):
+#     x_real = jnp.real(x)
+#     x_imag = jnp.imag(x)
+#     x_real = squeeze_excite_attention(x_real)
+#     x_imag = squeeze_excite_attention(x_imag)
+#     x = x_real + 1j * x_imag
+#     return x
+# ###############  
+
 def squeeze_excite_attention(x):
-    # 对输入进行全局平均池化
-    avg_pool = jnp.max(x, axis=0, keepdims=True)
+    max_pool = jnp.max(x, axis=0, keepdims=True)
     
     # 计算注意力权重
-    attention = jnp.tanh(avg_pool)
+    attention = jnp.tanh(max_pool)
     
     # 扩展到与输入相同的形状
     attention = jnp.tile(attention, (x.shape[0], 1))
@@ -373,20 +388,40 @@ def squeeze_excite_attention(x):
     
     return x
 
+def shrinkage(x):
+    # 计算绝对值和平均值
+    x_abs = jnp.abs(x)
+    average = jnp.mean(x_abs, axis=1, keepdims=True)
+    
+    # 计算权重
+    max_pool = jnp.max(x_abs, axis=0, keepdims=True)
+    attention = jnp.tanh(max_pool)
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    attention = average * attention
+    
+    # 应用缩减机制
+    sub = x_abs - attention
+    n_sub = jnp.maximum(sub, 0)
+    x = jnp.sign(x) * n_sub
+    
+    return x
+
 def complex_channel_attention(x):
     # 分离实部和虚部
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 分别对实部和虚部应用SE注意力机制
+    # 分别对实部和虚部应用SE注意力机制和Shrinkage
     x_real = squeeze_excite_attention(x_real)
     x_imag = squeeze_excite_attention(x_imag)
+    x_real = shrinkage(x_real)
+    x_imag = shrinkage(x_imag)
     
     # 重新组合为复数信号
     x = x_real + 1j * x_imag
     
     return x
-# ###############  
+  
 def fdbp(
     scope: Scope,
     signal,
