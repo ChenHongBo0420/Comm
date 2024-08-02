@@ -377,9 +377,9 @@ def mimoaf(
 class LinearRNN:
     def __init__(self, input_dim, hidden_size, output_dim):
         self.hidden_size = hidden_size
-        self.Wxh = random.normal(random.PRNGKey(0), (input_dim, hidden_size))
-        self.Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
-        self.Why = random.normal(random.PRNGKey(2), (hidden_size, output_dim))
+        self.Wxh = jnp.diag(random.normal(random.PRNGKey(0), (input_dim,)))
+        self.Whh = jnp.diag(random.normal(random.PRNGKey(1), (hidden_size,)))
+        self.Why = jnp.diag(random.normal(random.PRNGKey(2), (hidden_size,)))
         
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
@@ -388,6 +388,7 @@ class LinearRNN:
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
         return output, hidden_state
+
       
 
 # class RWKV:
