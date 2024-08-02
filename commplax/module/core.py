@@ -374,14 +374,14 @@ def mimoaf(
 #     return x
 # ###############  
 
-from jax.nn.initializers import glorot_uniform
+from jax.nn.initializers import orthogonal
 
 class LinearRNN:
     def __init__(self, input_dim, hidden_size, output_dim):
         self.hidden_size = hidden_size
-        self.Wxh = glorot_uniform()(random.PRNGKey(0), (input_dim, hidden_size))
-        self.Whh = glorot_uniform()(random.PRNGKey(1), (hidden_size, hidden_size))
-        self.Why = glorot_uniform()(random.PRNGKey(2), (hidden_size, output_dim))
+        self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+        self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
         
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
@@ -390,6 +390,7 @@ class LinearRNN:
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
         return output, hidden_state
+
     
       
 def fdbp(
