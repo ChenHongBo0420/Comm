@@ -402,12 +402,10 @@ def fdbp(
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        x1 = x
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = complex_channel_attention(x)
-        x = x + x1 
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         
