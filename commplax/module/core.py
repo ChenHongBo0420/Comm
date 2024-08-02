@@ -374,6 +374,37 @@ def mimoaf(
 #     return x
 # ###############  
 
+def max_pool(x):
+    return jnp.max(x, axis=0, keepdims=True)
+
+def multi_head_attention(x, num_heads=4):
+    # 分割输入到多个头
+    split_x = jnp.array_split(x, num_heads, axis=-1)
+    attention_heads = []
+
+    for i in range(num_heads):
+        max_pooling = max_pool(split_x[i])
+        attention = jnp.tanh(max_pooling)
+        attention = jnp.tile(attention, (split_x[i].shape[0], 1))
+        attention_heads.append(split_x[i] * attention)
+
+    # 连接所有头
+    attention_output = jnp.concatenate(attention_heads, axis=-1)
+    return attention_output
+
+def squeeze_excite_attention(x):
+    return multi_head_attention(x, num_heads=4)
+
+def complex_channel_attention(x):
+    x_real = jnp.real(x)
+    x_imag = jnp.imag(x)
+    
+    x_real = squeeze_excite_attention(x_real)
+    x_imag = squeeze_excite_attention(x_imag)
+    
+    x = x_real + 1j * x_imag
+    return x
+
 
 def fdbp(
     scope: Scope,
