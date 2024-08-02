@@ -374,35 +374,27 @@ def mimoaf(
 #     return x
 # ###############  
 
+def max_pool(x):
+    return jnp.max(x, axis=0, keepdims=True)
+
 def squeeze_excite_attention(x):
-    max_pool = jnp.max(x, axis=0, keepdims=True)
-    
-    # 计算注意力权重
-    attention = jnp.tanh(max_pool)
-    
-    # 扩展到与输入相同的形状
+    # 使用最大池化计算注意力权重
+    max_pooling = max_pool(x)
+    attention = jnp.tanh(max_pooling)
     attention = jnp.tile(attention, (x.shape[0], 1))
-    
-    # 应用注意力权重
     x = x * attention
-    
     return x
 
 def shrinkage(x):
-    # 计算绝对值和平均值
     x_abs = jnp.abs(x)
-    
-    # 计算权重
     max_pool = jnp.max(x_abs, axis=0, keepdims=True)
     attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
-    attention = max_pool * attention
     
     # 应用缩减机制
     sub = x_abs - attention
     n_sub = jnp.maximum(sub, 0)
     x = jnp.sign(x) * n_sub
-    
     return x
 
 def complex_channel_attention(x):
@@ -410,9 +402,11 @@ def complex_channel_attention(x):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 分别对实部和虚部应用SE注意力机制和Shrinkage
+    # 分别对实部和虚部应用SE注意力机制
     x_real = squeeze_excite_attention(x_real)
     x_imag = squeeze_excite_attention(x_imag)
+    
+    # 分别对实部和虚部应用Shrinkage机制
     x_real = shrinkage(x_real)
     x_imag = shrinkage(x_imag)
     
