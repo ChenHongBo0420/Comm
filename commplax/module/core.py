@@ -381,7 +381,10 @@ class LinearRNN:
         self.Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
         self.Why = random.normal(random.PRNGKey(2), (hidden_size, output_dim))
         
-    def __call__(self, x, hidden_state):
+    def __call__(self, x, hidden_state=None):
+        if hidden_state is None:
+            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+        
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
         return output, hidden_state
@@ -419,6 +422,8 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    hidden_state_real = None
+    hidden_state_imag = None
     rnn = LinearRNN(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1])
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
@@ -426,13 +431,8 @@ def fdbp(
         
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
-        
-        hidden_state_real = jnp.zeros((x.shape[0], hidden_size))
-        hidden_state_imag = jnp.zeros((x.shape[0], hidden_size))
-        
         x_real, hidden_state_real = rnn(x_real, hidden_state_real)
         x_imag, hidden_state_imag = rnn(x_imag, hidden_state_imag)
-        
         x = x_real + 1j * x_imag
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
