@@ -374,7 +374,18 @@ def mimoaf(
 #     return x
 # ###############  
 
-
+class LinearRNN:
+    def __init__(self, input_dim, hidden_size, output_dim):
+        self.hidden_size = hidden_size
+        self.Wxh = random.normal(random.PRNGKey(0), (input_dim, hidden_size))
+        self.Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
+        self.Why = random.normal(random.PRNGKey(2), (hidden_size, output_dim))
+        
+    def __call__(self, x, hidden_state):
+        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+        output = jnp.dot(hidden_state, self.Why)
+        return output, hidden_state
+      
 def fdbp(
     scope: Scope,
     signal,
@@ -387,13 +398,23 @@ def fdbp(
     hidden_size=2):
     x, t = signal
     key = random.PRNGKey(0)
+    rnn = LinearRNN(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1])
+    hidden_state = jnp.zeros((x.shape[0], hidden_size))
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
+        # x = complex_channel_attention(x)
+        x_real = jnp.real(x)
+        x_imag = jnp.imag(x)
+        
+        x_real, hidden_state_real = rnn(x_real, hidden_state)
+        x_imag, hidden_state_imag = rnn(x_imag, hidden_state)
+        
+        x = x_real + 1j * x_imag
+        hidden_state = hidden_state_real + 1j * hidden_state_imag
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
         
