@@ -418,7 +418,7 @@ def fdbp(
     hidden_size=2):
     x, t = signal
     key = random.PRNGKey(0)
-    dconv = vmap(partial(conv1d, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     rnn = RWKV(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1], key=key)
     
     # 初始化隐藏状态，确保其形状与输入数据批次大小和隐藏层大小匹配
