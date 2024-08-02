@@ -388,8 +388,10 @@ class LinearRNN:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+        hidden_state = jax.nn.tanh(hidden_state)  # 添加非线性激活函数
         output = jnp.dot(hidden_state, self.Why)
         return output, hidden_state
+
 
     
       
