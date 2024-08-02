@@ -420,8 +420,6 @@ def fdbp(
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     rnn = RWKV(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1], key=key)
-    hidden_state_real = jnp.zeros((x.shape[0], hidden_size))
-    hidden_state_imag = jnp.zeros((x.shape[0], hidden_size))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
@@ -429,8 +427,8 @@ def fdbp(
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
         
-        x_real = jnp.real(x)
-        x_imag = jnp.imag(x)
+        hidden_state_real = jnp.zeros((x.shape[0], hidden_size))
+        hidden_state_imag = jnp.zeros((x.shape[0], hidden_size))
         
         x_real, hidden_state_real = rnn(x_real, hidden_state_real)
         x_imag, hidden_state_imag = rnn(x_imag, hidden_state_imag)
