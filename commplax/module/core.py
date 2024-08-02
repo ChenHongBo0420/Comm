@@ -391,13 +391,12 @@ def squeeze_excite_attention(x):
 def shrinkage(x):
     # 计算绝对值和平均值
     x_abs = jnp.abs(x)
-    average = jnp.mean(x_abs, axis=1, keepdims=True)
     
     # 计算权重
     max_pool = jnp.max(x_abs, axis=0, keepdims=True)
     attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
-    attention = average * attention
+    attention = max_pool * attention
     
     # 应用缩减机制
     sub = x_abs - attention
