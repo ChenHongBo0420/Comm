@@ -335,27 +335,40 @@ def mimoaf(
 #     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
 #     return x
 
+from jax.nn.initializers import orthogonal
 
-# def simple_rnn(x, hidden_size):
-#     batch_size, seq_len, channels = x.shape
+def simple_rnn(x, hidden_size):
+    batch_size, seq_len, channels = x.shape
     
-#     # Initialize weights
-#     Wxh = random.normal(random.PRNGKey(0), (channels, hidden_size))
-#     Whh = random.normal(random.PRNGKey(1), (hidden_size, hidden_size))
-#     Why = random.normal(random.PRNGKey(2), (hidden_size, channels))
+    # Initialize weights with orthogonal initialization
+    Wxh = orthogonal()(random.PRNGKey(0), (channels, hidden_size))
+    Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+    Why = orthogonal()(random.PRNGKey(2), (hidden_size, channels))
     
-#     # Initialize hidden state
-#     h = jnp.zeros((batch_size, hidden_size))
+    # Initialize hidden state
+    h = jnp.zeros((batch_size, hidden_size))
     
-#     outputs = []
-#     for t in range(seq_len):
-#         h = jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh)
-#         y = jnp.dot(h, Why)
-#         outputs.append(y)
-#     outputs = jnp.stack(outputs, axis=1)
+    outputs = []
+    for t in range(seq_len):
+        h = jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh)
+        y = jnp.dot(h, Why)
+        outputs.append(y)
+    outputs = jnp.stack(outputs, axis=1)
     
-#     return outputs
-
+    return outputs
+  
+def channel_shuffle_with_rnn(x, groups, hidden_size):
+    batch_size, channels = x.shape
+    assert channels % groups == 0, "channels should be divisible by groups"
+    channels_per_group = channels // groups
+    x = x.reshape(batch_size, groups, channels_per_group)
+    
+    # Apply simple_rnn to the first dimension (channels_per_group)
+    x = jnp.transpose(x, (0, 2, 1))  # Shape (batch_size, channels_per_group, groups)
+    x = simple_rnn(x, hidden_size)
+    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+    
+    return x
 # ############### 
 
 # def squeeze_excite_attention(x):
@@ -374,7 +387,7 @@ def mimoaf(
 #     return x
 # ###############  
 
-from jax.nn.initializers import orthogonal
+
 
 # class LinearRNN:
 #     def __init__(self, input_dim, hidden_size, output_dim):
@@ -391,12 +404,12 @@ from jax.nn.initializers import orthogonal
 #         output = jnp.dot(hidden_state, self.Why)
 #         return output, hidden_state
 
-class LinearLayer:
-    def __init__(self, input_dim, output_dim, key):
-        self.W = orthogonal()(key, (input_dim, output_dim))
+# class LinearLayer:
+#     def __init__(self, input_dim, output_dim, key):
+#         self.W = orthogonal()(key, (input_dim, output_dim))
         
-    def __call__(self, x):
-        return jnp.dot(x, self.W)
+#     def __call__(self, x):
+#         return jnp.dot(x, self.W)
 
 
 def fdbp(
@@ -408,11 +421,12 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=4):
+    rnn_hidden_size=16,
+    groups=2):
     x, t = signal
     
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    encoder = Encoder(input_dim=x.shape[1], hidden_dim=hidden_dim, key=random.PRNGKey(0))
+    # encoder = Encoder(input_dim=x.shape[1], hidden_dim=hidden_dim, key=random.PRNGKey(0))
     # decoder = Decoder(hidden_dim=hidden_dim, output_dim=x.shape[1], key=random.PRNGKey(1))
     
     for i in range(steps):
@@ -420,13 +434,8 @@ def fdbp(
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
-        x_real = jnp.real(x)
-        x_imag = jnp.imag(x)
-      
-        # x_real = encoder(x_real)
-        # x_imag = encoder(x_imag)
+        x = channel_shuffle_with_rnn(x, groups, rnn_hidden_size)
         
-        x = x_real + 1j * x_imag
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
