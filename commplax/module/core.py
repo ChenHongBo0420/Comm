@@ -402,10 +402,11 @@ class Encoder:
     def __init__(self, input_dim, hidden_dim, key):
         self.layer1 = LinearLayer(input_dim, hidden_dim, random.split(key)[0])
         self.layer2 = LinearLayer(hidden_dim, hidden_dim, random.split(key)[1])
-        
+        self.layer3 = LinearLayer(hidden_dim, input_dim, random.split(key)[1])
     def __call__(self, x):
         x = self.layer1(x)
         x = self.layer2(x)
+        x = self.layer3(x)
         return x
 
 class Decoder:
