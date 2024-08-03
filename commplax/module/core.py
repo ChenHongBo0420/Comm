@@ -379,6 +379,7 @@ from jax.nn.initializers import orthogonal
 #     def __call__(self, x):
 #         return jnp.dot(x, self.W)
 
+
 class LinearLayer:
     def __init__(self, input_dim, output_dim, key):
         self.W = orthogonal()(key, (input_dim, output_dim))
@@ -386,30 +387,36 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)
 
-
 def squeeze_excite_attention(x, reduction_ratio=1):
-    channels = x.shape[1]
-    reduced_channels = channels * reduction_ratio
-    
-    # Linear layer 1: compress
-    fc1 = LinearLayer(channels, reduced_channels, random.PRNGKey(0))
-    x1 = fc1(x)
-    
-    max_pool = jnp.max(x1, axis=0, keepdims=True)
+    # For (bs, 2) shape
+    max_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
-    
     x = x * attention
     return x
 
+def subband_feature_extraction(x, k):
+    # For (bs, 2) shape, unfold and reshape to extract subband features
+    bs, channels = x.shape
+    unfolded = jnp.reshape(x, (bs, channels * k))
+    reshaped = jnp.reshape(unfolded, (bs * k, channels))
+    return reshaped
+  
 def se_attention(x):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
+    
+    # Apply SE-Attention
     x_real = squeeze_excite_attention(x_real)
     x_imag = squeeze_excite_attention(x_imag)
+    
+    # Subband feature extraction
+    x_real = subband_feature_extraction(x_real, k=2)  # Example k=2
+    x_imag = subband_feature_extraction(x_imag, k=2)
+    
     x = x_real + 1j * x_imag
     return x
-  
+
 def fdbp(
     scope: Scope,
     signal,
