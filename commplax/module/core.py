@@ -387,7 +387,7 @@ class LinearLayer:
         return jnp.dot(x, self.W)
 
 
-def squeeze_excite_attention(x, reduction_ratio=2):
+def squeeze_excite_attention(x, reduction_ratio=1):
     channels = x.shape[1]
     reduced_channels = channels * reduction_ratio
     
