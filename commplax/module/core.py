@@ -376,25 +376,48 @@ def mimoaf(
 
 from jax.nn.initializers import orthogonal
 
-class LinearRNN:
-    def __init__(self, input_dim, hidden_size, output_dim):
-        self.hidden_size = hidden_size
-        self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
-        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
-        self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+# class LinearRNN:
+#     def __init__(self, input_dim, hidden_size, output_dim):
+#         self.hidden_size = hidden_size
+#         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+#         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+#         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
         
-    def __call__(self, x, hidden_state=None):
-        if hidden_state is None:
-            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+#     def __call__(self, x, hidden_state=None):
+#         if hidden_state is None:
+#             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-        hidden_state = jax.nn.tanh(hidden_state)  # 添加非线性激活函数
-        output = jnp.dot(hidden_state, self.Why)
-        return output, hidden_state
+#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+#         output = jnp.dot(hidden_state, self.Why)
+#         return output, hidden_state
 
+class LinearLayer:
+    def __init__(self, input_dim, output_dim, key):
+        self.W = orthogonal()(key, (input_dim, output_dim))
+        
+    def __call__(self, x):
+        return jnp.dot(x, self.W)
 
-    
-      
+class Encoder:
+    def __init__(self, input_dim, hidden_dim, key):
+        self.layer1 = LinearLayer(input_dim, hidden_dim, random.split(key)[0])
+        self.layer2 = LinearLayer(hidden_dim, hidden_dim, random.split(key)[1])
+        
+    def __call__(self, x):
+        x = self.layer1(x)
+        x = self.layer2(x)
+        return x
+
+class Decoder:
+    def __init__(self, hidden_dim, output_dim, key):
+        self.layer1 = LinearLayer(hidden_dim, hidden_dim, random.split(key)[0])
+        self.layer2 = LinearLayer(hidden_dim, output_dim, random.split(key)[1])
+        
+    def __call__(self, x):
+        x = self.layer1(x)
+        x = self.layer2(x)
+        return x
+
 def fdbp(
     scope: Scope,
     signal,
@@ -404,24 +427,39 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_size=2):
+    hidden_dim=64):
     x, t = signal
-    key = random.PRNGKey(0)
+    x = normalize(x)  # 对输入数据进行归一化
+    
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    rnn = LinearRNN(input_dim=x.shape[1], hidden_size=hidden_size, output_dim=x.shape[1])
+    
+    encoder = Encoder(input_dim=x.shape[1], hidden_dim=hidden_dim, key=random.PRNGKey(0))
+    decoder = Decoder(hidden_dim=hidden_dim, output_dim=x.shape[1], key=random.PRNGKey(1))
+    
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        
+        x = complex_channel_attention(x)
         
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
-        x_real, hidden_state_real = rnn(x_real)
-        x_imag, hidden_state_imag = rnn(x_imag)
+        
+        x_real = encoder(x_real)
+        x_imag = encoder(x_imag)
+        
+        x_real = decoder(x_real)
+        x_imag = decoder(x_imag)
+        
         x = x_real + 1j * x_imag
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-
+        
+        print(f"Step {i} - x_real shape: {x_real.shape}, x_imag shape: {x_imag.shape}")
+        
     return Signal(x, t)
+
+    
 
 
 def identity(scope, inputs):
