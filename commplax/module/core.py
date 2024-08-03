@@ -435,8 +435,11 @@ def fdbp(
     decoder = Decoder(hidden_dim=hidden_dim, output_dim=x.shape[1], key=random.PRNGKey(1))
     
     for i in range(steps):
+        x_real = jnp.real(x)
+        x_imag = jnp.imag(x)
         x_real = encoder(x_real)
         x_imag = encoder(x_imag)
+      
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
