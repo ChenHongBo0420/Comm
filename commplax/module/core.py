@@ -429,10 +429,8 @@ def fdbp(
     n_init=gauss,
     hidden_dim=64):
     x, t = signal
-    x = normalize(x)  # 对输入数据进行归一化
     
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
     encoder = Encoder(input_dim=x.shape[1], hidden_dim=hidden_dim, key=random.PRNGKey(0))
     decoder = Decoder(hidden_dim=hidden_dim, output_dim=x.shape[1], key=random.PRNGKey(1))
     
