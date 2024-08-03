@@ -409,16 +409,6 @@ class Encoder:
         x = self.layer3(x)
         return x
 
-class Decoder:
-    def __init__(self, hidden_dim, output_dim, key):
-        self.layer1 = LinearLayer(hidden_dim, hidden_dim, random.split(key)[0])
-        self.layer2 = LinearLayer(hidden_dim, output_dim, random.split(key)[1])
-        
-    def __call__(self, x):
-        x = self.layer1(x)
-        x = self.layer2(x)
-        return x
-
 def fdbp(
     scope: Scope,
     signal,
@@ -428,7 +418,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=8):
+    hidden_dim=256):
     x, t = signal
     
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
@@ -443,9 +433,12 @@ def fdbp(
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
         
-        x_real = encoder(x_real)
-        x_imag = encoder(x_imag)
-        
+        # x_real = encoder(x_real)
+        # x_imag = encoder(x_imag)
+      
+        x_real = encoder(x_real.T).T
+        x_imag = encoder(x_imag.T).T
+      
         # x_real = decoder(x_real)
         # x_imag = decoder(x_imag)
         
