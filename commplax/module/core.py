@@ -352,7 +352,6 @@ class SimpleRNN:
         
         # RNN step (since we have only one time step)
         h = jnp.dot(x, self.Wxh) + jnp.dot(h, self.Whh)
-        h = jax.nn.tanh(h)  # Using tanh non-linearity
         y = jnp.dot(h, self.Why)
         
         return y
