@@ -394,9 +394,11 @@ def subband_feature_extraction(x, window_size, stride):
     return reshaped
 
 def squeeze_excite_attention(x, reduction_ratio=1):
+    x = subband_feature_extraction(x, window_size=3, stride=1)
+
     max_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(max_pool)
-    attention = jnp.tile(attention, (x.shape[0], 1))
+    attention = jnp.tile(attention, (x.shape[0], 1, 1))
     x = x * attention
     return x
 
@@ -407,7 +409,7 @@ def se_attention(x):
     x_imag = squeeze_excite_attention(x_imag)
     x = x_real + 1j * x_imag
     return x
-
+  
 def fdbp(
     scope: Scope,
     signal,
@@ -428,7 +430,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
         x = se_attention(x)
-        
+        x = x.reshape(x.shape[0], -1)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
