@@ -380,40 +380,31 @@ from jax.nn.initializers import orthogonal
 #         return jnp.dot(x, self.W)
 
 
-class LinearLayer:
-    def __init__(self, input_dim, output_dim, key):
-        self.W = orthogonal()(key, (input_dim, output_dim))
-        
-    def __call__(self, x):
-        return jnp.dot(x, self.W)
+def subband_feature_extraction(x, window_size, stride):
+    bs, channels = x.shape
+    num_windows = (channels - window_size) // stride + 1
+
+    unfolded = jax.lax.dynamic_slice_in_dim(x, start_index=0, slice_size=window_size, axis=1)
+    for i in range(1, num_windows):
+        start_index = i * stride
+        window = jax.lax.dynamic_slice_in_dim(x, start_index=start_index, slice_size=window_size, axis=1)
+        unfolded = jnp.concatenate([unfolded, window], axis=0)
+    
+    reshaped = jnp.reshape(unfolded, (bs, num_windows, window_size))
+    return reshaped
 
 def squeeze_excite_attention(x, reduction_ratio=1):
-    # For (bs, 2) shape
     max_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
     x = x * attention
     return x
 
-def subband_feature_extraction(x, k):
-    # For (bs, 2) shape, unfold and reshape to extract subband features
-    bs, channels = x.shape
-    unfolded = jnp.reshape(x, (bs, channels * k))
-    reshaped = jnp.reshape(unfolded, (bs * k, channels))
-    return reshaped
-  
 def se_attention(x):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
-    
-    # Apply SE-Attention
     x_real = squeeze_excite_attention(x_real)
     x_imag = squeeze_excite_attention(x_imag)
-    
-    # Subband feature extraction
-    x_real = subband_feature_extraction(x_real, k=2)  # Example k=2
-    x_imag = subband_feature_extraction(x_imag, k=2)
-    
     x = x_real + 1j * x_imag
     return x
 
