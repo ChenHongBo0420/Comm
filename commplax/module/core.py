@@ -395,9 +395,9 @@ def squeeze_excite_attention(x, reduction_ratio=2):
     fc2 = LinearLayer(reduced_channels, channels, random.PRNGKey(1))
     
     attention = fc1(max_pool)
-    attention = jax.tanh(attention)
+    attention = jax.nn.tanh(attention)
     attention = fc2(attention)
-    attention = jax.tanh(attention)
+    attention = jax.nn.tanh(attention)
     
     # Apply attention
     attention = jnp.tile(attention, (x.shape[0], 1))
