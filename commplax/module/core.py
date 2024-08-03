@@ -398,16 +398,6 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)
 
-class Encoder:
-    def __init__(self, input_dim, hidden_dim, key):
-        self.layer1 = LinearLayer(input_dim, hidden_dim, random.split(key)[0])
-        self.layer2 = LinearLayer(hidden_dim, hidden_dim, random.split(key)[1])
-        self.layer3 = LinearLayer(hidden_dim, input_dim, random.split(key)[2])
-    def __call__(self, x):
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        return x
 
 def fdbp(
     scope: Scope,
@@ -418,11 +408,11 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=256):
+    hidden_dim=4):
     x, t = signal
     
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    # encoder = Encoder(input_dim=x.shape[0], hidden_dim=hidden_dim, key=random.PRNGKey(0))
+    encoder = Encoder(input_dim=x.shape[1], hidden_dim=hidden_dim, key=random.PRNGKey(0))
     # decoder = Decoder(hidden_dim=hidden_dim, output_dim=x.shape[1], key=random.PRNGKey(1))
     
     for i in range(steps):
@@ -432,15 +422,9 @@ def fdbp(
         
         x_real = jnp.real(x)
         x_imag = jnp.imag(x)
-        encoder = Encoder(input_dim=x.shape[0], hidden_dim=hidden_dim, key=random.PRNGKey(0))
+      
         # x_real = encoder(x_real)
         # x_imag = encoder(x_imag)
-      
-        x_real = encoder(x_real.T).T
-        x_imag = encoder(x_imag.T).T
-      
-        # x_real = decoder(x_real)
-        # x_imag = decoder(x_imag)
         
         x = x_real + 1j * x_imag
         
