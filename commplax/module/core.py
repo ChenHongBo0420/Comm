@@ -389,7 +389,7 @@ class LinearLayer:
 
 def squeeze_excite_attention(x, reduction_ratio=2):
     channels = x.shape[1]
-    reduced_channels = channels // reduction_ratio
+    reduced_channels = channels * reduction_ratio
     
     # Linear layer 1: compress
     fc1 = LinearLayer(channels, reduced_channels, random.PRNGKey(0))
