@@ -382,31 +382,36 @@ from jax.nn.initializers import orthogonal
 
 def subband_feature_extraction(x, window_size, stride):
     bs, channels = x.shape
+    if window_size > channels:
+        raise ValueError(f"window_size {window_size} must be less than or equal to the number of channels {channels}.")
+    
     num_windows = (channels - window_size) // stride + 1
 
-    unfolded = jax.lax.dynamic_slice_in_dim(x, start_index=0, slice_size=window_size, axis=1)
-    for i in range(1, num_windows):
+    windows = []
+    for i in range(num_windows):
         start_index = i * stride
         window = jax.lax.dynamic_slice_in_dim(x, start_index=start_index, slice_size=window_size, axis=1)
-        unfolded = jnp.concatenate([unfolded, window], axis=0)
+        windows.append(window)
     
-    reshaped = jnp.reshape(unfolded, (bs, num_windows, window_size))
-    return reshaped
+    unfolded = jnp.stack(windows, axis=1)
+    
+    return unfolded
 
-def squeeze_excite_attention(x, reduction_ratio=1):
-    x = subband_feature_extraction(x, window_size=3, stride=1)
-
-    max_pool = jnp.max(x, axis=0, keepdims=True)
+def squeeze_excite_attention(x, window_size=2, stride=1):
+    x = subband_feature_extraction(x, window_size, stride)
+    
+    max_pool = jnp.max(x, axis=1, keepdims=True)
     attention = jnp.tanh(max_pool)
-    attention = jnp.tile(attention, (x.shape[0], 1, 1))
+    attention = jnp.tile(attention, (1, x.shape[1], 1))
+    
     x = x * attention
     return x
 
-def se_attention(x):
+def se_attention(x, window_size=2, stride=1):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
-    x_real = squeeze_excite_attention(x_real)
-    x_imag = squeeze_excite_attention(x_imag)
+    x_real = squeeze_excite_attention(x_real, window_size, stride)
+    x_imag = squeeze_excite_attention(x_imag, window_size, stride)
     x = x_real + 1j * x_imag
     return x
   
