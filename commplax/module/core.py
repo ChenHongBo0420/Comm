@@ -386,22 +386,25 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)
 
+
 def squeeze_excite_attention(x, reduction_ratio=2):
     channels = x.shape[1]
     reduced_channels = channels // reduction_ratio
     
-    max_pool = jnp.max(x, axis=0, keepdims=True)
+    # Linear layer 1: compress
     fc1 = LinearLayer(channels, reduced_channels, random.PRNGKey(0))
-    fc2 = LinearLayer(reduced_channels, channels, random.PRNGKey(1))
+    x = fc1(x)
     
-    attention = fc1(max_pool)
-    attention = jax.nn.tanh(attention)
-    attention = fc2(attention)
-    attention = jax.nn.tanh(attention)
-    
-    # Apply attention
+    max_pool = jnp.max(x, axis=0, keepdims=True)
+    attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
+    
     x = x * attention
+    
+    # Linear layer 2: expand
+    fc2 = LinearLayer(reduced_channels, channels, random.PRNGKey(1))
+    x = fc2(x)
+    
     return x
 
 def se_attention(x):
