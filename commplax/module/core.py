@@ -400,11 +400,6 @@ def squeeze_excite_attention(x, reduction_ratio=1):
     attention = jnp.tile(attention, (x.shape[0], 1))
     
     x = x * attention
-    
-    # Linear layer 2: expand
-    fc2 = LinearLayer(reduced_channels, channels, random.PRNGKey(1))
-    x = fc2(x)
-    
     return x
 
 def se_attention(x):
