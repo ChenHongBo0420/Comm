@@ -427,14 +427,13 @@ def fdbp(
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     # encoder = Encoder(input_dim=x.shape[1], hidden_dim=hidden_dim, key=random.PRNGKey(0))
     # decoder = Decoder(hidden_dim=hidden_dim, output_dim=x.shape[1], key=random.PRNGKey(1))
-    
+    rnn = SimpleRNN(input_dim=x.shape[1], hidden_size=rnn_hidden_size, output_dim=x.shape[1], key=random.PRNGKey(2))
     for i in range(steps):
         
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
-        x = channel_shuffle_with_rnn(x, groups, rnn_hidden_size)
-        
+        x = rnn(x)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
