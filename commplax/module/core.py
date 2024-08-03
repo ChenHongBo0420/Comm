@@ -427,7 +427,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=2):
+    hidden_dim=8):
     x, t = signal
     
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
