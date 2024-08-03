@@ -393,9 +393,9 @@ def squeeze_excite_attention(x, reduction_ratio=1):
     
     # Linear layer 1: compress
     fc1 = LinearLayer(channels, reduced_channels, random.PRNGKey(0))
-    x = fc1(x)
+    x1 = fc1(x)
     
-    max_pool = jnp.max(x, axis=0, keepdims=True)
+    max_pool = jnp.max(x1, axis=0, keepdims=True)
     attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
     
