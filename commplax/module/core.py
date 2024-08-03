@@ -343,11 +343,12 @@ class SimpleRNN:
         self.Wxh = orthogonal()(key, (input_dim, hidden_size))
         self.Whh = orthogonal()(random.split(key)[0], (hidden_size, hidden_size))
         self.Why = orthogonal()(random.split(key)[1], (hidden_size, output_dim))
+        self.h0 = orthogonal()(random.split(key)[2], (1, hidden_size))  # Initialize hidden state with orthogonal matrix
         
     def __call__(self, x):
-        # Initialize hidden state
+        # Initialize hidden state with orthogonal matrix, tiled to match batch size
         batch_size = x.shape[0]
-        h = jnp.zeros((batch_size, self.hidden_size))
+        h = jnp.tile(self.h0, (batch_size, 1))
         
         # RNN step (since we have only one time step)
         h = jnp.dot(x, self.Wxh) + jnp.dot(h, self.Whh)
