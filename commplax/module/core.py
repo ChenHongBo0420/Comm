@@ -336,37 +336,6 @@ def mimoaf(
 #     return x
 
 from jax.nn.initializers import orthogonal
-
-class SimpleRNN:
-    def __init__(self, input_dim, hidden_size, output_dim, key):
-        self.hidden_size = hidden_size
-        self.Wxh = orthogonal()(key, (input_dim, hidden_size))
-        self.Whh = orthogonal()(random.split(key)[0], (hidden_size, hidden_size))
-        self.Why = orthogonal()(random.split(key)[1], (hidden_size, output_dim))
-        self.h0 = orthogonal()(random.split(key)[2], (1, hidden_size))  # Initialize hidden state with orthogonal matrix
-        
-    def __call__(self, x):
-        # Initialize hidden state with orthogonal matrix, tiled to match batch size
-        batch_size = x.shape[0]
-        h = jnp.tile(self.h0, (batch_size, 1))
-        
-        # RNN step (since we have only one time step)
-        h = jnp.dot(x, self.Wxh) + jnp.dot(h, self.Whh)
-        y = jnp.dot(h, self.Why)
-        
-        return y
-  
-# def channel_shuffle_with_rnn(x, groups, hidden_size):
-#     batch_size, channels = x.shape
-#     assert channels % groups == 0, "channels should be divisible by groups"
-#     channels_per_group = channels // groups
-#     x = x.reshape(batch_size, groups, channels_per_group)
-    
-#     # Apply simple_rnn to the first dimension (channels_per_group)
-#     x = jnp.transpose(x, (0, 2, 1))  # Shape (batch_size, channels_per_group, groups)
-#     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
-    
-#     return x
   
 # ############### 
 
@@ -410,7 +379,28 @@ class SimpleRNN:
 #     def __call__(self, x):
 #         return jnp.dot(x, self.W)
 
+class LinearLayer:
+    def __init__(self, input_dim, output_dim, key):
+        self.W = orthogonal()(key, (input_dim, output_dim))
+        
+    def __call__(self, x):
+        return jnp.dot(x, self.W)
 
+def squeeze_excite_attention(x):
+    max_pool = jnp.max(x, axis=0, keepdims=True)
+    attention = jnp.tanh(max_pool)
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    x = x * attention
+    return x
+
+def se_attention(x):
+    x_real = jnp.real(x)
+    x_imag = jnp.imag(x)
+    x_real = squeeze_excite_attention(x_real)
+    x_imag = squeeze_excite_attention(x_imag)
+    x = x_real + 1j * x_imag
+    return x
+  
 def fdbp(
     scope: Scope,
     signal,
@@ -433,14 +423,7 @@ def fdbp(
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
-        x_real = jnp.real(x)
-        x_imag = jnp.imag(x)
-        
-        # Apply encoder and decoder
-        x_real = rnn(x_real)
-        x_imag = rnn(x_imag)
-        
-        x = x_real + 1j * x_imag
+        x = se_attention(x)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
