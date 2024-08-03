@@ -390,17 +390,20 @@ def subband_feature_extraction(x, window_size, stride):
         window = jax.lax.dynamic_slice_in_dim(x, start_index=start_index, slice_size=window_size, axis=0)
         windows.append(window)
     
-    unfolded = jnp.stack(windows, axis=0) 
-    return unfolded
+    unfolded = jnp.stack(windows, axis=0)  # 在第0维度上堆叠，以形成3D张量
+    return unfolded, num_windows
 
 def squeeze_excite_attention(x, window_size=3, stride=1):
-    x = subband_feature_extraction(x, window_size, stride)
+    x, num_windows = subband_feature_extraction(x, window_size, stride)
     
     max_pool = jnp.max(x, axis=2, keepdims=True)
     attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (1, 1, x.shape[2]))
     
     x = x * attention
+    
+    # 将结果重新调整回原始形状
+    x = jnp.reshape(x, (num_windows * window_size, x.shape[2]))[:x.shape[0]]
     return x
 
 def se_attention(x, window_size=3, stride=1):
