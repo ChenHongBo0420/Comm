@@ -422,7 +422,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    rnn_hidden_size=2,
+    rnn_hidden_size=1,
     groups=2):
     x, t = signal
     
