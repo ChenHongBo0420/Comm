@@ -382,32 +382,28 @@ from jax.nn.initializers import orthogonal
 
 def subband_feature_extraction(x, window_size, stride):
     bs, channels = x.shape
-    if window_size > channels:
-        raise ValueError(f"window_size {window_size} must be less than or equal to the number of channels {channels}.")
+    num_windows = (bs - window_size) // stride + 1
     
-    num_windows = (channels - window_size) // stride + 1
-
     windows = []
     for i in range(num_windows):
         start_index = i * stride
-        window = jax.lax.dynamic_slice_in_dim(x, start_index=start_index, slice_size=window_size, axis=1)
+        window = jax.lax.dynamic_slice_in_dim(x, start_index=start_index, slice_size=window_size, axis=0)
         windows.append(window)
     
-    unfolded = jnp.stack(windows, axis=1)
-    
+    unfolded = jnp.stack(windows, axis=0) 
     return unfolded
 
-def squeeze_excite_attention(x, window_size=2, stride=1):
+def squeeze_excite_attention(x, window_size=3, stride=1):
     x = subband_feature_extraction(x, window_size, stride)
     
-    max_pool = jnp.max(x, axis=1, keepdims=True)
+    max_pool = jnp.max(x, axis=2, keepdims=True)
     attention = jnp.tanh(max_pool)
-    attention = jnp.tile(attention, (1, x.shape[1], 1))
+    attention = jnp.tile(attention, (1, 1, x.shape[2]))
     
     x = x * attention
     return x
 
-def se_attention(x, window_size=2, stride=1):
+def se_attention(x, window_size=3, stride=1):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     x_real = squeeze_excite_attention(x_real, window_size, stride)
@@ -435,7 +431,6 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
         x = se_attention(x)
-        x = x.reshape(x.shape[0], -1)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
