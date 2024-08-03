@@ -369,6 +369,7 @@ def channel_shuffle_with_rnn(x, groups, hidden_size):
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     
     return x
+  
 # ############### 
 
 # def squeeze_excite_attention(x):
@@ -421,7 +422,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    rnn_hidden_size=16,
+    rnn_hidden_size=2,
     groups=2):
     x, t = signal
     
