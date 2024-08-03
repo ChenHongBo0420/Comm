@@ -337,38 +337,36 @@ def mimoaf(
 
 from jax.nn.initializers import orthogonal
 
-def simple_rnn(x, hidden_size):
-    batch_size, seq_len, channels = x.shape
-    
-    # Initialize weights with orthogonal initialization
-    Wxh = orthogonal()(random.PRNGKey(0), (channels, hidden_size))
-    Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
-    Why = orthogonal()(random.PRNGKey(2), (hidden_size, channels))
-    
-    # Initialize hidden state
-    h = jnp.zeros((batch_size, hidden_size))
-    
-    outputs = []
-    for t in range(seq_len):
-        h = jnp.dot(x[:, t, :], Wxh) + jnp.dot(h, Whh)
-        y = jnp.dot(h, Why)
-        outputs.append(y)
-    outputs = jnp.stack(outputs, axis=1)
-    
-    return outputs
+class SimpleRNN:
+    def __init__(self, input_dim, hidden_size, output_dim, key):
+        self.hidden_size = hidden_size
+        self.Wxh = orthogonal()(key, (input_dim, hidden_size))
+        self.Whh = orthogonal()(random.split(key)[0], (hidden_size, hidden_size))
+        self.Why = orthogonal()(random.split(key)[1], (hidden_size, output_dim))
+        
+    def __call__(self, x):
+        # Initialize hidden state
+        batch_size = x.shape[0]
+        h = jnp.zeros((batch_size, self.hidden_size))
+        
+        # RNN step (since we have only one time step)
+        h = jnp.dot(x, self.Wxh) + jnp.dot(h, self.Whh)
+        h = jax.nn.tanh(h)  # Using tanh non-linearity
+        y = jnp.dot(h, self.Why)
+        
+        return y
   
-def channel_shuffle_with_rnn(x, groups, hidden_size):
-    batch_size, channels = x.shape
-    assert channels % groups == 0, "channels should be divisible by groups"
-    channels_per_group = channels // groups
-    x = x.reshape(batch_size, groups, channels_per_group)
+# def channel_shuffle_with_rnn(x, groups, hidden_size):
+#     batch_size, channels = x.shape
+#     assert channels % groups == 0, "channels should be divisible by groups"
+#     channels_per_group = channels // groups
+#     x = x.reshape(batch_size, groups, channels_per_group)
     
-    # Apply simple_rnn to the first dimension (channels_per_group)
-    x = jnp.transpose(x, (0, 2, 1))  # Shape (batch_size, channels_per_group, groups)
-    x = simple_rnn(x, hidden_size)
-    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+#     # Apply simple_rnn to the first dimension (channels_per_group)
+#     x = jnp.transpose(x, (0, 2, 1))  # Shape (batch_size, channels_per_group, groups)
+#     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     
-    return x
+#     return x
   
 # ############### 
 
