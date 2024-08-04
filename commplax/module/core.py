@@ -379,7 +379,20 @@ class LinearLayer:
         
     def __call__(self, x):
         return jnp.dot(x, self.W)
+      
+class LinearTransform:
+    def __init__(self, input_dim, hidden_dim, output_dim, key):
+        self.linear_x = LinearLayer(input_dim, hidden_dim, random.split(key)[0])
+        self.linear_t = LinearLayer(hidden_dim, output_dim, random.split(key)[1])
+        self.linear_out = LinearLayer(hidden_dim, output_dim, random.split(key)[2])
 
+    def __call__(self, x, t):
+        x_transformed = self.linear_x(x)
+        t_transformed = self.linear_t(t)
+        combined = x_transformed + t_transformed
+        output = self.linear_out(combined)
+        return output
+      
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
