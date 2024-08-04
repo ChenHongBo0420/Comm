@@ -379,42 +379,6 @@ from jax.nn.initializers import orthogonal
 #     def __call__(self, x):
 #         return jnp.dot(x, self.W)
 
-
-def subband_feature_extraction(x, window_size, stride):
-    bs, channels = x.shape
-    num_windows = (bs - window_size) // stride + 1
-    
-    windows = []
-    for i in range(num_windows):
-        start_index = i * stride
-        window = jax.lax.dynamic_slice_in_dim(x, start_index=start_index, slice_size=window_size, axis=0)
-        windows.append(window)
-    
-    unfolded = jnp.stack(windows, axis=0)  # 在第0维度上堆叠，以形成3D张量
-    return unfolded
-
-def squeeze_excite_attention(x, window_size=3, stride=1):
-    x_unfolded = subband_feature_extraction(x, window_size, stride)
-    max_pool = jnp.max(x_unfolded, axis=2, keepdims=True)
-    attention = jnp.tanh(max_pool)
-    
-    # 恢复到原始形状
-    bs, channels = x.shape
-    num_windows = (bs - window_size) // stride + 1
-    attention = jnp.tile(attention, (1, 1, channels))
-    attention = jnp.reshape(attention, (num_windows * window_size, channels))
-    attention = attention[:bs, :]  # 修剪多余部分
-    
-    x = x * attention
-    return x
-
-def se_attention(x, window_size=3, stride=1):
-    x_real = jnp.real(x)
-    x_imag = jnp.imag(x)
-    x_real = squeeze_excite_attention(x_real, window_size, stride)
-    x_imag = squeeze_excite_attention(x_imag, window_size, stride)
-    x = x_real + 1j * x_imag
-    return x
   
 def fdbp(
     scope: Scope,
@@ -434,8 +398,7 @@ def fdbp(
         
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        
-        x = se_attention(x)
+        # x = se_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
