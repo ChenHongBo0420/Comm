@@ -363,14 +363,15 @@ class LinearRNN:
         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
-
+        self.bh = jnp.zeros((1, hidden_size))  # Add bias term for hidden state
+        self.by = jnp.zeros((1, output_dim))  # Add bias term for output
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-        hidden_state = jax.nn.tanh(hidden_state)
-        output = jnp.dot(hidden_state, self.Why)
+        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh) + self.bh
+        hidden_state = jax.nn.tanh(hidden_state)  # Ensure non-linearity
+        output = jnp.dot(hidden_state, self.Why) + self.by
         
         return output, hidden_state
 
