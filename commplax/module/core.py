@@ -415,9 +415,9 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    d_init=orthogonal(),
-    n_init=orthogonal(),
-    hidden_dim=8,
+    d_init=delta,
+    n_init=gauss,
+    hidden_dim=2,
     output_dim=2):
     
     x, t = signal
