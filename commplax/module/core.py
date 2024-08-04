@@ -363,15 +363,13 @@ class LinearRNN:
         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
-        self.bh = jnp.zeros((1, hidden_size))  # Add bias term for hidden state
-        self.by = jnp.zeros((1, output_dim))  # Add bias term for output
+    
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh) + self.bh
-        hidden_state = jax.nn.tanh(hidden_state)  # Ensure non-linearity
-        output = jnp.dot(hidden_state, self.Why) + self.by
+        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+        output = jnp.dot(hidden_state, self.Why)
         
         return output, hidden_state
 
@@ -422,7 +420,7 @@ def fdbp(
         if t_encoded.shape[0] != c.shape[0]:
             t_encoded = t_encoded[:c.shape[0]]
         hidden_state = t_encoded
-        c, hidden_state = encoder(c, hidden_state=hidden_state)
+        c, _ = encoder(c, hidden_state=hidden_state)
         # c = complex_channel_attention(c)
       
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
