@@ -368,6 +368,8 @@ class LinearRNN:
         if hidden_state is None:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
+        print("Shape of x in encoder:", x.shape)
+        print("Shape of hidden_state in encoder:", hidden_state.shape)
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
         return output
