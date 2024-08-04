@@ -420,7 +420,7 @@ def fdbp(
         if t_encoded.shape[0] != c.shape[0]:
             t_encoded = t_encoded[:c.shape[0]]
         hidden_state = t_encoded
-        c, _ = encoder(x, hidden_state=hidden_state)
+        c = encoder(x, hidden_state=hidden_state)
         # c = complex_channel_attention(c)
       
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
