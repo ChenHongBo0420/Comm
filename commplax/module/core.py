@@ -357,20 +357,20 @@ from jax.nn.initializers import orthogonal
 
 
 
-# class LinearRNN:
-#     def __init__(self, input_dim, hidden_size, output_dim):
-#         self.hidden_size = hidden_size
-#         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
-#         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
-#         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+class LinearRNN:
+    def __init__(self, input_dim, hidden_size, output_dim):
+        self.hidden_size = hidden_size
+        self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+        self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
         
-#     def __call__(self, x, hidden_state=None):
-#         if hidden_state is None:
-#             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+    def __call__(self, x, hidden_state=None):
+        if hidden_state is None:
+            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-#         output = jnp.dot(hidden_state, self.Why)
-#         return output, hidden_state
+        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+        output = jnp.dot(hidden_state, self.Why)
+        return output, hidden_state
 
 class LinearLayer:
     def __init__(self, input_dim, output_dim, key):
@@ -406,7 +406,7 @@ def fdbp(
     rnn_hidden_size=2,
     groups=2):
     x, t = signal
-    encoder = LinearLayer(input_dim=x.shape[1], output_dim=rnn_hidden_size, key=random.PRNGKey(0))
+    encoder = LinearRNN(input_dim=x.shape[1], output_dim=rnn_hidden_size, key=random.PRNGKey(0))
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         
