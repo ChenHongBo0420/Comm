@@ -380,22 +380,18 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)
       
-class SelfAttention:
+class GatedLayer:
     def __init__(self, input_dim, key):
-        self.query = LinearLayer(input_dim, input_dim, random.split(key)[0])
-        self.key = LinearLayer(input_dim, input_dim, random.split(key)[1])
-        self.value = LinearLayer(input_dim, input_dim, random.split(key)[2])
+        self.Wz = orthogonal()(random.split(key)[0], (input_dim, input_dim))
+        self.Wr = orthogonal()(random.split(key)[1], (input_dim, input_dim))
+        self.Wh = orthogonal()(random.split(key)[2], (input_dim, input_dim))
         
-    def __call__(self, x):
-        Q = self.query(x)
-        K = self.key(x)
-        V = self.value(x)
-        
-        attention_scores = jnp.dot(Q, K.T) / jnp.sqrt(Q.shape[-1])
-        attention_weights = nn.softmax(attention_scores, axis=-1)
-        attention_output = jnp.dot(attention_weights, V)
-        
-        return attention_output
+    def __call__(self, x, h):
+        z = jax.nn.sigmoid(jnp.dot(x, self.Wz) + jnp.dot(h, self.Wz))
+        r = jax.nn.sigmoid(jnp.dot(x, self.Wr) + jnp.dot(h, self.Wr))
+        h_hat = jax.nn.tanh(jnp.dot(x, self.Wh) + jnp.dot(r * h, self.Wh))
+        h = (1 - z) * h + z * h_hat
+        return h
       
 
       
@@ -429,13 +425,14 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    self_attention = SelfAttention(input_dim=x.shape[1], key=key)
+    gate = GatedLayer(input_dim=x.shape[1], key=key)
+    
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
 
-        
-        c = self_attention(c)
+        h = jnp.zeros_like(x)
+        h = gate(c, h)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
