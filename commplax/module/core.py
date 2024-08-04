@@ -415,7 +415,7 @@ def fdbp(
       
       
         t_encoded = jnp.linspace(td.start, td.stop, x.shape[0])[:, None]
-        t_encoded = jnp.tile(t_encoded, (1, groups))
+        t_encoded = jnp.tile(t_encoded, (1, c.shape[1]))
         hidden_state = t_encoded
       
         c, hidden_state = encoder(c, hidden_state=hidden_state)
