@@ -414,8 +414,8 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
       
         t_encoded = jnp.linspace(td.start, td.stop, x.shape[0])[:, None]
-        c = jnp.concatenate([c, t_encoded], axis=1)
-        c, hidden_state = encoder(c, hidden_state=t_encoded)
+        hidden_state = t_encoded
+        c, hidden_state = encoder(c, hidden_state=hidden_state)
       
         # c = complex_channel_attention(c)
       
