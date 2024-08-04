@@ -363,6 +363,9 @@ class LinearRNN:
         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+        print("Shape of Wxh:", self.Wxh.shape)
+        print("Shape of Whh:", self.Whh.shape)
+        print("Shape of Why:", self.Why.shape)
         
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
@@ -370,9 +373,14 @@ class LinearRNN:
         
         print("Shape of x in encoder:", x.shape)
         print("Shape of hidden_state in encoder:", hidden_state.shape)
+        
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
-        return output
+        
+        print("Shape of hidden_state after update:", hidden_state.shape)
+        print("Shape of output:", output.shape)
+        
+        return output, hidden_state
 
 class LinearLayer:
     def __init__(self, input_dim, output_dim, key):
