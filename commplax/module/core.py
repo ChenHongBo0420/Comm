@@ -387,9 +387,9 @@ class LinearTransform:
         self.linear_out = LinearLayer(hidden_dim, output_dim, random.split(key)[2])
 
     def __call__(self, x, t):
-        output = self.linear_x(x)
-        # t_transformed = self.linear_t(t)
-        # output = x_transformed + t_transformed
+        x_transformed = self.linear_x(x)
+        t_transformed = self.linear_t(t)
+        output = x_transformed * t_transformed
         # output = self.linear_out(combined)
         return output
       
