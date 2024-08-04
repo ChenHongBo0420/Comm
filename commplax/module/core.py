@@ -416,11 +416,11 @@ def fdbp(
       
        
         t_encoded = jnp.linspace(td.start, td.stop, x.shape[0])[:, None]
-        t_encoded = jnp.tile(t_encoded, (1, c.shape[1]))
-        if t_encoded.shape[0] != c.shape[0]:
+        t_encoded = jnp.tile(t_encoded, (1, x.shape[1]))
+        if t_encoded.shape[0] != x.shape[0]:
             t_encoded = t_encoded[:c.shape[0]]
         hidden_state = t_encoded
-        c, _ = encoder(c, hidden_state=hidden_state)
+        x, _ = encoder(x, hidden_state=hidden_state)
         # c = complex_channel_attention(c)
       
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
