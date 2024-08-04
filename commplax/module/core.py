@@ -370,7 +370,7 @@ class LinearRNN:
         
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
-        return output, hidden_state
+        return output
 
 class LinearLayer:
     def __init__(self, input_dim, output_dim, key):
