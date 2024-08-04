@@ -357,21 +357,21 @@ from jax.nn.initializers import orthogonal
 
 
 
-class LinearRNN:
-    def __init__(self, input_dim, hidden_size, output_dim):
-        self.hidden_size = hidden_size
-        self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
-        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
-        self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+# class LinearRNN:
+#     def __init__(self, input_dim, hidden_size, output_dim):
+#         self.hidden_size = hidden_size
+#         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+#         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+#         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
     
-    def __call__(self, x, hidden_state=None):
-        if hidden_state is None:
-            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+#     def __call__(self, x, hidden_state=None):
+#         if hidden_state is None:
+#             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-        # output = jnp.dot(hidden_state, self.Why)
+#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+#         output = jnp.dot(hidden_state, self.Why)
         
-        return hidden_state
+#         return output
 
 class LinearLayer:
     def __init__(self, input_dim, output_dim, key):
@@ -396,37 +396,36 @@ def complex_channel_attention(x):
     return x
   
 def fdbp(
-    scope: Scope,
+    scope: nn.Module,
     signal,
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
-    d_init=delta,
-    n_init=gauss,
-    rnn_hidden_size=2,
-    groups=2):
+    d_init=orthogonal(),
+    n_init=orthogonal(),
+    hidden_dim=8,
+    output_dim=2):
+    
     x, t = signal
-    encoder = LinearRNN(input_dim=x.shape[1], hidden_size=groups, output_dim=rnn_hidden_size)
+    key = random.PRNGKey(0)
+    linear_transform = LinearTransform(input_dim=x.shape[1], hidden_dim=hidden_dim, output_dim=output_dim, key=key)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
     for i in range(steps):
-        
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-      
-       
+  
         t_encoded = jnp.linspace(td.start, td.stop, x.shape[0])[:, None]
         t_encoded = jnp.tile(t_encoded, (1, c.shape[1]))
         if t_encoded.shape[0] != c.shape[0]:
             t_encoded = t_encoded[:c.shape[0]]
-        hidden_state = t_encoded
-        c = encoder(x, hidden_state=hidden_state)
-        # c = complex_channel_attention(c)
-      
+        
+        c = linear_transform(c, t_encoded)
+        
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
-
     
 
 
