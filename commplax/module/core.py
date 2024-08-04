@@ -379,6 +379,20 @@ from jax.nn.initializers import orthogonal
 #     def __call__(self, x):
 #         return jnp.dot(x, self.W)
 
+def squeeze_excite_attention(x):
+    avg_pool = jnp.max(x, axis=0, keepdims=True)
+    attention = jnp.tanh(avg_pool)
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    x = x * attention
+    return x
+
+def complex_channel_attention(x):
+    x_real = jnp.real(x)
+    x_imag = jnp.imag(x)
+    x_real = squeeze_excite_attention(x_real)
+    x_imag = squeeze_excite_attention(x_imag)
+    x = x_real + 1j * x_imag
+    return x
   
 def fdbp(
     scope: Scope,
@@ -399,6 +413,7 @@ def fdbp(
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         # x = se_attention(x)
+        c = csqueeze_excite_attention(c)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
