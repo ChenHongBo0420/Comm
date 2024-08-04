@@ -415,7 +415,9 @@ def fdbp(
         t_encoded = jnp.linspace(t.start, t.stop, c.shape[0])[:, None]
         c_with_t = jnp.concatenate([x, t_encoded], axis=1)
         x = encoder(c_with_t)
+        x = x[:, :-1]
         # c = complex_channel_attention(c)
+      
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
