@@ -389,7 +389,7 @@ class LinearTransform:
     def __call__(self, x, t):
         x_transformed = self.linear_x(x)
         t_transformed = self.linear_t(t)
-        combined = x_transformed + t_transformed
+        output = x_transformed + t_transformed
         # output = self.linear_out(combined)
         return output
       
