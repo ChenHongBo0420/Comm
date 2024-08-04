@@ -380,18 +380,24 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)
       
-class LinearTransform:
-    def __init__(self, input_dim, hidden_dim, output_dim, key):
-        self.linear_x = LinearLayer(input_dim, hidden_dim, random.split(key)[0])
-        self.linear_t = LinearLayer(hidden_dim, output_dim, random.split(key)[1])
-        self.linear_out = LinearLayer(hidden_dim, output_dim, random.split(key)[2])
+class SelfAttention:
+    def __init__(self, input_dim, key):
+        self.query = LinearLayer(input_dim, input_dim, random.split(key)[0])
+        self.key = LinearLayer(input_dim, input_dim, random.split(key)[1])
+        self.value = LinearLayer(input_dim, input_dim, random.split(key)[2])
+        
+    def __call__(self, x):
+        Q = self.query(x)
+        K = self.key(x)
+        V = self.value(x)
+        
+        attention_scores = jnp.dot(Q, K.T) / jnp.sqrt(Q.shape[-1])
+        attention_weights = nn.softmax(attention_scores, axis=-1)
+        attention_output = jnp.dot(attention_weights, V)
+        
+        return attention_output
+      
 
-    def __call__(self, x, t):
-        x_transformed = self.linear_x(x)
-        t_transformed = self.linear_t(t)
-        output = x_transformed * t_transformed
-        # output = self.linear_out(combined)
-        return output
       
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
@@ -422,19 +428,14 @@ def fdbp(
     
     x, t = signal
     key = random.PRNGKey(0)
-    linear_transform = LinearTransform(input_dim=x.shape[1], hidden_dim=hidden_dim, output_dim=output_dim, key=key)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
+    self_attention = SelfAttention(input_dim=x.shape[1], key=key)
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-  
-        t_encoded = jnp.linspace(td.start, td.stop, x.shape[0])[:, None]
-        t_encoded = jnp.tile(t_encoded, (1, c.shape[1]))
-        if t_encoded.shape[0] != c.shape[0]:
-            t_encoded = t_encoded[:c.shape[0]]
+
         
-        c = linear_transform(c, t_encoded)
+         c = self_attention(c)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
