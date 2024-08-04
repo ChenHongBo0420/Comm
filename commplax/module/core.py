@@ -363,22 +363,13 @@ class LinearRNN:
         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
-        print("Shape of Wxh:", self.Wxh.shape)
-        print("Shape of Whh:", self.Whh.shape)
-        print("Shape of Why:", self.Why.shape)
-        
+
     def __call__(self, x, hidden_state=None):
         if hidden_state is None:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-        print("Shape of x in encoder:", x.shape)
-        print("Shape of hidden_state in encoder:", hidden_state.shape)
-        
         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
-        
-        print("Shape of hidden_state after update:", hidden_state.shape)
-        print("Shape of output:", output.shape)
         
         return output, hidden_state
 
@@ -416,7 +407,7 @@ def fdbp(
     rnn_hidden_size=2,
     groups=2):
     x, t = signal
-    encoder = LinearRNN(input_dim=x.shape[1] + 1, hidden_size=groups, output_dim=rnn_hidden_size)
+    encoder = LinearRNN(input_dim=x.shape[1], hidden_size=groups, output_dim=rnn_hidden_size)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         
