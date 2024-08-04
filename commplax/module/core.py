@@ -406,14 +406,16 @@ def fdbp(
     rnn_hidden_size=2,
     groups=2):
     x, t = signal
-    encoder = LinearRNN(input_dim=x.shape[1], hidden_size=groups, output_dim=rnn_hidden_size)
+    encoder = LinearRNN(input_dim=x.shape[1] + 1, hidden_size=groups, output_dim=rnn_hidden_size)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        x = complex_channel_attention(x)
-        c = encoder(c)
+        t_encoded = jnp.linspace(t.start, t.stop, c.shape[0])[:, None]
+        c_with_t = jnp.concatenate([c, t_encoded], axis=1)
+        c, hidden_state = encoder(c_with_t)
+        # c = complex_channel_attention(c)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
