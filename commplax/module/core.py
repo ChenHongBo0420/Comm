@@ -372,12 +372,12 @@ from jax.nn.initializers import orthogonal
 #         output = jnp.dot(hidden_state, self.Why)
 #         return output, hidden_state
 
-# class LinearLayer:
-#     def __init__(self, input_dim, output_dim, key):
-#         self.W = orthogonal()(key, (input_dim, output_dim))
+class LinearLayer:
+    def __init__(self, input_dim, output_dim, key):
+        self.W = orthogonal()(key, (input_dim, output_dim))
         
-#     def __call__(self, x):
-#         return jnp.dot(x, self.W)
+    def __call__(self, x):
+        return jnp.dot(x, self.W)
 
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
@@ -403,17 +403,17 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    rnn_hidden_size=1,
+    rnn_hidden_size=2,
     groups=2):
     x, t = signal
-    
+    encoder = LinearLayer(input_dim=x.shape[1], hidden_dim=rnn_hidden_size, key=random.PRNGKey(0))
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         # x = se_attention(x)
-        c = complex_channel_attention(c)
+        c = encoder(c)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
