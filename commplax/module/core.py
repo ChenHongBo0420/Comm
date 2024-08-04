@@ -390,7 +390,7 @@ class LinearTransform:
         x_transformed = self.linear_x(x)
         t_transformed = self.linear_t(t)
         combined = x_transformed + t_transformed
-        output = self.linear_out(combined)
+        # output = self.linear_out(combined)
         return output
       
 def squeeze_excite_attention(x):
