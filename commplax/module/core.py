@@ -406,7 +406,7 @@ def fdbp(
     rnn_hidden_size=2,
     groups=2):
     x, t = signal
-    encoder = LinearRNN(input_dim=x.shape[1], output_dim=rnn_hidden_size, key=random.PRNGKey(0))
+    encoder = LinearRNN(input_dim=x.shape[1], hidden_size=groups, output_dim=rnn_hidden_size)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         
