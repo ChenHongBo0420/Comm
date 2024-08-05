@@ -389,35 +389,34 @@ from jax.nn.initializers import orthogonal
 #     x = x_real + 1j * x_imag
 #     return x
 
-def squeeze_excite_attention(x, key):
-    # 首先进行全局最大池化
-    max_pool = jnp.max(x, axis=0, keepdims=True)
-    # 增加一个隐藏层
-    hidden_dim = x.shape[1] // 2  # 设置为输入的一半
-    # 线性层1
-    W1 = orthogonal()(key, (x.shape[1], hidden_dim))
-    hidden = jnp.dot(max_pool, W1)
-    hidden = nn.tanh(hidden)
-    # 线性层2
-    W2 = orthogonal()(random.split(key)[1], (hidden_dim, x.shape[1]))
-    attention = jnp.dot(hidden, W2)
-    attention = nn.sigmoid(attention)
-    # 注意力应用
-    attention = jnp.tile(attention, (x.shape[0], 1))
-    x = x * attention
-    return x
+class SqueezeExciteAttention(nn.Module):
+    scaling_factor_init: float = 1.0
+    
+    def setup(self):
+        self.scaling_factor = self.param('scaling_factor', nn.initializers.constant(self.scaling_factor_init), (1,))
+    
+    def __call__(self, x):
+        max_pool = jnp.max(x, axis=0, keepdims=True)
+        attention = jnp.tanh(max_pool * self.scaling_factor)
+        attention = jnp.tile(attention, (x.shape[0], 1))
+        x = x * attention
+        return x
 
-def complex_channel_attention(x):
-    key = random.PRNGKey(0)
-    x_real = jnp.real(x)
-    x_imag = jnp.imag(x)
+class ComplexChannelAttention(nn.Module):
+    scaling_factor_init: float = 1.0
     
-    # SE注意力机制
-    x_real = squeeze_excite_attention(x_real, random.split(key)[0])
-    x_imag = squeeze_excite_attention(x_imag, random.split(key)[1])
+    def setup(self):
+        self.se_attention = SqueezeExciteAttention(scaling_factor_init=self.scaling_factor_init)
     
-    x = x_real + 1j * x_imag
-    return x
+    def __call__(self, x):
+        x_real = jnp.real(x)
+        x_imag = jnp.imag(x)
+        
+        x_real = self.se_attention(x_real)
+        x_imag = self.se_attention(x_imag)
+        
+        x = x_real + 1j * x_imag
+        return x
 
 
 
@@ -440,7 +439,7 @@ def fdbp(
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        x = complex_channel_attention(x)
+        x = scope.child(ComplexChannelAttention, scaling_factor_init=scaling_factor_init)(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
