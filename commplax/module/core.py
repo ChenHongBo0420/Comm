@@ -397,7 +397,7 @@ def squeeze_excite_attention(x, key):
     # 线性层1
     W1 = orthogonal()(key, (x.shape[1], hidden_dim))
     hidden = jnp.dot(max_pool, W1)
-    hidden = nn.relu(hidden)
+    hidden = nn.tanh(hidden)
     # 线性层2
     W2 = orthogonal()(random.split(key)[1], (hidden_dim, x.shape[1]))
     attention = jnp.dot(hidden, W2)
