@@ -405,15 +405,26 @@ def fdbp(
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     dconv1 = vmap(wpartial(conv1d, taps=241, kernel_init=d_init))
     dconv2 = vmap(wpartial(conv1d, taps=281, kernel_init=d_init))
+    
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        x1, _ = scope.child(dconv1, name='DConv1_%d' % i)(Signal(x, t))
-        x2, _ = scope.child(dconv2, name='DConv2_%d' % i)(Signal(x, t))
-        x = x + x1 + x2
+        x_conv, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        x_conv1, _ = scope.child(dconv1, name='DConv1_%d' % i)(Signal(x, t))
+        x_conv2, _ = scope.child(dconv2, name='DConv2_%d' % i)(Signal(x, t))
+        
+        # Ensure all convolutions have the same shape
+        min_length = min(x_conv.shape[0], x_conv1.shape[0], x_conv2.shape[0])
+        x_conv = x_conv[:min_length]
+        x_conv1 = x_conv1[:min_length]
+        x_conv2 = x_conv2[:min_length]
+        
+        # Sum the results
+        x = x_conv + x_conv1 + x_conv2
+        
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    
     return Signal(x, t)
 
 def identity(scope, inputs):
