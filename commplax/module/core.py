@@ -229,7 +229,7 @@ def multi_scale_conv(scope: Scope,
                      kernel_init,
                      (taps,), np.complex64)
         x = conv_fn(x, h, mode=mode)
-        outputs.append(x_conv)
+        outputs.append(x)
  
     x_out = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
     
