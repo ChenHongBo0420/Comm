@@ -429,8 +429,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=2,
-    output_dim=2):
+    scaling_factor_init=1.0):
     
     x, t = signal
     key = random.PRNGKey(0)
