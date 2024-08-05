@@ -374,12 +374,12 @@ from jax.nn.initializers import orthogonal
 #         return output
 
       
-def squeeze_excite_attention(x):
-    max_pool = jnp.max(x, axis=0, keepdims=True)
-    attention = jnp.tanh(max_pool)
-    attention = jnp.tile(attention, (x.shape[0], 1))
-    x = x * attention
-    return x
+# def squeeze_excite_attention(x):
+#     max_pool = jnp.max(x, axis=0, keepdims=True)
+#     attention = jnp.tanh(max_pool)
+#     attention = jnp.tile(attention, (x.shape[0], 1))
+#     x = x * attention
+#     return x
 
 # def complex_channel_attention(x):
 #     x_real = jnp.real(x)
@@ -389,17 +389,36 @@ def squeeze_excite_attention(x):
 #     x = x_real + 1j * x_imag
 #     return x
 
+def squeeze_excite_attention(x, key):
+    # 首先进行全局最大池化
+    max_pool = jnp.max(x, axis=0, keepdims=True)
+    # 增加一个隐藏层
+    hidden_dim = x.shape[1] // 2  # 设置为输入的一半
+    # 线性层1
+    W1 = orthogonal()(key, (x.shape[1], hidden_dim))
+    hidden = jnp.dot(max_pool, W1)
+    hidden = nn.relu(hidden)
+    # 线性层2
+    W2 = orthogonal()(random.split(key)[1], (hidden_dim, x.shape[1]))
+    attention = jnp.dot(hidden, W2)
+    attention = nn.sigmoid(attention)
+    # 注意力应用
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    x = x * attention
+    return x
+
 def complex_channel_attention(x):
+    key = random.PRNGKey(0)
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     
-    # 多层squeeze_excite_attention
-    for _ in range(3):  # 增加层数
-        x_real = squeeze_excite_attention(x_real)
-        x_imag = squeeze_excite_attention(x_imag)
+    # SE注意力机制
+    x_real = squeeze_excite_attention(x_real, random.split(key)[0])
+    x_imag = squeeze_excite_attention(x_imag, random.split(key)[1])
     
     x = x_real + 1j * x_imag
     return x
+
 
 
 def fdbp(
