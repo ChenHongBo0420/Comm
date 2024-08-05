@@ -418,8 +418,6 @@ class ComplexChannelAttention(nn.Module):
         x = x_real + 1j * x_imag
         return x
 
-
-
 def fdbp(
     scope: nn.Module,
     signal,
@@ -438,11 +436,12 @@ def fdbp(
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        x = scope.child(ComplexChannelAttention, scaling_factor_init=scaling_factor_init)(x)
+
+        x = scope.child(ComplexChannelAttention)(x, scaling_factor_init=scaling_factor_init)
+        
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
-    
 
 
 def identity(scope, inputs):
