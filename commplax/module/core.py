@@ -387,7 +387,7 @@ def multi_scale_max_pool(x, scales):
 def squeeze_excite_attention(x, scales=[1, 2, 3]):
     x_multi_scale = multi_scale_max_pool(x, scales)
     attention = jnp.tanh(x_multi_scale)
-    attention = jnp.tile(attention, (x.shape[0], 1))
+    attention = jnp.tile(attention, (1, x.shape[1] // attention.shape[1]))  # Adjust the shape to match
     x = x * attention
     return x
 
@@ -398,6 +398,7 @@ def complex_channel_attention(x, scales=[1, 2, 3]):
     x_imag = squeeze_excite_attention(x_imag, scales)
     x = x_real + 1j * x_imag
     return x
+
 
 
 def fdbp(
