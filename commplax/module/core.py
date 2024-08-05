@@ -212,27 +212,6 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
 
     return Signal(x, t)
-
-def multi_scale_conv(scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve,
-    tap_sizes=[15, 31, 63]):
-    x, t = signal
-    outputs = []
-    for taps in tap_sizes:
-        h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-        x = conv_fn(x, h, mode=mode)
-        outputs.append(x)
- 
-    x_out = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
-    
-    return Signal(x_out, t)
       
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -415,21 +394,24 @@ def fdbp(
     scope: nn.Module,
     signal,
     steps=3,
-    tap_sizes=[31, 15, 7],
     dtaps=261,
     ntaps=41,
+    tap_sizes=[15, 31, 63],
     sps=2,
     d_init=delta,
     n_init=gauss):
     
     x, t = signal
     key = random.PRNGKey(0)
-    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    dconv = vmap(wpartial(multi_scale_conv, tap_sizes=tap_sizes, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        outputs = []
+        for taps in tap_sizes:
+            dconv = wpartial(conv1d, taps=taps, kernel_init=d_init)
+            x_conv, td = scope.child(dconv, name=f'DConv_{i}_{taps}')(Signal(x, t))
+            outputs.append(x_conv)
+        x = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-
         x = complex_channel_attention(x)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
