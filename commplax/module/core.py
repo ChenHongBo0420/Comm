@@ -224,7 +224,7 @@ def multi_scale_conv(scope: Scope,
     x, t = signal
     outputs = []
     for taps in tap_sizes:
-        t_scaled = scope.variable('const', f't_{idx}', conv1d_t, t, taps, None, 1, mode).value
+        t_scaled = scope.variable('const', conv1d_t, t, taps, None, 1, mode).value
         h = scope.param('kernel',
                      kernel_init,
                      (taps,), np.complex64)
