@@ -373,31 +373,10 @@ from jax.nn.initializers import orthogonal
         
 #         return output
 
-class LinearLayer:
-    def __init__(self, input_dim, output_dim, key):
-        self.W = orthogonal()(key, (input_dim, output_dim))
-        
-    def __call__(self, x):
-        return jnp.dot(x, self.W)
-      
-class GatedLayer:
-    def __init__(self, input_dim, key):
-        self.Wz = orthogonal()(random.split(key)[0], (input_dim, input_dim))
-        self.Wr = orthogonal()(random.split(key)[1], (input_dim, input_dim))
-        self.Wh = orthogonal()(random.split(key)[2], (input_dim, input_dim))
-        
-    def __call__(self, x, h):
-        z = jax.nn.sigmoid(jnp.dot(x, self.Wz) + jnp.dot(h, self.Wz))
-        r = jax.nn.sigmoid(jnp.dot(x, self.Wr) + jnp.dot(h, self.Wr))
-        h_hat = jax.nn.tanh(jnp.dot(x, self.Wh) + jnp.dot(r * h, self.Wh))
-        h = (1 - z) * h + z * h_hat
-        return h
-      
-
       
 def squeeze_excite_attention(x):
-    avg_pool = jnp.max(x, axis=0, keepdims=True)
-    attention = jnp.tanh(avg_pool)
+    max_pool = jnp.max(x, axis=0, keepdims=True)
+    attention = jnp.tanh(max_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
     x = x * attention
     return x
@@ -425,14 +404,12 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    gate = GatedLayer(input_dim=x.shape[1], key=key)
     
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
 
-        h = jnp.zeros_like(x)
-        x = gate(x, h)
+        x = complex_channel_attention(x)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
