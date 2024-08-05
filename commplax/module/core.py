@@ -213,26 +213,26 @@ def conv1d(
 
     return Signal(x, t)
 
-def multi_scale_conv1d(
-    scope: nn.Module,
+def multi_scale_conv(scope: Scope,
     signal,
-    tap_sizes=[31, 15, 7],
+    taps=31,
+    rtap=None,
     mode='valid',
-    kernel_init=lambda key, shape: random.normal(key, shape)):
-
+    kernel_init=delta,
+    conv_fn = xop.convolve,
+    tap_sizes=[15, 31, 63]):
     x, t = signal
     outputs = []
-
     for taps in tap_sizes:
-        h = scope.param(f'kernel_{taps}',
-                        kernel_init,
-                        (taps,),
-                        np.complex64)
-        conv_fn = lambda x, h: jnp.convolve(x, h, mode=mode)
-        x_conv = conv_fn(x, h)
+        t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+        h = scope.param('kernel',
+                     kernel_init,
+                     (taps,), np.complex64)
+        x = conv_fn(x, h, mode=mode)
         outputs.append(x_conv)
-
-    x_out = jnp.concatenate(outputs, axis=-1)
+ 
+    x_out = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
+    
     return Signal(x_out, t)
       
 def kernel_initializer(rng, shape):
@@ -426,7 +426,7 @@ def fdbp(
     x, t = signal
     key = random.PRNGKey(0)
     # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    dconv = vmap(wpartial(multi_scale_conv1d, tap_sizes=tap_sizes, kernel_init=d_init))
+    dconv = vmap(wpartial(multi_scale_conv, tap_sizes=tap_sizes, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
