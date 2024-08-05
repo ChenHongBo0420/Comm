@@ -403,16 +403,24 @@ def fdbp(
     
     x, t = signal
     key = random.PRNGKey(0)
+    
     for i in range(steps):
         outputs = []
         for taps in tap_sizes:
             dconv = wpartial(conv1d, taps=taps, kernel_init=d_init)
             x_conv, td = scope.child(dconv, name=f'DConv_{i}_{taps}')(Signal(x, t))
+            print(f"Step {i}, Taps {taps}: x_conv shape: {x_conv.shape}")
             outputs.append(x_conv)
         
         # 多尺度卷积结果相加
-        x = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
+        if outputs:
+            x = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
+        else:
+            raise ValueError("No outputs from multi-scale convolution")
+
+        # 打印 x 的维度
         print(f"Step {i}: x shape after multi-scale convolution: {x.shape}")
+        
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
         # 复数通道注意力机制
