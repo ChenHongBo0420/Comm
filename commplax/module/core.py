@@ -394,40 +394,26 @@ def fdbp(
     scope: nn.Module,
     signal,
     steps=3,
-    dtaps=261,
+  　dtaps=261,
     ntaps=41,
-    tap_sizes=[15, 31, 63],
     sps=2,
     d_init=delta,
     n_init=gauss):
     
     x, t = signal
     key = random.PRNGKey(0)
-    
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    dconv1 = vmap(wpartial(conv1d, taps=241, kernel_init=d_init))
+    dconv2 = vmap(wpartial(conv1d, taps=281, kernel_init=d_init))
     for i in range(steps):
-        outputs = []
-        for taps in tap_sizes:
-            dconv = wpartial(conv1d, taps=taps, kernel_init=d_init)
-            x_conv, td = scope.child(dconv, name=f'DConv_{i}_{taps}')(Signal(x, t))
-            print(f"Step {i}, Taps {taps}: x_conv shape: {x_conv.shape}")
-            outputs.append(x_conv)
-        
-        # 多尺度卷积结果相加
-        if outputs:
-            x = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
-        else:
-            raise ValueError("No outputs from multi-scale convolution")
-
-        # 打印 x 的维度
-        print(f"Step {i}: x shape after multi-scale convolution: {x.shape}")
-        
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        
-        # 复数通道注意力机制
-        x = complex_channel_attention(x)
-        
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        x1, _ = scope.child(dconv1, name='DConv1_%d' % i)(Signal(x, t))
+        x2, _ = scope.child(dconv2, name='DConv2_%d' % i)(Signal(x, t))
+        x = x + x1 + x2
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0])
     return Signal(x, t)
 
 def identity(scope, inputs):
