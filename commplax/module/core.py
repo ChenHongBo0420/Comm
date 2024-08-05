@@ -374,49 +374,21 @@ from jax.nn.initializers import orthogonal
 #         return output
 
       
-# def squeeze_excite_attention(x):
-#     max_pool = jnp.max(x, axis=0, keepdims=True)
-#     attention = jnp.tanh(max_pool)
-#     attention = jnp.tile(attention, (x.shape[0], 1))
-#     x = x * attention
-#     return x
+def squeeze_excite_attention(x):
+    max_pool = jnp.max(x, axis=0, keepdims=True)
+    attention = jnp.tanh(max_pool)
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    x = x * attention
+    return x
 
-# def complex_channel_attention(x):
-#     x_real = jnp.real(x)
-#     x_imag = jnp.imag(x)
-#     x_real = squeeze_excite_attention(x_real)
-#     x_imag = squeeze_excite_attention(x_imag)
-#     x = x_real + 1j * x_imag
-#     return x
+def complex_channel_attention(x):
+    x_real = jnp.real(x)
+    x_imag = jnp.imag(x)
+    x_real = squeeze_excite_attention(x_real)
+    x_imag = squeeze_excite_attention(x_imag)
+    x = x_real + 1j * x_imag
+    return x
 
-class SqueezeExciteAttention(nn.Module):
-    scaling_factor_init: float = 1.0
-    
-    def setup(self):
-        self.scaling_factor = self.param('scaling_factor', nn.initializers.constant(self.scaling_factor_init), (1,))
-    
-    def __call__(self, x):
-        max_pool = jnp.max(x, axis=0, keepdims=True)
-        attention = jnp.tanh(max_pool * self.scaling_factor)
-        attention = jnp.tile(attention, (x.shape[0], 1))
-        x = x * attention
-        return x
-
-class ComplexChannelAttention(nn.Module):
-    scaling_factor_init: float = 1.0
-    
-    def setup(self):
-        self.se_attention = SqueezeExciteAttention(scaling_factor_init=self.scaling_factor_init)
-    
-    def __call__(self, x):
-        x_real = jnp.real(x)
-        x_imag = jnp.imag(x)
-        
-        x_real = self.se_attention(x_real)
-        x_imag = self.se_attention(x_imag)
-        
-        x = x_real + 1j * x_imag
-        return x
 
 def fdbp(
     scope: nn.Module,
@@ -426,8 +398,7 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    scaling_factor_init=1.0):
+    n_init=gauss):
     
     x, t = signal
     key = random.PRNGKey(0)
@@ -437,7 +408,7 @@ def fdbp(
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
 
-        x = scope.child(ComplexChannelAttention)(x, scaling_factor_init=scaling_factor_init)
+        x = complex_channel_attention(x)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
