@@ -374,18 +374,28 @@ from jax.nn.initializers import orthogonal
 #         return output
 
       
-def squeeze_excite_attention(x):
-    max_pool = jnp.max(x, axis=0, keepdims=True)
-    attention = jnp.tanh(max_pool)
+def multi_scale_max_pool(x, scales):
+    pooled_outputs = []
+    for scale in scales:
+        max_pool = jax.lax.reduce_window(x, -jnp.inf, jax.lax.max, (1, scale), (1, scale), padding='VALID')
+        pooled_outputs.append(max_pool)
+    min_length = min([pooled.shape[1] for pooled in pooled_outputs])
+    pooled_outputs = [pooled[:, :min_length] for pooled in pooled_outputs]
+    x_multi_scale = jnp.sum(jnp.stack(pooled_outputs, axis=-1), axis=-1)
+    return x_multi_scale
+
+def squeeze_excite_attention(x, scales=[1, 2, 3]):
+    x_multi_scale = multi_scale_max_pool(x, scales)
+    attention = jnp.tanh(x_multi_scale)
     attention = jnp.tile(attention, (x.shape[0], 1))
     x = x * attention
     return x
 
-def complex_channel_attention(x):
+def complex_channel_attention(x, scales=[1, 2, 3]):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
-    x_real = squeeze_excite_attention(x_real)
-    x_imag = squeeze_excite_attention(x_imag)
+    x_real = squeeze_excite_attention(x_real, scales)
+    x_imag = squeeze_excite_attention(x_imag, scales)
     x = x_real + 1j * x_imag
     return x
 
@@ -398,7 +408,8 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss):
+    n_init=gauss,
+    scales=[1, 2, 3]):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
@@ -406,7 +417,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
+        x = complex_channel_attention(x, scales)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
