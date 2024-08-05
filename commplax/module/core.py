@@ -412,7 +412,7 @@ def fdbp(
         
         # 多尺度卷积结果相加
         x = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
-        
+        print(f"Step {i}: x shape after multi-scale convolution: {x.shape}")
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         
         # 复数通道注意力机制
