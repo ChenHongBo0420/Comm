@@ -394,7 +394,7 @@ def fdbp(
     scope: nn.Module,
     signal,
     steps=3,
-  　dtaps=261,
+    dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
