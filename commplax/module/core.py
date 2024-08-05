@@ -416,6 +416,7 @@ def fdbp(
     scope: nn.Module,
     signal,
     steps=3,
+    tap_sizes=[31, 15, 7],
     dtaps=261,
     ntaps=41,
     sps=2,
