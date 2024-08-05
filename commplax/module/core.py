@@ -381,14 +381,27 @@ def squeeze_excite_attention(x):
     x = x * attention
     return x
 
+# def complex_channel_attention(x):
+#     x_real = jnp.real(x)
+#     x_imag = jnp.imag(x)
+#     x_real = squeeze_excite_attention(x_real)
+#     x_imag = squeeze_excite_attention(x_imag)
+#     x = x_real + 1j * x_imag
+#     return x
+
 def complex_channel_attention(x):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
-    x_real = squeeze_excite_attention(x_real)
-    x_imag = squeeze_excite_attention(x_imag)
+    
+    # 多层squeeze_excite_attention
+    for _ in range(3):  # 增加层数
+        x_real = squeeze_excite_attention(x_real)
+        x_imag = squeeze_excite_attention(x_imag)
+    
     x = x_real + 1j * x_imag
     return x
-  
+
+
 def fdbp(
     scope: nn.Module,
     signal,
