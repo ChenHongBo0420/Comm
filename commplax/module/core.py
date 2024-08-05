@@ -195,24 +195,46 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
-def conv1d(
-    scope: Scope,
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+
+#     return Signal(x, t)
+
+def multi_scale_conv1d(
+    scope: nn.Module,
     signal,
-    taps=31,
-    rtap=None,
+    tap_sizes=[31, 15, 7],
     mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
+    kernel_init=lambda key, shape: random.normal(key, shape)):
 
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
+    outputs = []
 
-    return Signal(x, t)
+    for taps in tap_sizes:
+        h = scope.param(f'kernel_{taps}',
+                        kernel_init,
+                        (taps,),
+                        np.complex64)
+        conv_fn = lambda x, h: jnp.convolve(x, h, mode=mode)
+        x_conv = conv_fn(x, h)
+        outputs.append(x_conv)
 
+    x_out = jnp.concatenate(outputs, axis=-1)
+    return Signal(x_out, t)
+      
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
@@ -402,8 +424,8 @@ def fdbp(
     
     x, t = signal
     key = random.PRNGKey(0)
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
+    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(multi_scale_conv1d, tap_sizes=tap_sizes, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
