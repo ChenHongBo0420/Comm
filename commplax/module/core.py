@@ -403,21 +403,24 @@ def fdbp(
     
     x, t = signal
     key = random.PRNGKey(0)
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         outputs = []
         for taps in tap_sizes:
             dconv = wpartial(conv1d, taps=taps, kernel_init=d_init)
             x_conv, td = scope.child(dconv, name=f'DConv_{i}_{taps}')(Signal(x, t))
             outputs.append(x_conv)
+        
+        # 多尺度卷积结果相加
         x = jnp.sum(jnp.stack(outputs, axis=-1), axis=-1)
+        
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        
+        # 复数通道注意力机制
         x = complex_channel_attention(x)
         
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
     return Signal(x, t)
-
 
 def identity(scope, inputs):
     return inputs
