@@ -211,7 +211,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     else:
         mean = running_mean.value
 
-    return (gamma * signal / jnp.sqrt(mean)) + beta
+    return (gamma.value * signal / jnp.sqrt(mean)) + beta.value
 
   
 def conv1d(
