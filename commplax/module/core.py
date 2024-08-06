@@ -185,16 +185,35 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+#     running_mean = scope.variable('norm', 'running_mean',
+#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+#     if mode == 'train':
+#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+#     else:
+#         mean = running_mean.value
+#     return signal / jnp.sqrt(mean)
+
+def batchpowernorm(scope, signal, momentum=0.999, num_batches=4, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+
+    batch_size = signal.val.shape[0] // num_batches
+    batches = jnp.split(signal.val, num_batches, axis=0)
+    
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        means = [jnp.mean(jnp.abs(batch)**2, axis=0) for batch in batches]
+        mean = jnp.mean(jnp.stack(means), axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
-    return signal / jnp.sqrt(mean)
 
+    normalized_batches = [batch / jnp.sqrt(mean) for batch in batches]
+    normalized_signal = jnp.concatenate(normalized_batches, axis=0)
+    
+    return signal.replace(val=normalized_signal)
+  
 def conv1d(
     scope: Scope,
     signal,
@@ -375,29 +394,17 @@ from jax.nn.initializers import orthogonal
 
       
 def squeeze_excite_attention(x):
-    avg_pool = jnp.max(x, axis=1, keepdims=True)
+    avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
-    attention = jnp.tile(attention, (1, x.shape[1]))
+    attention = jnp.tile(attention, (x.shape[0], 1))
     x = x * attention
     return x
 
-def multi_head_squeeze_excite_attention(x, num_heads):
-    # 将信号分为多个头
-    batch_size = x.shape[0] // num_heads
-    heads = jnp.split(x, num_heads, axis=0)
-
-    # 对每个头应用注意力机制
-    attention_heads = [squeeze_excite_attention(head) for head in heads]
-
-    # 将注意力结果拼接起来
-    x = jnp.concatenate(attention_heads, axis=0)
-    return x
-
-def multi_head_complex_channel_attention(x, num_heads):
+def complex_channel_attention(x):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
-    x_real = multi_head_squeeze_excite_attention(x_real, num_heads)
-    x_imag = multi_head_squeeze_excite_attention(x_imag, num_heads)
+    x_real = squeeze_excite_attention(x_real)
+    x_imag = squeeze_excite_attention(x_imag)
     x = x_real + 1j * x_imag
     return x
 
