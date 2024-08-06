@@ -212,7 +212,8 @@ def batchpowernorm(scope, signal, momentum=0.999, num_batches=4, mode='train'):
     normalized_batches = [batch / jnp.sqrt(mean) for batch in batches]
     normalized_signal = jnp.concatenate(normalized_batches, axis=0)
     
-    return signal.replace(val=normalized_signal)
+    signal.val = normalized_signal
+    return signal
   
 def conv1d(
     scope: Scope,
