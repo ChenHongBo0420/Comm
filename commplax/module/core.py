@@ -211,7 +211,7 @@ def batchpowernorm(scope, signal, epsilon=1e-5, mode='train'):
         mean = running_mean.value
         var = running_var.value
 
-    normalized_signal = signal / jnp.sqrt(var + mean)
+    normalized_signal = signal / jnp.sqrt(mean)
     return normalized_signal
 
   
