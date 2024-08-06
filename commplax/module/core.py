@@ -196,14 +196,14 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #     return signal / jnp.sqrt(mean)
 
 
-def batchpowernorm(scope, signal, num_groups, eps=1e-5, momentum=0.999, mode='train'):
+def batchpowernorm(scope, signal, eps=1e-5, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
     running_var = scope.variable('norm', 'running_var',
                                  lambda *_: 1. + jnp.ones(signal.val.shape[-1]), ())
     
     N, C = signal.val.shape
-    G = num_groups
+    G = 2
     assert C % G == 0, 'The number of channels must be divisible by the number of groups'
     
     if mode == 'train':
