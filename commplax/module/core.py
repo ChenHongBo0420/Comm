@@ -185,16 +185,26 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-    running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-    if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-    else:
-        mean = running_mean.value
-    return signal / jnp.sqrt(mean)
+# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+#     running_mean = scope.variable('norm', 'running_mean',
+#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+#     if mode == 'train':
+#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+#     else:
+#         mean = running_mean.value
+#     return signal / jnp.sqrt(mean)
 
+def batchpowernorm(scope, signal, eps=1e-5, mode='train'):
+    if mode == 'train':
+        # 计算单个样本的能量均值
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+    else:
+        # 测试模式下使用预计算的均值
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+    
+    # 返回归一化后的信号
+    return signal / jnp.sqrt(mean + eps)
   
 def conv1d(
     scope: Scope,
