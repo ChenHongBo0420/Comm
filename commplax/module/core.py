@@ -201,9 +201,9 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     gamma = scope.variable('norm', 'gamma',
-                           lambda *_: jnp.ones(signal.val.shape[-1]), ())
+                           lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     beta = scope.variable('norm', 'beta',
-                          lambda *_: jnp.zeros(signal.val.shape[-1]), ())
+                          lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
 
     if mode == 'train':
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
