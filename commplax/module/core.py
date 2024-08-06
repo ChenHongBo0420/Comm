@@ -185,35 +185,16 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-#     running_mean = scope.variable('norm', 'running_mean',
-#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-#     if mode == 'train':
-#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-#     else:
-#         mean = running_mean.value
-#     return signal / jnp.sqrt(mean)
-
-def batchpowernorm(scope, signal, momentum=0.999, num_batches=4, mode='train'):
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-
-    batch_size = signal.val.shape[0] // num_batches
-    batches = jnp.split(signal.val, num_batches, axis=0)
-    
     if mode == 'train':
-        means = [jnp.mean(jnp.abs(batch)**2, axis=0) for batch in batches]
-        mean = jnp.mean(jnp.stack(means), axis=0)
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
+    return signal / jnp.sqrt(mean)
 
-    normalized_batches = [batch / jnp.sqrt(mean) for batch in batches]
-    normalized_signal = jnp.concatenate(normalized_batches, axis=0)
-    
-    signal.val = normalized_signal
-    return signal
   
 def conv1d(
     scope: Scope,
