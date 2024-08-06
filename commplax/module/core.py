@@ -214,7 +214,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     normalized_signal = signal.val / jnp.sqrt(mean)
 
 
-    signal = gamma_value * normalized_signal + beta_value
+    signal = gamma * normalized_signal + beta
 
     return signal
 
