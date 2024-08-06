@@ -417,7 +417,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = multi_head_complex_channel_attention(x)
+        x = multi_head_complex_channel_attention(x, 2)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
