@@ -211,6 +211,12 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
 
     normalized_signal = signal / jnp.sqrt(mean)
+    
+    # Debugging print statements
+    print(f"normalized_signal.shape: {normalized_signal.shape}")
+    print(f"gamma.value.shape: {gamma.value.shape}")
+    print(f"beta.value.shape: {beta.value.shape}")
+
     affine_transformed_signal = gamma.value * normalized_signal + beta.value
 
     return affine_transformed_signal
