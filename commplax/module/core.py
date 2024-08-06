@@ -381,7 +381,7 @@ def squeeze_excite_attention(x):
     x = x * attention
     return x
 
-def competitive_attention(x1, x2):
+def contrastive_attention(x1, x2):
     # 对每个偏振态应用注意力机制
     x1_real = jnp.real(x1)
     x1_imag = jnp.imag(x1)
@@ -394,20 +394,23 @@ def competitive_attention(x1, x2):
     attention2_real = squeeze_excite_attention(x2_real)
     attention2_imag = squeeze_excite_attention(x2_imag)
     
-    # 竞争性增强：选择注意力权重较大的部分
-    combined_real = jnp.where(attention1_real > attention2_real, x1_real, x2_real)
-    combined_imag = jnp.where(attention1_imag > attention2_imag, x1_imag, x2_imag)
+    # 对比学习机制：计算相似度，并增强相似的部分
+    similarity_real = jnp.dot(attention1_real, attention2_real.T) / (jnp.linalg.norm(attention1_real) * jnp.linalg.norm(attention2_real))
+    similarity_imag = jnp.dot(attention1_imag, attention2_imag.T) / (jnp.linalg.norm(attention1_imag) * jnp.linalg.norm(attention2_imag))
     
-    return combined_real + 1j * combined_imag
+    enhanced_real = similarity_real * x1_real + (1 - similarity_real) * x2_real
+    enhanced_imag = similarity_imag * x1_imag + (1 - similarity_imag) * x2_imag
+    
+    return enhanced_real + 1j * enhanced_imag
 
 def complex_channel_attention(x):
     # 分离两个偏振态
     x_polarization1 = x[:, 0]
     x_polarization2 = x[:, 1]
     
-    # 对每个偏振态应用竞争性注意力机制
-    x_polarization1 = competitive_attention(x_polarization1, x_polarization2)
-    x_polarization2 = competitive_attention(x_polarization2, x_polarization1)
+    # 对每个偏振态应用对比学习注意力机制
+    x_polarization1 = contrastive_attention(x_polarization1, x_polarization2)
+    x_polarization2 = contrastive_attention(x_polarization2, x_polarization1)
     
     # 合并两个偏振态
     x = jnp.stack([x_polarization1, x_polarization2], axis=1)
