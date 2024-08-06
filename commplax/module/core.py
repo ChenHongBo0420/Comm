@@ -198,29 +198,14 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 
 def batchpowernorm(scope, signal, eps=1e-5, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
-    running_var = scope.variable('norm', 'running_var',
-                                 lambda *_: 1. + jnp.ones(signal.val.shape[-1]), ())
-    
-    N, C = signal.val.shape
-    G = 2
-    assert C % G == 0, 'The number of channels must be divisible by the number of groups'
-    
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        # Reshape input to (N, G, C // G)
-        signal_reshaped = signal.val.reshape(N, G, C // G)
-        mean = jnp.mean(signal_reshaped, axis=(0, 2), keepdims=True)
-        var = jnp.var(signal_reshaped, axis=(0, 2), keepdims=True)
-        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean.flatten()
-        running_var.value = momentum * running_var.value + (1 - momentum) * var.flatten()
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=1, keepdims=True)
+        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
-        mean = running_mean.value.reshape(1, G, C // G)
-        var = running_var.value.reshape(1, G, C // G)
-    
-    signal_reshaped = signal.val.reshape(N, G, C // G)
-    normalized_signal = (signal_reshaped - mean) / jnp.sqrt(var + eps)
-    normalized_signal = normalized_signal.reshape(N, C)
-    
+        mean = running_mean.value
+
+    normalized_signal = signal.val / jnp.sqrt(mean + eps)
     return normalized_signal
 
   
