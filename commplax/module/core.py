@@ -197,18 +197,15 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 
 
 
-def batchpowernorm(scope, signal, epsilon=1e-5, mode='train'):
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: jnp.ones(signal.val.shape[0]), ())
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        mean = jnp.mean(signal.val, axis=0, keepdims=True)
-        running_mean.value = running_mean.value * 0.999 + mean * 0.001
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
-
-    normalized_signal = signal / jnp.sqrt(mean + epsilon)  # 改为除以均值
-    return normalized_signal
-
+    return signal / jnp.sqrt(mean * 1e-5)
   
 def conv1d(
     scope: Scope,
