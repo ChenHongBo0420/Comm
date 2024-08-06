@@ -195,7 +195,7 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #         mean = running_mean.value
 #     return signal / jnp.sqrt(mean)
 
-def layernorm(scope, signal, eps=1e-5, momentum=0.999, mode='train'):
+def batchpowernorm(scope, signal, eps=1e-5, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
     running_var = scope.variable('norm', 'running_var',
