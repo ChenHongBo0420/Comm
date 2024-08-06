@@ -199,19 +199,14 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 
 def batchpowernorm(scope, signal, epsilon=1e-5, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: jnp.ones(signal.val.shape[1]), ())
-    running_var = scope.variable('norm', 'running_var',
-                                 lambda *_: jnp.ones(signal.val.shape[1]), ())
+                                  lambda *_: jnp.ones(signal.val.shape[0]), ())
     if mode == 'train':
         mean = jnp.mean(signal.val, axis=0, keepdims=True)
-        var = jnp.var(signal.val, axis=0, keepdims=True)
-        running_mean.value = running_mean.value * 0.9 + mean * 0.1
-        running_var.value = running_var.value * 0.9 + var * 0.1
+        running_mean.value = running_mean.value * 0.999 + mean * 0.001
     else:
         mean = running_mean.value
-        var = running_var.value
 
-    normalized_signal = signal - var / jnp.sqrt(mean)
+    normalized_signal = signal / jnp.sqrt(mean + epsilon)  # 改为除以均值
     return normalized_signal
 
   
