@@ -196,6 +196,7 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #     return signal / jnp.sqrt(mean)
 
 
+
 def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
@@ -210,16 +211,21 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     else:
         mean = running_mean.value
 
-    normalized_signal = signal / jnp.sqrt(mean)
+    normalized_signal = signal.val / jnp.sqrt(mean)
     
     # Debugging print statements
     print(f"normalized_signal.shape: {normalized_signal.shape}")
     print(f"gamma.value.shape: {gamma.value.shape}")
     print(f"beta.value.shape: {beta.value.shape}")
 
-    affine_transformed_signal = gamma.value * normalized_signal + beta.value
+    # Ensure gamma and beta have the correct shape
+    gamma_value = jnp.broadcast_to(gamma.value, normalized_signal.shape)
+    beta_value = jnp.broadcast_to(beta.value, normalized_signal.shape)
 
-    return affine_transformed_signal
+    affine_transformed_signal = gamma_value * normalized_signal + beta_value
+
+    # Return the modified signal with the original structure
+    return signal.update(val=affine_transformed_signal)
 
   
 def conv1d(
