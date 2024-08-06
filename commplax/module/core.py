@@ -195,24 +195,16 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #         mean = running_mean.value
 #     return signal / jnp.sqrt(mean)
 
-def batchpowernorm(scope, signal, eps=1e-5, momentum=0.999, mode='train'):
-    running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
-    running_var = scope.variable('norm', 'running_var',
-                                 lambda *_: 1. + jnp.ones(signal.val.shape[-1]), ())
-    
+def batchpowernorm(scope, signal, mode='train'):
     if mode == 'train':
-        mean = jnp.mean(signal.val, axis=-1, keepdims=True)
-        var = jnp.var(signal.val, axis=-1, keepdims=True)
-        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-        running_var.value = momentum * running_var.value + (1 - momentum) * var
+        # 计算单个样本的能量均值
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
     else:
-        mean = running_mean.value
-        var = running_var.value
+        # 测试模式下使用预计算的均值
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
     
-    normalized_signal = (signal - mean) / jnp.sqrt(var + eps)
-    
-    return normalized_signal
+    # 返回归一化后的信号
+    return signal / jnp.sqrt(mean)
   
 def conv1d(
     scope: Scope,
