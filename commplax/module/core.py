@@ -374,35 +374,29 @@ from jax.nn.initializers import orthogonal
 #         return output
 
       
-def multi_scale_max_pool(x, scales):
-    pooled_outputs = []
+def multi_scale_attention(x, scales=[1, 2, 4]):
+    attention_outputs = []
     for scale in scales:
-        max_pool = jax.lax.reduce_window(x, -jnp.inf, jax.lax.max, (1, scale), (1, scale), padding='VALID')
-        pooled_outputs.append(max_pool)
-    min_length = min([pooled.shape[1] for pooled in pooled_outputs])
-    pooled_outputs = [pooled[:, :min_length] for pooled in pooled_outputs]
-    x_multi_scale = jnp.sum(jnp.stack(pooled_outputs, axis=-1), axis=-1)
-    return x_multi_scale
+        pool_size = x.shape[1] // scale
+        pooled = jax.lax.reduce_window(x, -jnp.inf, jax.lax.max, (1, pool_size), (1, pool_size), padding='VALID')
+        attention = jnp.tanh(pooled)
+        attention = jnp.tile(attention, (1, x.shape[1] // attention.shape[1]))  # 调整形状以匹配
+        attention_outputs.append(attention)
+    return attention_outputs
 
-def squeeze_excite_attention(x, scales=[1, 2, 3]):
-    x_multi_scale = multi_scale_max_pool(x, scales)
-    attention = jnp.tanh(x_multi_scale)
-    
-    if attention.shape[1] == 0:
-        raise ValueError("Attention shape is zero, check the input dimensions and scales.")
-
-    attention = jnp.tile(attention, (1, x.shape[1] // attention.shape[1]))  # Adjust the shape to match
-    x = x * attention
+def squeeze_excite_attention(x, scales=[1, 2, 4]):
+    attention_outputs = multi_scale_attention(x, scales)
+    multi_scale_attention_weights = sum(attention_outputs) / len(attention_outputs)
+    x = x * multi_scale_attention_weights
     return x
 
-def complex_channel_attention(x, scales=[1, 2, 3]):
+def complex_channel_attention(x, scales=[1, 2, 4]):
     x_real = jnp.real(x)
     x_imag = jnp.imag(x)
     x_real = squeeze_excite_attention(x_real, scales)
     x_imag = squeeze_excite_attention(x_imag, scales)
     x = x_real + 1j * x_imag
     return x
-
 
 def fdbp(
     scope: Scope,
@@ -413,7 +407,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    scales=[1, 2, 3]):
+    scales=[1, 2, 4]):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
