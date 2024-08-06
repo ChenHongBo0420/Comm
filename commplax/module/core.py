@@ -375,22 +375,22 @@ from jax.nn.initializers import orthogonal
 
       
 def squeeze_excite_attention(x):
-    avg_pool = jnp.max(x, axis=0, keepdims=True)
+    avg_pool = jnp.max(x, axis=1, keepdims=True)
     attention = jnp.tanh(avg_pool)
-    attention = jnp.tile(attention, (x.shape[0], 1))
+    attention = jnp.tile(attention, (1, x.shape[1]))
     x = x * attention
     return x
 
 def multi_head_squeeze_excite_attention(x, num_heads):
     # 将信号分为多个头
-    head_dim = x.shape[1] // num_heads
-    heads = jnp.split(x, num_heads, axis=1)
+    batch_size = x.shape[0] // num_heads
+    heads = jnp.split(x, num_heads, axis=0)
 
     # 对每个头应用注意力机制
     attention_heads = [squeeze_excite_attention(head) for head in heads]
 
     # 将注意力结果拼接起来
-    x = jnp.concatenate(attention_heads, axis=1)
+    x = jnp.concatenate(attention_heads, axis=0)
     return x
 
 def multi_head_complex_channel_attention(x, num_heads):
