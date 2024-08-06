@@ -411,8 +411,7 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    scales=[1, 2, 4]):
+    n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
@@ -420,7 +419,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x, scales)
+        x = complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
