@@ -197,21 +197,22 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 
 
 
-def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+def batchpowernorm(scope, signal, epsilon=1e-5, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-    gamma = scope.variable('norm', 'gamma',
-                           lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-    beta = scope.variable('norm', 'beta',
-                          lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
-
+                                  lambda *_: jnp.ones(signal.val.shape[1]), ())
+    running_var = scope.variable('norm', 'running_var',
+                                 lambda *_: jnp.ones(signal.val.shape[1]), ())
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+        mean = jnp.mean(signal.val, axis=1, keepdims=True)
+        var = jnp.var(signal.val, axis=1, keepdims=True)
+        running_mean.value = running_mean.value * 0.9 + mean * 0.1
+        running_var.value = running_var.value * 0.9 + var * 0.1
     else:
         mean = running_mean.value
+        var = running_var.value
 
-    return (gamma.value * signal / jnp.sqrt(mean)) + beta.value
+    normalized_signal = (signal.val - mean) / jnp.sqrt(var + epsilon)
+    return normalized_signal
 
   
 def conv1d(
