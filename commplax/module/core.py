@@ -374,21 +374,21 @@ from jax.nn.initializers import orthogonal
 #         return output
 
       
-def multi_scale_attention(x, scales=[1, 2, 4]):
-    attention_outputs = []
-    for scale in scales:
-        pool_size = x.shape[1] // scale
-        pooled = jax.lax.reduce_window(x, -jnp.inf, jax.lax.max, (1, pool_size), (1, pool_size), padding='VALID')
-        attention = jnp.tanh(pooled)
-        attention = jnp.tile(attention, (1, x.shape[1] // attention.shape[1]))  # 调整形状以匹配
-        attention_outputs.append(attention)
-    return attention_outputs
-
 def squeeze_excite_attention(x, scales=[1, 2, 4]):
     attention_outputs = multi_scale_attention(x, scales)
     multi_scale_attention_weights = sum(attention_outputs) / len(attention_outputs)
     x = x * multi_scale_attention_weights
     return x
+
+def multi_scale_attention(x, scales):
+    attention_outputs = []
+    for scale in scales:
+        pool_size = max(1, x.shape[1] // scale)  # Ensure pool_size is at least 1
+        pooled = jax.lax.reduce_window(x, -jnp.inf, jax.lax.max, (1, pool_size), (1, pool_size), padding='VALID')
+        attention = jnp.tanh(pooled)
+        attention = jnp.tile(attention, (1, x.shape[1] // attention.shape[1]))  # Adjust the shape to match
+        attention_outputs.append(attention)
+    return attention_outputs
 
 def complex_channel_attention(x, scales=[1, 2, 4]):
     x_real = jnp.real(x)
