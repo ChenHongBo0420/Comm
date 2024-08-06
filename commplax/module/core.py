@@ -185,23 +185,11 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-#     running_mean = scope.variable('norm', 'running_mean',
-#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-#     if mode == 'train':
-#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-#     else:
-#         mean = running_mean.value
-#     return signal / jnp.sqrt(mean)
-
-
-
 def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        mean = jnp.max(jnp.abs(signal.val)**2, axis=0)
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
