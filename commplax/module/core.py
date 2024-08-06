@@ -195,16 +195,33 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #         mean = running_mean.value
 #     return signal / jnp.sqrt(mean)
 
-def batchpowernorm(scope, signal, mode='train'):
-    if mode == 'train':
-        # 计算单个样本的能量均值
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-    else:
-        # 测试模式下使用预计算的均值
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+def batchpowernorm(scope, signal, num_groups, eps=1e-5, momentum=0.999, mode='train'):
+    running_mean = scope.variable('norm', 'running_mean',
+                                  lambda *_: 0. + jnp.zeros(signal.val.shape[-1]), ())
+    running_var = scope.variable('norm', 'running_var',
+                                 lambda *_: 1. + jnp.ones(signal.val.shape[-1]), ())
     
-    # 返回归一化后的信号
-    return signal / jnp.sqrt(mean)
+    N, C = signal.val.shape
+    G = num_groups
+    assert C % G == 0, 'The number of channels must be divisible by the number of groups'
+    
+    if mode == 'train':
+        # Reshape input to (N, G, C // G)
+        signal_reshaped = signal.val.reshape(N, G, C // G)
+        mean = jnp.mean(signal_reshaped, axis=(2), keepdims=True)
+        var = jnp.var(signal_reshaped, axis=(2), keepdims=True)
+        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean.reshape(C)
+        running_var.value = momentum * running_var.value + (1 - momentum) * var.reshape(C)
+    else:
+        mean = running_mean.value.reshape(1, G, C // G)
+        var = running_var.value.reshape(1, G, C // G)
+    
+    signal_reshaped = signal.val.reshape(N, G, C // G)
+    normalized_signal = (signal_reshaped - mean) / jnp.sqrt(var + eps)
+    normalized_signal = normalized_signal.reshape(N, C)
+    
+    return normalized_signal
+
   
 def conv1d(
     scope: Scope,
