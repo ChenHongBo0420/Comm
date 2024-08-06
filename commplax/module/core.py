@@ -377,7 +377,7 @@ from jax.nn.initializers import orthogonal
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
-    attention = jnp.tile(attention, (x.shape[0], 1))
+    attention = jnp.broadcast_to(attention, x.shape)
     x = x * attention
     return x
 
