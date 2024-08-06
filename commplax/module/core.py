@@ -382,11 +382,25 @@ def squeeze_excite_attention(x):
     return x
 
 def complex_channel_attention(x):
-    x_real = jnp.real(x)
-    x_imag = jnp.imag(x)
-    x_real = squeeze_excite_attention(x_real)
-    x_imag = squeeze_excite_attention(x_imag)
-    x = x_real + 1j * x_imag
+    # 分离两个偏振态
+    x_polarization1 = x[:, 0]
+    x_polarization2 = x[:, 1]
+    
+    # 对每个偏振态应用注意力机制
+    x_polarization1_real = jnp.real(x_polarization1)
+    x_polarization1_imag = jnp.imag(x_polarization1)
+    x_polarization1_real = squeeze_excite_attention(x_polarization1_real)
+    x_polarization1_imag = squeeze_excite_attention(x_polarization1_imag)
+    x_polarization1 = x_polarization1_real + 1j * x_polarization1_imag
+    
+    x_polarization2_real = jnp.real(x_polarization2)
+    x_polarization2_imag = jnp.imag(x_polarization2)
+    x_polarization2_real = squeeze_excite_attention(x_polarization2_real)
+    x_polarization2_imag = squeeze_excite_attention(x_polarization2_imag)
+    x_polarization2 = x_polarization2_real + 1j * x_polarization2_imag
+    
+    # 合并两个偏振态
+    x = jnp.stack([x_polarization1, x_polarization2], axis=1)
     return x
 
 def fdbp(
