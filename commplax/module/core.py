@@ -377,43 +377,28 @@ from jax.nn.initializers import orthogonal
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
-    attention = jnp.broadcast_to(attention, x.shape)
+    attention = jnp.tile(attention, (x.shape[0], 1))
     x = x * attention
     return x
 
-def contrastive_attention(x1, x2):
-    # 对每个偏振态应用注意力机制
-    x1_real = jnp.real(x1)
-    x1_imag = jnp.imag(x1)
-    x2_real = jnp.real(x2)
-    x2_imag = jnp.imag(x2)
-    
-    # 计算注意力
-    attention1_real = squeeze_excite_attention(x1_real)
-    attention1_imag = squeeze_excite_attention(x1_imag)
-    attention2_real = squeeze_excite_attention(x2_real)
-    attention2_imag = squeeze_excite_attention(x2_imag)
-    
-    # 对比学习机制：计算相似度，并增强相似的部分
-    similarity_real = jnp.dot(attention1_real, attention2_real.T) / (jnp.linalg.norm(attention1_real) * jnp.linalg.norm(attention2_real))
-    similarity_imag = jnp.dot(attention1_imag, attention2_imag.T) / (jnp.linalg.norm(attention1_imag) * jnp.linalg.norm(attention2_imag))
-    
-    enhanced_real = similarity_real * x1_real + (1 - similarity_real) * x2_real
-    enhanced_imag = similarity_imag * x1_imag + (1 - similarity_imag) * x2_imag
-    
-    return enhanced_real + 1j * enhanced_imag
+def multi_head_squeeze_excite_attention(x, num_heads):
+    # 将信号分为多个头
+    head_dim = x.shape[1] // num_heads
+    heads = jnp.split(x, num_heads, axis=1)
 
-def complex_channel_attention(x):
-    # 分离两个偏振态
-    x_polarization1 = x[:, 0]
-    x_polarization2 = x[:, 1]
-    
-    # 对每个偏振态应用对比学习注意力机制
-    x_polarization1 = contrastive_attention(x_polarization1, x_polarization2)
-    x_polarization2 = contrastive_attention(x_polarization2, x_polarization1)
-    
-    # 合并两个偏振态
-    x = jnp.stack([x_polarization1, x_polarization2], axis=1)
+    # 对每个头应用注意力机制
+    attention_heads = [squeeze_excite_attention(head) for head in heads]
+
+    # 将注意力结果拼接起来
+    x = jnp.concatenate(attention_heads, axis=1)
+    return x
+
+def multi_head_complex_channel_attention(x, num_heads):
+    x_real = jnp.real(x)
+    x_imag = jnp.imag(x)
+    x_real = multi_head_squeeze_excite_attention(x_real, num_heads)
+    x_imag = multi_head_squeeze_excite_attention(x_imag, num_heads)
+    x = x_real + 1j * x_imag
     return x
 
 def fdbp(
@@ -432,7 +417,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
+        x = multi_head_complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
