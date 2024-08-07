@@ -388,6 +388,14 @@ def complex_channel_attention(x):
     x_imag = squeeze_excite_attention(x_imag)
     x = x_real + 1j * x_imag
     return x
+  
+def channel_shuffle(x, groups):
+    batch_size, channels = x.shape
+    assert channels % groups == 0, "channels should be divisible by groups"
+    channels_per_group = channels // groups
+    x = x.reshape(batch_size, groups, channels_per_group)
+    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+    return x
 
 def fdbp(
     scope: Scope,
@@ -408,9 +416,7 @@ def fdbp(
         x_split1, x_split2 = jnp.split(x, 2, axis=1)
         x_split2 = complex_channel_attention(x_split2)
         x = jnp.concatenate([x_split1, x_split2], axis=1)
-        # print(f"x_split1 shape: {x_split1.shape}")
-        # print(f"x_split2 shape: {x_split2.shape}")
-        # print(f"x_concatenated shape: {x.shape}")
+        x = channel_shuffle(x, 2)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
