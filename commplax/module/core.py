@@ -389,6 +389,14 @@ def complex_channel_attention(x):
     x = x_real + 1j * x_imag
     return x
   
+def channel_shuffle(x, groups):
+    batch_size, channels = x.shape
+    assert channels % groups == 0, "channels should be divisible by groups"
+    channels_per_group = channels // groups
+    x = x.reshape(batch_size, groups, channels_per_group)
+    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+    return x
+  
 def complex_channel_shuffle(x, groups):
     # 分离实部和虚部
     x_real = jnp.real(x)
