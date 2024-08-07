@@ -419,7 +419,7 @@ def fdbp(
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = complex_channel_attention(x)
-      　x = complex_channel_shuffle(x, 2)
+        x = complex_channel_shuffle(x, 2)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
