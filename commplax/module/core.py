@@ -375,6 +375,7 @@ from jax.nn.initializers import orthogonal
 
       
 def squeeze_excite_attention(x):
+    x = x[:, 0]
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
@@ -405,7 +406,9 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
+        x_split1, x_split2 = jnp.split(x, 2, axis=1)
+        x_split2 = complex_channel_attention(x_split2)
+        x = jnp.concatenate([x_split1, x_split2], axis=1)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
