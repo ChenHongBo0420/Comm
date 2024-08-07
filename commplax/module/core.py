@@ -396,19 +396,7 @@ def channel_shuffle(x, groups):
     x = x.reshape(batch_size, groups, channels_per_group)
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
-  
-def complex_channel_shuffle(x, groups):
-    # 分离实部和虚部
-    x_real = jnp.real(x)
-    x_imag = jnp.imag(x)
 
-    # 对实部和虚部分别进行 channel shuffle
-    x_real_shuffled = channel_shuffle(x_real, groups)
-    x_imag_shuffled = channel_shuffle(x_imag, groups)
-
-    # 重新组合成复数张量
-    x_shuffled = x_real_shuffled + 1j * x_imag_shuffled
-    return x_shuffled
   
 def fdbp(
     scope: Scope,
@@ -422,7 +410,6 @@ def fdbp(
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        x = complex_channel_shuffle(x, 2)
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
