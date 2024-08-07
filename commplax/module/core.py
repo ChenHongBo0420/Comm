@@ -375,7 +375,6 @@ from jax.nn.initializers import orthogonal
 
       
 def squeeze_excite_attention(x):
-    x = x[:, 0]
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
     attention = jnp.tile(attention, (x.shape[0], 1))
@@ -409,9 +408,9 @@ def fdbp(
         x_split1, x_split2 = jnp.split(x, 2, axis=1)
         x_split2 = complex_channel_attention(x_split2)
         x = jnp.concatenate([x_split1, x_split2], axis=1)
-        print(f"x_split1 shape: {x_split1.shape}")
-        print(f"x_split2 shape: {x_split2.shape}")
-        print(f"x_concatenated shape: {x.shape}")
+        # print(f"x_split1 shape: {x_split1.shape}")
+        # print(f"x_split2 shape: {x_split2.shape}")
+        # print(f"x_concatenated shape: {x.shape}")
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
