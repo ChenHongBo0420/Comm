@@ -389,13 +389,6 @@ def complex_channel_attention(x):
     x = x_real + 1j * x_imag
     return x
   
-def channel_shuffle(x, groups):
-    batch_size, channels = x.shape
-    assert batch_size % groups == 0, "batch_size should be divisible by groups"
-    samples_per_group = batch_size // groups
-    x = x.reshape(groups, samples_per_group, channels)
-    x = jnp.transpose(x, (1, 0, 2)).reshape(batch_size, channels)
-    return x
 
 def fdbp(
     scope: Scope,
@@ -413,12 +406,7 @@ def fdbp(
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        # x_split1, x_split2 = jnp.split(x, 2, axis=1)
-        # x_split1 = complex_channel_attention(x_split1)
-        # x_split2 = complex_channel_attention(x_split2)
-        # x = jnp.concatenate([x_split1, x_split2], axis=1)
-        x = complex_channel_attention(x)
-        x = channel_shuffle(x, 2)
+        x = squeeze_excite_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
