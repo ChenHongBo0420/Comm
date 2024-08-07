@@ -391,10 +391,10 @@ def complex_channel_attention(x):
   
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
-    assert channels % groups == 0, "channels should be divisible by groups"
-    channels_per_group = channels // groups
-    x = x.reshape(batch_size, groups, channels_per_group)
-    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+    assert batch_size % groups == 0, "batch_size should be divisible by groups"
+    samples_per_group = batch_size // groups
+    x = x.reshape(groups, samples_per_group, channels)
+    x = jnp.transpose(x, (1, 0, 2)).reshape(batch_size, channels)
     return x
 
 def fdbp(
@@ -418,7 +418,7 @@ def fdbp(
         # x_split2 = complex_channel_attention(x_split2)
         # x = jnp.concatenate([x_split1, x_split2], axis=1)
         x = complex_channel_attention(x)
-        c = channel_shuffle(c, 2)
+        x = channel_shuffle(x, 2)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
