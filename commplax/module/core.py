@@ -414,6 +414,7 @@ def fdbp(
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x_split1, x_split2 = jnp.split(x, 2, axis=1)
+        x_split1 = complex_channel_attention(x_split1)
         x_split2 = complex_channel_attention(x_split2)
         x = jnp.concatenate([x_split1, x_split2], axis=1)
         x = channel_shuffle(x, 2)
