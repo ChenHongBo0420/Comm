@@ -185,15 +185,38 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+#     running_mean = scope.variable('norm', 'running_mean',
+#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+#     if mode == 'train':
+#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+#     else:
+#         mean = running_mean.value
+#     return signal / jnp.sqrt(mean)
+
+def batch_power_norm(scope, signal, momentum=0.999, mode='train'):
+    # 初始化运行均值
     running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+                                  lambda *_: jnp.ones(signal.val.shape[-1]))
+    
     if mode == 'train':
+        # 计算当前批次的能量均值
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        # 更新运行均值
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
+        # 使用运行均值
         mean = running_mean.value
-    return signal / jnp.sqrt(mean)
+    
+    # 归一化信号
+    norm_signal = signal / jnp.sqrt(mean)
+    
+    # 幂法归一化
+    gamma = 0.5  # 可以根据需要调整
+    norm_signal = jnp.sign(norm_signal) * (1 - (1 - jnp.abs(norm_signal))**gamma)
+    
+    return norm_signal 
   
 def conv1d(
     scope: Scope,
