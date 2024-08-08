@@ -214,7 +214,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     
     # 幂法归一化
     gamma = 0.5  # 可以根据需要调整
-    norm_signal = jnp.sign(norm_signal) * (1 - (1 - jnp.abs(norm_signal))**gamma)
+    norm_signal = norm_signal * (1 - (1 - jnp.abs(norm_signal))**gamma)
     
     return norm_signal 
   
