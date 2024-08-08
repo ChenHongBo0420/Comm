@@ -412,26 +412,6 @@ def complex_channel_attention(x):
     x = x_real + 1j * x_imag
     return x
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = complex_channel_attention(x)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
 def fdbp(
     scope: Scope,
     signal,
@@ -440,40 +420,18 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    feedback_taps=5):
-    
-    def fdbp_single_direction(scope, signal, steps, dtaps, ntaps, sps, d_init, n_init, feedback_taps):
-        x, t = signal
-        dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-        for i in range(steps):
-            x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-            c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(jnp.abs(x)**2, td),
-                                                              taps=ntaps,
-                                                              kernel_init=n_init)
-            x = complex_channel_attention(x)
-            x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-            
-            # 引入DFE反馈机制
-            if i > 0:
-                feedback_signal = x[-feedback_taps:]
-                x = x[:-feedback_taps]
-                feedback_correction = apply_dfe(feedback_signal, feedback_taps)
-                x = x + feedback_correction
+    n_init=gauss):
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = complex_channel_attention(x)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
 
-        return Signal(x, t)
-    
-    def apply_dfe(feedback_signal, feedback_taps):
-        # 示例反馈函数，实际应用中需要根据具体情况进行调整
-        feedback_weights = jnp.ones(feedback_taps) / feedback_taps
-        feedback_correction = jnp.convolve(feedback_signal, feedback_weights, mode='valid')
-        return feedback_correction
-
-    # 正向传播
-    forward_signal = fdbp_single_direction(scope, signal, steps, dtaps, ntaps, sps, d_init, n_init, feedback_taps)
-    
-    return forward_signal
-      
 def identity(scope, inputs):
     return inputs
 
