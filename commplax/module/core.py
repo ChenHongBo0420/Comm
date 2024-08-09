@@ -389,7 +389,7 @@ def complex_channel_attention(x):
     x = x_real + 1j * x_imag
     return x
 
-class OrthogonalSinCosRNN:
+class LinearRNN:
     def __init__(self, input_dim, hidden_size, output_dim):
         self.hidden_size = hidden_size
         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
@@ -400,11 +400,10 @@ class OrthogonalSinCosRNN:
         if hidden_state is None:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
-        # 使用 sin 和 cos 进行正交变换
-        hidden_state = jnp.sin(jnp.dot(x, self.Wxh)) + jnp.cos(jnp.dot(hidden_state, self.Whh))
+        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
         output = jnp.dot(hidden_state, self.Why)
         
-        return output 
+        return output
 def fdbp(
     scope: Scope,
     signal,
@@ -419,7 +418,7 @@ def fdbp(
     input_dim = x.shape[1]
     hidden_size = 2  
     output_dim = x.shape[1]
-    rnn_layer = OrthogonalSinCosRNN(input_dim, hidden_size, output_dim)
+    rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
     hidden_state = None
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
