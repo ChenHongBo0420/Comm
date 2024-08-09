@@ -458,7 +458,7 @@ def fdbp(
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     input_dim = x.shape[1]
-    hidden_size = 2  
+    hidden_size = 4  
     output_dim = x.shape[1]
     # rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
