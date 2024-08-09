@@ -425,7 +425,7 @@ class ImprovedRNN:
             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
         
         # 计算隐藏状态，并应用非线性激活函数
-        hidden_state = nn.relu(jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh))
+        hidden_state = jnp.tanh(jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh))
         
         if training and self.dropout_rate > 0.0:
             rng = random.PRNGKey(3)
