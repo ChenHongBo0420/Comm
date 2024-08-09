@@ -430,7 +430,6 @@ def fdbp(
     nn_layer = LinearLayer(input_dim, output_dim)
     hidden_state = None
     # x = rnn_layer(x, hidden_state)
-    x = nn_layer(x)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -438,6 +437,7 @@ def fdbp(
                                                             kernel_init=n_init)
         # x = complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    x = rnn_layer(x, hidden_state)
     return Signal(x, t)
 
 def identity(scope, inputs):
