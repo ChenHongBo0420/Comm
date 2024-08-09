@@ -421,7 +421,7 @@ def fdbp(
     output_dim = x.shape[1]
     rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
     hidden_state = None
-    x = channel_shuffle(x, 2)
+    # x = channel_shuffle(x, 2)
     x = rnn_layer(x, hidden_state)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
@@ -430,7 +430,7 @@ def fdbp(
                                                             kernel_init=n_init)
         # x = complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    x = complex_channel_attention(x)
+    x = channel_shuffle(x, 2)
     return Signal(x, t)
 
 def identity(scope, inputs):
