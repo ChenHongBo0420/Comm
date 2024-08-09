@@ -405,6 +405,39 @@ class LinearRNN:
         
         return output
       
+class TwoLayerRNN:
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+        self.hidden_size1 = hidden_size1
+        self.hidden_size2 = hidden_size2
+
+        # 第一层的权重矩阵
+        self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
+        self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+
+        # 第二层的权重矩阵
+        self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
+
+        # 输出层的权重矩阵
+        self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+    
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+        if hidden_state1 is None:
+            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+        if hidden_state2 is None:
+            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+        # 第一层计算
+        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+
+        # 第二层计算
+        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+
+        # 输出计算
+        output = jnp.dot(hidden_state2, self.Why)
+        
+        return output
+      
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
@@ -412,29 +445,6 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)    
       
-class ImprovedRNN:
-    def __init__(self, input_dim, hidden_size, output_dim, dropout_rate=0.0):
-        self.hidden_size = hidden_size
-        self.Wxh = glorot_uniform()(random.PRNGKey(0), (input_dim, hidden_size))
-        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
-        self.Why = glorot_uniform()(random.PRNGKey(2), (hidden_size, output_dim))
-        self.dropout_rate = dropout_rate
-
-    def __call__(self, x, hidden_state=None, training=False):
-        if hidden_state is None:
-            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
-        
-        # 计算隐藏状态，并应用非线性激活函数
-        hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
-        
-        if training and self.dropout_rate > 0.0:
-            rng = random.PRNGKey(3)
-            hidden_state = jax.nn.dropout(hidden_state, rate=self.dropout_rate, key=rng)
-
-        # 计算输出
-        output = jnp.dot(hidden_state, self.Why)
-        
-        return output  
       
 def fdbp(
     scope: Scope,
@@ -451,9 +461,8 @@ def fdbp(
     hidden_size = 2  
     output_dim = x.shape[1]
     # rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
-    rnn_layer = ImprovedRNN(input_dim, hidden_size, output_dim, dropout_rate=0.5)
-    hidden_state = None
-    x = rnn_layer(x, hidden_state)
+    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    x = rnn_layer(x)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
