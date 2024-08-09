@@ -508,7 +508,7 @@ def fdbp(
     
     # 初始 RNN 输出
     rnn_output, hidden_state1, hidden_state2 = rnn_layer(x)
-    x = rnn_output + hidden_state1 + hidden_state2
+    x = hidden_state1
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
