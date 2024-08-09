@@ -518,20 +518,20 @@ def fdbp(
         x = jnp.exp(1j * c_x) * x[t_x.start - td.start: t_x.stop - td.stop + x.shape[0]]
         
         # 独立处理 Signal(hidden_state1, t)
-        hs1, td1 = scope.child(dconv, name='DConv_%d_hs1' % i)(Signal(hidden_state1, t))
-        c_hs1, t_hs1 = scope.child(mimoconv1d, name='NConv_%d_hs1' % i)(Signal(jnp.abs(hs1)**2, td1),
+        hs1, _ = scope.child(dconv, name='DConv_%d_hs1' % i)(Signal(hidden_state1, t))
+        c_hs1, _ = scope.child(mimoconv1d, name='NConv_%d_hs1' % i)(Signal(jnp.abs(hs1)**2, td1),
                                                                         taps=ntaps,
                                                                         kernel_init=n_init)
-        hidden_state1 = jnp.exp(1j * c_hs1) * hs1[t_hs1.start - td1.start: t_hs1.stop - td1.stop + hs1.shape[0]]
+        hidden_state1 = jnp.exp(1j * c_hs1) * hs1[t_x.start - td.start: t_x.stop - td.stop + hs1.shape[0]]
         
         # 独立处理 Signal(hidden_state2, t)
-        hs2, td2 = scope.child(dconv, name='DConv_%d_hs2' % i)(Signal(hidden_state2, t))
-        c_hs2, t_hs2 = scope.child(mimoconv1d, name='NConv_%d_hs2' % i)(Signal(jnp.abs(hs2)**2, td2),
+        hs2, _ = scope.child(dconv, name='DConv_%d_hs2' % i)(Signal(hidden_state2, t))
+        c_hs2, _ = scope.child(mimoconv1d, name='NConv_%d_hs2' % i)(Signal(jnp.abs(hs2)**2, td2),
                                                                         taps=ntaps,
                                                                         kernel_init=n_init)
-        hidden_state2 = jnp.exp(1j * c_hs2) * hs2[t_hs2.start - td2.start: t_hs2.stop - td2.stop + hs2.shape[0]]
+        hidden_state2 = jnp.exp(1j * c_hs2) * hs2[t_x.start - td.start: t_x.stop - td.stop + hs2.shape[0]]
      
-    final_output = x
+    final_output = x + hidden_state1 + hidden_state2
     
     return Signal(final_output, t)
       
