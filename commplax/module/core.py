@@ -530,10 +530,8 @@ def fdbp(
                                                                         taps=ntaps,
                                                                         kernel_init=n_init)
         hidden_state2 = jnp.exp(1j * c_hs2) * hs2[t_hs2.start - td2.start: t_hs2.stop - td2.stop + hs2.shape[0]]
-        print(f"Step {i}: x shape: {x.shape}")
-        print(f"Step {i}: hidden_state1 shape: {hidden_state1.shape}")
-        print(f"Step {i}: hidden_state2 shape: {hidden_state2.shape}")
-    final_output = x + hidden_state1 + hidden_state2
+     
+        final_output = x + hidden_state1 + hidden_state2
     
     return Signal(final_output, t)
       
