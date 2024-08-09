@@ -431,24 +431,16 @@ class LinearRNN:
 
 
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, alpha=0.01):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
-        self.alpha = alpha  # Leaky ReLU 的负斜率
 
-        # 第一层的权重矩阵
         self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
         self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
-
-        # 第二层的权重矩阵
         self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
         self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
 
-        # 输出层的权重矩阵
         self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
-    
-    def leaky_relu(self, x):
-        return jnp.where(x > 0, x, self.alpha * x)
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
@@ -456,15 +448,11 @@ class TwoLayerRNN:
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        # 第一层计算并应用 Leaky ReLU 激活函数
-        hidden_state1 = self.leaky_relu(jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1))
-
-        # 第二层计算并应用 Leaky ReLU 激活函数
-        hidden_state2 = self.leaky_relu(jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2))
-
-        # 输出计算
+        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
         output = jnp.dot(hidden_state2, self.Why)
-        
+        print(f"hidden_state1 shape: {hidden_state1.shape}")
+        print(f"hidden_state2 shape: {hidden_state2.shape}")
         return output
       
 class LinearLayer:
