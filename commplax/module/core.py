@@ -396,6 +396,26 @@ from jax.nn.initializers import orthogonal
         
 #         return output
 
+class NaiveFourierKANLayer:
+    def __init__(self, input_dim, initial_gridsize=10, add_bias=True):
+        self.input_dim = input_dim
+        self.initial_gridsize = initial_gridsize
+        self.add_bias = add_bias
+        self.gridsize_param = zeros()(jax.random.PRNGKey(0), (1,))
+        self.fouriercoeffs = xavier_uniform()(jax.random.PRNGKey(1), (2, input_dim, initial_gridsize + 1))
+        if self.add_bias:
+            self.bias = zeros()(jax.random.PRNGKey(2), (input_dim,))
+
+    def __call__(self, x):
+        gridsize = jax.lax.clamp(1, self.gridsize_param, self.initial_gridsize).round().astype(jnp.int32)
+        k = jnp.arange(1, gridsize + 1).reshape(1, -1)  # (1, gridsize)
+        c = jnp.cos(k * x[:, :, None])  # (batch_size, channels, gridsize)
+        s = jnp.sin(k * x[:, :, None])  # (batch_size, channels, gridsize)
+        y = jnp.sum(c * self.fouriercoeffs[0, :, :gridsize], axis=-1)  # (batch_size, channels)
+        y += jnp.sum(s * self.fouriercoeffs[1, :, :gridsize], axis=-1)  # (batch_size, channels)
+        if self.add_bias:
+            y += self.bias
+        return y
       
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
@@ -423,12 +443,14 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    fourier_layer = NaiveFourierKANLayer(input_dim=x.shape[1], initial_gridsize=10, add_bias=True)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        x = complex_channel_attention(x)
+        # x = complex_channel_attention(x)
+        x = fourier_layer(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
