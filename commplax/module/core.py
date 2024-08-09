@@ -420,7 +420,8 @@ def fdbp(
     output_dim = x.shape[1]
     rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
     hidden_state = None
-    x = rnn_layer(x, hidden_state)
+    # x = rnn_layer(x, hidden_state)
+    x = complex_channel_attention(x)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
