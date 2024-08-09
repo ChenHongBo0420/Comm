@@ -453,6 +453,7 @@ class TwoLayerRNN:
         output = jnp.dot(hidden_state2, self.Why)
         print(f"hidden_state1 shape: {hidden_state1.shape}")
         print(f"hidden_state2 shape: {hidden_state2.shape}")
+        print(f"output shape: {output.shape}")
         return output
       
 class LinearLayer:
