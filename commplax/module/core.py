@@ -412,6 +412,30 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W)    
       
+class ImprovedRNN:
+    def __init__(self, input_dim, hidden_size, output_dim, dropout_rate=0.0):
+        self.hidden_size = hidden_size
+        self.Wxh = glorot_uniform()(random.PRNGKey(0), (input_dim, hidden_size))
+        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+        self.Why = glorot_uniform()(random.PRNGKey(2), (hidden_size, output_dim))
+        self.dropout_rate = dropout_rate
+
+    def __call__(self, x, hidden_state=None, training=False):
+        if hidden_state is None:
+            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+        
+        # 计算隐藏状态，并应用非线性激活函数
+        hidden_state = relu(jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh))
+        
+        if training and self.dropout_rate > 0.0:
+            rng = random.PRNGKey(3)
+            hidden_state = jax.nn.dropout(hidden_state, rate=self.dropout_rate, key=rng)
+
+        # 计算输出
+        output = jnp.dot(hidden_state, self.Why)
+        
+        return output  
+      
 def fdbp(
     scope: Scope,
     signal,
@@ -426,10 +450,10 @@ def fdbp(
     input_dim = x.shape[1]
     hidden_size = 2  
     output_dim = x.shape[1]
-    rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
-    nn_layer = LinearLayer(input_dim, output_dim)
+    # rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
+    rnn_layer = ImprovedRNN(input_dim, hidden_size, output_dim, dropout_rate=0.5)
     hidden_state = None
-    # x = rnn_layer(x, hidden_state)
+    x = rnn_layer(x, hidden_state)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -437,7 +461,6 @@ def fdbp(
                                                             kernel_init=n_init)
         # x = complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    x = rnn_layer(x, hidden_state)
     return Signal(x, t)
 
 def identity(scope, inputs):
