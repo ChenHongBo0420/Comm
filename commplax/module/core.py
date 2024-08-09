@@ -524,7 +524,7 @@ def fdbp(
         hs2, td2 = scope.child(dconv, name='DConv_%d_hs2' % i)(Signal(hidden_state2, t))
         c_hs2, t_hs2 = scope.child(mimoconv1d, name='NConv_%d_hs2' % i)(Signal(jnp.abs(hs2)**2, td2),
                                                                         taps=ntaps,
-                                                                        kernel_init=n_init))
+                                                                        kernel_init=n_init)
         hidden_state2 = jnp.exp(1j * c_hs2) * hs2[t_hs2.start - td2.start: t_hs2.stop - td2.stop + hs2.shape[0]]
 
     # 最后进行融合
