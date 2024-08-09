@@ -337,7 +337,7 @@ def channel_shuffle(x, groups):
     return x
 
 from jax.nn.initializers import orthogonal
-  
+from jax.nn.initializers import orthogonal, glorot_uniform 
 # ############### 
 
 # def squeeze_excite_attention(x):
