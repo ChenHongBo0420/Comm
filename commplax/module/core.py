@@ -452,10 +452,10 @@ class TwoLayerRNN:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
         # 第一层计算并应用 ReLU 激活函数
-        hidden_state1 = relu(jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1))
+        hidden_state1 = nn.relu(jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1))
 
         # 第二层计算并应用 ReLU 激活函数
-        hidden_state2 = relu(jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2))
+        hidden_state2 = nn.relu(jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2))
 
         # 输出计算
         output = jnp.dot(hidden_state2, self.Why)
