@@ -404,6 +404,7 @@ class LinearRNN:
         output = jnp.dot(hidden_state, self.Why)
         
         return output
+      
 def fdbp(
     scope: Scope,
     signal,
@@ -420,14 +421,13 @@ def fdbp(
     output_dim = x.shape[1]
     rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
     hidden_state = None
-    # x = rnn_layer(x, hidden_state)
-    x = complex_channel_attention(x)
+    x = rnn_layer(x, hidden_state)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
-        # x = complex_channel_attention(x)
+        x = complex_channel_attention(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
