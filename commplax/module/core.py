@@ -430,6 +430,7 @@ class LinearRNN:
 #         return output
 
 
+
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
@@ -451,10 +452,8 @@ class TwoLayerRNN:
         hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
         hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
         output = jnp.dot(hidden_state2, self.Why)
-        print(f"hidden_state1 shape: {hidden_state1.shape}")
-        print(f"hidden_state2 shape: {hidden_state2.shape}")
-        print(f"output shape: {output.shape}")
-        return output
+
+        return output, hidden_state1, hidden_state2
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
@@ -464,6 +463,31 @@ class LinearLayer:
         return jnp.dot(x, self.W)    
       
       
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     input_dim = x.shape[1]
+#     hidden_size = 2  
+#     output_dim = x.shape[1]
+#     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+#     x = rnn_layer(x)
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         # x = complex_channel_attention(x)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp(
     scope: Scope,
     signal,
@@ -473,23 +497,44 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss):
+    
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     input_dim = x.shape[1]
     hidden_size = 2  
     output_dim = x.shape[1]
-    # rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
+    
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x)
+    
+    # 初始 RNN 输出
+    rnn_output, hidden_state1, hidden_state2 = rnn_layer(x, hidden_state1, hidden_state2)
+    
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        # x = complex_channel_attention(x)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
+        # 独立处理 Signal(x, t)
+        x, td = scope.child(dconv, name='DConv_%d_x' % i)(Signal(x, t))
+        c_x, t_x = scope.child(mimoconv1d, name='NConv_%d_x' % i)(Signal(jnp.abs(x)**2, td),
+                                                                  taps=ntaps,
+                                                                  kernel_init=n_init)
+        x = jnp.exp(1j * c_x) * x[t_x.start - td.start: t_x.stop - td.stop + x.shape[0]]
+        
+        # 独立处理 Signal(hidden_state1, t)
+        hs1, td1 = scope.child(dconv, name='DConv_%d_hs1' % i)(Signal(hidden_state1, t))
+        c_hs1, t_hs1 = scope.child(mimoconv1d, name='NConv_%d_hs1' % i)(Signal(jnp.abs(hs1)**2, td1),
+                                                                        taps=ntaps,
+                                                                        kernel_init=n_init)
+        hidden_state1 = jnp.exp(1j * c_hs1) * hs1[t_hs1.start - td1.start: t_hs1.stop - td1.stop + hs1.shape[0]]
+        
+        # 独立处理 Signal(hidden_state2, t)
+        hs2, td2 = scope.child(dconv, name='DConv_%d_hs2' % i)(Signal(hidden_state2, t))
+        c_hs2, t_hs2 = scope.child(mimoconv1d, name='NConv_%d_hs2' % i)(Signal(jnp.abs(hs2)**2, td2),
+                                                                        taps=ntaps,
+                                                                        kernel_init=n_init)
+        hidden_state2 = jnp.exp(1j * c_hs2) * hs2[t_hs2.start - td2.start: t_hs2.stop - td2.stop + hs2.shape[0]]
 
+    final_output = x + hidden_state1 + hidden_state2
+    
+    return Signal(final_output, t)
+      
 def identity(scope, inputs):
     return inputs
 
