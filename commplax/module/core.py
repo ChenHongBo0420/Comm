@@ -373,7 +373,15 @@ from jax.nn.initializers import orthogonal
 #         output = jnp.dot(hidden_state, self.Why)
         
 #         return output
-      
+
+def channel_shuffle(x, groups):
+    batch_size, channels = x.shape
+    assert channels % groups == 0, "channels should be divisible by groups"
+    channels_per_group = channels // groups
+    x = x.reshape(batch_size, groups, channels_per_group)
+    x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
+    return x    
+
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
@@ -421,6 +429,7 @@ def fdbp(
     output_dim = x.shape[1]
     rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
     hidden_state = None
+    x = channel_shuffle(x, 2)
     x = rnn_layer(x, hidden_state)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
