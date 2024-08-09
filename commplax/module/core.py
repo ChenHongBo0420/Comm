@@ -185,38 +185,16 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-#     running_mean = scope.variable('norm', 'running_mean',
-#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-#     if mode == 'train':
-#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-#     else:
-#         mean = running_mean.value
-#     return signal / jnp.sqrt(mean)
-
 def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-    # 初始化运行均值
     running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: jnp.ones(signal.val.shape[-1]))
-    
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        # 计算当前批次的能量均值
         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-        # 更新运行均值
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
-        # 使用运行均值
         mean = running_mean.value
-    
-    # 归一化信号
-    norm_signal = signal / jnp.sqrt(mean)
-    
-    # 幂法归一化
-    gamma = 0.5  # 可以根据需要调整
-    norm_signal = norm_signal * (1 - (1 - jnp.abs(norm_signal))**gamma)
-    
-    return norm_signal 
+    return signal / jnp.sqrt(mean)
+
   
 def conv1d(
     scope: Scope,
@@ -395,27 +373,6 @@ from jax.nn.initializers import orthogonal
 #         output = jnp.dot(hidden_state, self.Why)
         
 #         return output
-
-class NaiveFourierKANLayer:
-    def __init__(self, input_dim, initial_gridsize=10, add_bias=True):
-        self.input_dim = input_dim
-        self.initial_gridsize = initial_gridsize
-        self.add_bias = add_bias
-        self.gridsize_param = zeros()(jax.random.PRNGKey(0), (1,))
-        self.fouriercoeffs = xavier_uniform()(jax.random.PRNGKey(1), (2, input_dim, initial_gridsize + 1))
-        if self.add_bias:
-            self.bias = zeros()(jax.random.PRNGKey(2), (input_dim,))
-
-    def __call__(self, x):
-        gridsize = jax.lax.clamp(1, self.gridsize_param, self.initial_gridsize).round().astype(jnp.int32)
-        k = jnp.arange(1, gridsize + 1).reshape(1, -1)  # (1, gridsize)
-        c = jnp.cos(k * x[:, :, None])  # (batch_size, channels, gridsize)
-        s = jnp.sin(k * x[:, :, None])  # (batch_size, channels, gridsize)
-        y = jnp.sum(c * self.fouriercoeffs[0, :, :gridsize], axis=-1)  # (batch_size, channels)
-        y += jnp.sum(s * self.fouriercoeffs[1, :, :gridsize], axis=-1)  # (batch_size, channels)
-        if self.add_bias:
-            y += self.bias
-        return y
       
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
@@ -431,7 +388,23 @@ def complex_channel_attention(x):
     x_imag = squeeze_excite_attention(x_imag)
     x = x_real + 1j * x_imag
     return x
-  
+
+class OrthogonalSinCosRNN:
+    def __init__(self, input_dim, hidden_size, output_dim):
+        self.hidden_size = hidden_size
+        self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+        self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+        self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+    
+    def __call__(self, x, hidden_state=None):
+        if hidden_state is None:
+            hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+        
+        # 使用 sin 和 cos 进行正交变换
+        hidden_state = jnp.sin(jnp.dot(x, self.Wxh)) + jnp.cos(jnp.dot(hidden_state, self.Whh))
+        output = jnp.dot(hidden_state, self.Why)
+        
+        return output 
 def fdbp(
     scope: Scope,
     signal,
@@ -443,14 +416,13 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    fourier_layer = NaiveFourierKANLayer(input_dim=x.shape[1], initial_gridsize=10, add_bias=True)
+   
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         # x = complex_channel_attention(x)
-        x = fourier_layer(x)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
