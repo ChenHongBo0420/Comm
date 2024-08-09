@@ -507,7 +507,7 @@ def fdbp(
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     
     # 初始 RNN 输出
-    rnn_output, hidden_state1, hidden_state2 = rnn_layer(x, hidden_state1, hidden_state2)
+    rnn_output, hidden_state1, hidden_state2 = rnn_layer(x)
     
     for i in range(steps):
         # 独立处理 Signal(x, t)
