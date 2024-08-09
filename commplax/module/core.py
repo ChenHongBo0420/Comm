@@ -438,6 +438,49 @@ class TwoLayerRNN:
         
         return output
       
+class ThreeLayerRNN:
+    def __init__(self, input_dim, hidden_size1, hidden_size2, hidden_size3, output_dim):
+        self.hidden_size1 = hidden_size1
+        self.hidden_size2 = hidden_size2
+        self.hidden_size3 = hidden_size3
+
+        # 第一层的权重矩阵
+        self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
+        self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+
+        # 第二层的权重矩阵
+        self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
+
+        # 第三层的权重矩阵
+        self.Wxh3 = orthogonal()(random.PRNGKey(4), (hidden_size2, hidden_size3))
+        self.Whh3 = orthogonal()(random.PRNGKey(5), (hidden_size3, hidden_size3))
+
+        # 输出层的权重矩阵
+        self.Why = orthogonal()(random.PRNGKey(6), (hidden_size3, output_dim))
+    
+    def __call__(self, x, hidden_state1=None, hidden_state2=None, hidden_state3=None):
+        if hidden_state1 is None:
+            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+        if hidden_state2 is None:
+            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        if hidden_state3 is None:
+            hidden_state3 = jnp.zeros((x.shape[0], self.hidden_size3))
+        
+        # 第一层计算
+        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+
+        # 第二层计算
+        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+
+        # 第三层计算
+        hidden_state3 = jnp.dot(hidden_state2, self.Wxh3) + jnp.dot(hidden_state3, self.Whh3)
+
+        # 输出计算
+        output = jnp.dot(hidden_state3, self.Why)
+        
+        return output
+      
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
@@ -458,10 +501,11 @@ def fdbp(
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     input_dim = x.shape[1]
-    hidden_size = 4  
+    hidden_size = 2  
     output_dim = x.shape[1]
     # rnn_layer = LinearRNN(input_dim, hidden_size, output_dim)
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    rnn_layer = ThreeLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
