@@ -464,7 +464,7 @@ class TwoLayerRNN:
             outputs.append(output)
 
         # 合并多个头的输出
-        final_output = jnp.mean(jnp.stack(outputs, axis=-1), axis=-1)  # 这里使用平均值，也可以选择其他合并策略
+        final_output = jnp.max(jnp.stack(outputs, axis=-1), axis=-1)  # 这里使用平均值，也可以选择其他合并策略
 
         return final_output
       
