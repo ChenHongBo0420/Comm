@@ -479,10 +479,9 @@ def complex_channel_attention(x):
 
 def generate_hippo_matrix(size):
     n = size
-    P = jnp.arange(1, n+1)
+    freq = np.fft.fftfreq(n)  # 生成频率域
+    P = jnp.fft.ifft(jnp.exp(-jnp.abs(freq) * jnp.pi)).real  # 设计一个简单的低通滤波器
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
-    asymmetry = jnp.triu(jnp.ones((n, n)), 1) * 0.5  # 引入非对称元素，倾向于未来
-    A += asymmetry
     return A
 
 class TwoLayerRNN:
