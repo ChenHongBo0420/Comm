@@ -517,6 +517,7 @@ class TwoLayerRNN:
         self.B2_layer = LinearLayer(hidden_size1, hidden_size2)
 
         # 观测矩阵 C 使用 LinearLayer 进行初始化
+        # 注意这里需要确保 C 的输出维度是 (hidden_size2, output_dim)
         self.C_layer = LinearLayer(hidden_size2, output_dim)
     
     def s_B(self, x, step):
@@ -543,10 +544,10 @@ class TwoLayerRNN:
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + B2
 
         # 动态生成 C 矩阵并计算输出
-        C = self.s_C(hidden_state2, step)
-        output = jnp.dot(hidden_state2, C)
+        output = self.s_C(hidden_state2, step)
 
         return output
+
       
 # def fdbp(
 #     scope: Scope,
