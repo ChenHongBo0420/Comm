@@ -430,49 +430,54 @@ class LinearRNN:
 #         return output
 
 
-
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
 
-        # 第一层权重矩阵
-        self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
-        self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
-        
-        # 门控权重矩阵
-        self.Wg1 = orthogonal()(random.PRNGKey(2), (input_dim, hidden_size1))
-        self.Ug1 = orthogonal()(random.PRNGKey(3), (hidden_size1, hidden_size1))
+        # 前向 RNN 权重矩阵
+        self.Wxh1_fwd = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
+        self.Whh1_fwd = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+        self.Wxh2_fwd = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.Whh2_fwd = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
 
-        # 第二层权重矩阵
-        self.Wxh2 = orthogonal()(random.PRNGKey(4), (hidden_size1, hidden_size2))
-        self.Whh2 = orthogonal()(random.PRNGKey(5), (hidden_size2, hidden_size2))
-        
-        # 门控权重矩阵
-        self.Wg2 = orthogonal()(random.PRNGKey(6), (hidden_size1, hidden_size2))
-        self.Ug2 = orthogonal()(random.PRNGKey(7), (hidden_size2, hidden_size2))
+        # 后向 RNN 权重矩阵
+        self.Wxh1_bwd = orthogonal()(random.PRNGKey(4), (input_dim, hidden_size1))
+        self.Whh1_bwd = orthogonal()(random.PRNGKey(5), (hidden_size1, hidden_size1))
+        self.Wxh2_bwd = orthogonal()(random.PRNGKey(6), (hidden_size1, hidden_size2))
+        self.Whh2_bwd = orthogonal()(random.PRNGKey(7), (hidden_size2, hidden_size2))
 
         # 输出层权重矩阵
-        self.Why = orthogonal()(random.PRNGKey(8), (hidden_size2, output_dim))
+        self.Why = orthogonal()(random.PRNGKey(8), (hidden_size2 * 2, output_dim))  # 双向的输出需要加倍
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
-        if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
-        # 第一层计算
-        gate1 = nn.sigmoid(jnp.dot(x, self.Wg1) + jnp.dot(hidden_state1, self.Ug1))
-        hidden_state1_new = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
-        hidden_state1 = gate1 * hidden_state1_new + (1 - gate1) * hidden_state1  # 门控机制
+    def __call__(self, x, hidden_state1_fwd=None, hidden_state2_fwd=None, hidden_state1_bwd=None, hidden_state2_bwd=None):
+        # 初始化前向和后向的隐藏状态
+        if hidden_state1_fwd is None:
+            hidden_state1_fwd = jnp.zeros((x.shape[0], self.hidden_size1))
+        if hidden_state2_fwd is None:
+            hidden_state2_fwd = jnp.zeros((x.shape[0], self.hidden_size2))
+        if hidden_state1_bwd is None:
+            hidden_state1_bwd = jnp.zeros((x.shape[0], self.hidden_size1))
+        if hidden_state2_bwd is None:
+            hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
 
-        # 第二层计算
-        gate2 = nn.sigmoid(jnp.dot(hidden_state1, self.Wg2) + jnp.dot(hidden_state2, self.Ug2))
-        hidden_state2_new = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
-        hidden_state2 = gate2 * hidden_state2_new + (1 - gate2) * hidden_state2  # 门控机制
+        # 前向 RNN 计算
+        for t in range(x.shape[1]):
+            xt = x[:, t, :]
+            hidden_state1_fwd = jnp.dot(xt, self.Wxh1_fwd) + jnp.dot(hidden_state1_fwd, self.Whh1_fwd)
+            hidden_state2_fwd = jnp.dot(hidden_state1_fwd, self.Wxh2_fwd) + jnp.dot(hidden_state2_fwd, self.Whh2_fwd)
+
+        # 后向 RNN 计算
+        for t in reversed(range(x.shape[1])):
+            xt = x[:, t, :]
+            hidden_state1_bwd = jnp.dot(xt, self.Wxh1_bwd) + jnp.dot(hidden_state1_bwd, self.Whh1_bwd)
+            hidden_state2_bwd = jnp.dot(hidden_state1_bwd, self.Wxh2_bwd) + jnp.dot(hidden_state2_bwd, self.Whh2_bwd)
+
+        # 将前向和后向的隐藏状态连接起来
+        combined_hidden_state2 = jnp.concatenate([hidden_state2_fwd, hidden_state2_bwd], axis=-1)
 
         # 输出计算
-        output = jnp.dot(hidden_state2, self.Why)
+        output = jnp.dot(combined_hidden_state2, self.Why)
 
         return output
       
