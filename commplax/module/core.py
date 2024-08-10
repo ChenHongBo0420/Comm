@@ -428,6 +428,30 @@ class LinearRNN:
 #         output = jnp.dot(hidden_state2, self.Why)
         
 #         return output
+
+class TwoLayerRNN:
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+        self.hidden_size1 = hidden_size1
+        self.hidden_size2 = hidden_size2
+
+        self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
+        self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+        self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
+
+        self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+    
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+        if hidden_state1 is None:
+            hidden_state1 = orthogonal()(random.PRNGKey(5), (x.shape[0], self.hidden_size1))
+        if hidden_state2 is None:
+            hidden_state2 = orthogonal()(random.PRNGKey(6), (x.shape[0], self.hidden_size2))
+        
+        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+        output = jnp.dot(hidden_state2, self.Why)
+        
+        return output
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
