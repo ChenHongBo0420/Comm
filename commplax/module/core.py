@@ -477,14 +477,12 @@ def complex_channel_attention(x):
 #     A = orthogonal()(jax.random.PRNGKey(0), (size, size))
 #     return A
 
-def generate_hippo_matrix(size, num_scales=3):
+def generate_hippo_matrix(size):
     n = size
-    A = jnp.zeros((n, n))
-    for scale in range(1, num_scales + 1):
-        kernel = jnp.ones((scale,)) / scale  # 简单均匀卷积核
-        for i in range(n):
-            if i + scale < n:
-                A = A.at[i, i:i+scale].add(kernel)
+    P = jnp.arange(1, n+1)
+    A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
+    asymmetry = jnp.triu(jnp.ones((n, n)), 1) * 0.5  # 引入非对称元素，倾向于未来
+    A += asymmetry
     return A
 
 class TwoLayerRNN:
