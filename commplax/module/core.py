@@ -431,7 +431,7 @@ class LinearRNN:
 
 
 
-class TwoLayerRNNWithContext:
+class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
