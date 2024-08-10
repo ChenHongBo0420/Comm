@@ -434,25 +434,29 @@ class TwoLayerRNN:
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
 
-        self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
-        self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
-        self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-        self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
+        # 状态转移矩阵 A 和输入矩阵 B
+        self.A1 = orthogonal()(random.PRNGKey(0), (hidden_size1, hidden_size1))
+        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+        self.A2 = orthogonal()(random.PRNGKey(2), (hidden_size2, hidden_size2))
+        self.B2 = orthogonal()(random.PRNGKey(3), (hidden_size1, hidden_size2))
 
-        self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+        # 观测矩阵 C
+        self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
-            hidden_state1 = jnp.ones((x.shape[0], self.hidden_size1))
+            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
-            hidden_state2 = jnp.ones((x.shape[0], self.hidden_size2))
+            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
-        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
-        output = jnp.dot(hidden_state2, self.Why)
+        # 状态方程
+        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        
+        # 观测方程
+        output = jnp.dot(hidden_state2, self.C)
         
         return output
-      
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
