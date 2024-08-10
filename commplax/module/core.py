@@ -523,12 +523,12 @@ class TwoLayerRNN:
     def s_B(self, x, step):
         # 使用线性层 B1 和 B2 进行动态计算
         B1 = self.B1_layer(x)
-        B2 = self.B2_layer(jnp.sin(step) * x)
+        B2 = self.B2_layer(step * x)
         return B1, B2
 
     def s_C(self, hidden_state2, step):
         # 使用线性层 C 进行动态计算
-        return self.C_layer(hidden_state2 * jnp.cos(step))
+        return self.C_layer(hidden_state2 * step)
 
     def __call__(self, x, hidden_state1=None, hidden_state2=None, step=0):
         if hidden_state1 is None:
