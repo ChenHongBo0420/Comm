@@ -458,14 +458,20 @@ def complex_channel_attention(x):
         
 #         return output
 
+# def generate_hippo_matrix(size):
+#     # 1.下三角
+#     n = size
+#     P = jnp.arange(1, n+1)
+#     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
+#     return A
+
+
 def generate_hippo_matrix(size):
-    # 这里生成一个简单的 HIPPO 矩阵
-    # 实际上，HIPPO 矩阵可以更复杂，且要根据需要调整
     n = size
-    P = jnp.arange(1, n+1)
+    P = jnp.log1p(jnp.arange(1, n+1))  # 使用对数函数生成对角元素
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
-
+  
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
