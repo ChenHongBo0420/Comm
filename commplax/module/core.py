@@ -436,11 +436,15 @@ class TwoLayerRNN:
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
 
+        # 第一层权重矩阵
         self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
         self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+
+        # 第二层权重矩阵
         self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
         self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
 
+        # 输出层权重矩阵
         self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
@@ -449,8 +453,15 @@ class TwoLayerRNN:
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
-        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+        # 第一层计算
+        hidden_state1_new = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+        hidden_state1 = hidden_state1_new + hidden_state1  # 添加残差连接
+        
+        # 第二层计算
+        hidden_state2_new = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+        hidden_state2 = hidden_state2_new + hidden_state2  # 添加残差连接
+        
+        # 输出计算
         output = jnp.dot(hidden_state2, self.Why)
 
         return output
