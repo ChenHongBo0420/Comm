@@ -495,7 +495,14 @@ def generate_hippo_matrix(size):
 #         output = jnp.dot(hidden_state2, self.C)
         
 #         return output
-
+      
+class LinearLayer:
+    def __init__(self, input_dim, output_dim):
+        self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
+        
+    def __call__(self, x):
+        return jnp.dot(x, self.W)  
+      
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
@@ -504,50 +511,43 @@ class TwoLayerRNN:
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
         self.A1 = generate_hippo_matrix(hidden_size1)
         self.A2 = generate_hippo_matrix(hidden_size2)
-
-        self.input_dim = input_dim
-        self.output_dim = output_dim
         
-        # 动态权重生成函数, 用于动态生成 B 和 C 矩阵
-        self.dyn_B1 = nn.Dense(hidden_size1)
-        self.dyn_B2 = nn.Dense(hidden_size2)
-        self.dyn_C = nn.Dense(output_dim)
+        # 输入矩阵 B 使用 LinearLayer 进行初始化
+        self.B1_layer = LinearLayer(input_dim, hidden_size1)
+        self.B2_layer = LinearLayer(hidden_size1, hidden_size2)
+
+        # 观测矩阵 C 使用 LinearLayer 进行初始化
+        self.C_layer = LinearLayer(hidden_size2, output_dim)
     
     def s_B(self, x, step):
-        # 根据输入 x 和时间步长 step 动态生成 B 矩阵
-        return self.dyn_B1(x) + self.dyn_B2(jnp.sin(step) * x)
-    
+        # 使用线性层 B1 和 B2 进行动态计算
+        B1 = self.B1_layer(x)
+        B2 = self.B2_layer(jnp.sin(step) * x)
+        return B1 + B2
+
     def s_C(self, hidden_state2, step):
-        # 根据输入 hidden_state2 和时间步长 step 动态生成 C 矩阵
-        return self.dyn_C(hidden_state2 * jnp.cos(step))
-    
+        # 使用线性层 C 进行动态计算
+        return self.C_layer(hidden_state2 * jnp.cos(step))
+
     def __call__(self, x, hidden_state1=None, hidden_state2=None, step=0):
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
+
         # 动态生成 B 和 C 矩阵
         B1 = self.s_B(x, step)
         B2 = self.s_B(hidden_state1, step)
         C = self.s_C(hidden_state2, step)
-        
+
         # 使用 HIPPO 矩阵进行状态更新
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, B1)
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, B2)
-        
+
         # 观测方程
         output = jnp.dot(hidden_state2, C)
-        
-        return output
-      
-class LinearLayer:
-    def __init__(self, input_dim, output_dim):
-        self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
-        
-    def __call__(self, x):
-        return jnp.dot(x, self.W)    
-      
+
+        return output     
       
 # def fdbp(
 #     scope: Scope,
