@@ -462,16 +462,12 @@ class TwoLayerRNN:
             hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
 
         # 前向 RNN 计算
-        for t in range(x.shape[1]):
-            xt = x[:, t, :]
-            hidden_state1_fwd = jnp.dot(xt, self.Wxh1_fwd) + jnp.dot(hidden_state1_fwd, self.Whh1_fwd)
-            hidden_state2_fwd = jnp.dot(hidden_state1_fwd, self.Wxh2_fwd) + jnp.dot(hidden_state2_fwd, self.Whh2_fwd)
+        hidden_state1_fwd = jnp.dot(x, self.Wxh1_fwd) + jnp.dot(hidden_state1_fwd, self.Whh1_fwd)
+        hidden_state2_fwd = jnp.dot(hidden_state1_fwd, self.Wxh2_fwd) + jnp.dot(hidden_state2_fwd, self.Whh2_fwd)
 
         # 后向 RNN 计算
-        for t in reversed(range(x.shape[1])):
-            xt = x[:, t, :]
-            hidden_state1_bwd = jnp.dot(xt, self.Wxh1_bwd) + jnp.dot(hidden_state1_bwd, self.Whh1_bwd)
-            hidden_state2_bwd = jnp.dot(hidden_state1_bwd, self.Wxh2_bwd) + jnp.dot(hidden_state2_bwd, self.Whh2_bwd)
+        hidden_state1_bwd = jnp.dot(x, self.Wxh1_bwd) + jnp.dot(hidden_state1_bwd, self.Whh1_bwd)
+        hidden_state2_bwd = jnp.dot(hidden_state1_bwd, self.Wxh2_bwd) + jnp.dot(hidden_state2_bwd, self.Whh2_bwd)
 
         # 将前向和后向的隐藏状态连接起来
         combined_hidden_state2 = jnp.concatenate([hidden_state2_fwd, hidden_state2_bwd], axis=-1)
