@@ -490,7 +490,7 @@ class TwoLayerRNN:
         # 观测方程生成输出
         output = jnp.dot(hidden_state1, self.C1) + jnp.dot(hidden_state2, self.C2)
 
-        return output, hidden_state1, hidden_state2
+        return output
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
