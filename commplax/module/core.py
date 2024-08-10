@@ -458,31 +458,43 @@ def complex_channel_attention(x):
         
 #         return output
 
-# def generate_hippo_matrix(size):
-#     # 1.下三角
-#     n = size
-#     P = jnp.arange(1, n+1)
-#     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
-#     return A
-
-
-# def generate_hippo_matrix(size):
-#     # 2.对数函数
-#     n = size
-#     P = jnp.log1p(jnp.arange(1, n+1))  
-#     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
-#     return A
-
-# def generate_hippo_matrix(size):
-#     A = orthogonal()(jax.random.PRNGKey(0), (size, size))
-#     return A
-
 def generate_hippo_matrix(size):
+    # 1.下三角
     n = size
-    freq = np.fft.fftfreq(n)  # 生成频率域
-    P = jnp.fft.ifft(jnp.exp(-jnp.abs(freq) * jnp.pi)).real  # 设计一个简单的低通滤波器
+    P = jnp.arange(1, n+1)
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
+
+# class TwoLayerRNN:
+#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+#         self.hidden_size1 = hidden_size1
+#         self.hidden_size2 = hidden_size2
+
+#         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+#         self.A1 = generate_hippo_matrix(hidden_size1)
+#         self.A2 = generate_hippo_matrix(hidden_size2)
+        
+#         # 输入矩阵 B
+#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+#         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+
+#         # 观测矩阵 C
+#         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+    
+#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
+#         if hidden_state1 is None:
+#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+#         if hidden_state2 is None:
+#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+#         # 使用 HIPPO 矩阵进行状态更新
+#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        
+#         # 观测方程
+#         output = jnp.dot(hidden_state2, self.C)
+        
+#         return output
 
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
@@ -492,26 +504,40 @@ class TwoLayerRNN:
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
         self.A1 = generate_hippo_matrix(hidden_size1)
         self.A2 = generate_hippo_matrix(hidden_size2)
-        
-        # 输入矩阵 B
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
 
-        # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        
+        # 动态权重生成函数, 用于动态生成 B 和 C 矩阵
+        self.dyn_B1 = nn.Dense(hidden_size1)
+        self.dyn_B2 = nn.Dense(hidden_size2)
+        self.dyn_C = nn.Dense(output_dim)
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+    def s_B(self, x, step):
+        # 根据输入 x 和时间步长 step 动态生成 B 矩阵
+        return self.dyn_B1(x) + self.dyn_B2(jnp.sin(step) * x)
+    
+    def s_C(self, hidden_state2, step):
+        # 根据输入 hidden_state2 和时间步长 step 动态生成 C 矩阵
+        return self.dyn_C(hidden_state2 * jnp.cos(step))
+    
+    def __call__(self, x, hidden_state1=None, hidden_state2=None, step=0):
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
+        # 动态生成 B 和 C 矩阵
+        B1 = self.s_B(x, step)
+        B2 = self.s_B(hidden_state1, step)
+        C = self.s_C(hidden_state2, step)
+        
         # 使用 HIPPO 矩阵进行状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, B1)
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, B2)
         
         # 观测方程
-        output = jnp.dot(hidden_state2, self.C)
+        output = jnp.dot(hidden_state2, C)
         
         return output
       
