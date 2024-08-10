@@ -473,10 +473,20 @@ def complex_channel_attention(x):
 #     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
 #     return A
 
-def generate_hippo_matrix(size):
-    A = orthogonal()(jax.random.PRNGKey(0), (size, size))
+# def generate_hippo_matrix(size):
+#     A = orthogonal()(jax.random.PRNGKey(0), (size, size))
+#     return A
+
+def generate_hippo_matrix(size, num_scales=3):
+    n = size
+    A = jnp.zeros((n, n))
+    for scale in range(1, num_scales + 1):
+        kernel = jnp.ones((scale,)) / scale  # 简单均匀卷积核
+        for i in range(n):
+            if i + scale < n:
+                A = A.at[i, i:i+scale].add(kernel)
     return A
-  
+
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
