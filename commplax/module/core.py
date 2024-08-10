@@ -467,7 +467,7 @@ class TwoLayerRNN:
         hidden_state1 = gate1 * hidden_state1_new + (1 - gate1) * hidden_state1  # 门控机制
 
         # 第二层计算
-        gate2 = sigmoid(jnp.dot(hidden_state1, self.Wg2) + jnp.dot(hidden_state2, self.Ug2))
+        gate2 = nn.sigmoid(jnp.dot(hidden_state1, self.Wg2) + jnp.dot(hidden_state2, self.Ug2))
         hidden_state2_new = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
         hidden_state2 = gate2 * hidden_state2_new + (1 - gate2) * hidden_state2  # 门控机制
 
