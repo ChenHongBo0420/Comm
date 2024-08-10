@@ -428,54 +428,6 @@ class LinearRNN:
 #         output = jnp.dot(hidden_state2, self.Why)
         
 #         return output
-
-
-class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-        self.hidden_size1 = hidden_size1
-        self.hidden_size2 = hidden_size2
-
-        # 前向 RNN 权重矩阵
-        self.Wxh1_fwd = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
-        self.Whh1_fwd = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
-        self.Wxh2_fwd = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-        self.Whh2_fwd = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
-
-        # 后向 RNN 权重矩阵
-        self.Wxh1_bwd = orthogonal()(random.PRNGKey(4), (input_dim, hidden_size1))
-        self.Whh1_bwd = orthogonal()(random.PRNGKey(5), (hidden_size1, hidden_size1))
-        self.Wxh2_bwd = orthogonal()(random.PRNGKey(6), (hidden_size1, hidden_size2))
-        self.Whh2_bwd = orthogonal()(random.PRNGKey(7), (hidden_size2, hidden_size2))
-
-        # 输出层权重矩阵
-        self.Why = orthogonal()(random.PRNGKey(8), (hidden_size2, output_dim))
-    
-    def __call__(self, x, hidden_state1_fwd=None, hidden_state2_fwd=None, hidden_state1_bwd=None, hidden_state2_bwd=None):
-        # 初始化前向和后向的隐藏状态
-        if hidden_state1_fwd is None:
-            hidden_state1_fwd = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2_fwd is None:
-            hidden_state2_fwd = jnp.zeros((x.shape[0], self.hidden_size2))
-        if hidden_state1_bwd is None:
-            hidden_state1_bwd = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2_bwd is None:
-            hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
-
-        # 前向 RNN 计算
-        hidden_state1_fwd = jnp.dot(x, self.Wxh1_fwd) + jnp.dot(hidden_state1_fwd, self.Whh1_fwd)
-        hidden_state2_fwd = jnp.dot(hidden_state1_fwd, self.Wxh2_fwd) + jnp.dot(hidden_state2_fwd, self.Whh2_fwd)
-
-        # 后向 RNN 计算
-        hidden_state1_bwd = jnp.dot(x, self.Wxh1_bwd) + jnp.dot(hidden_state1_bwd, self.Whh1_bwd)
-        hidden_state2_bwd = jnp.dot(hidden_state1_bwd, self.Wxh2_bwd) + jnp.dot(hidden_state2_bwd, self.Whh2_bwd)
-
-        # 对前向和后向的隐藏状态进行加权平均或求和
-        combined_hidden_state2 = (hidden_state2_fwd + hidden_state2_bwd) / 2
-
-        # 输出计算
-        output = jnp.dot(combined_hidden_state2, self.Why)
-
-        return output
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
