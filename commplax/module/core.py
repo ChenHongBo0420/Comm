@@ -432,41 +432,49 @@ class LinearRNN:
 
 
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, num_heads=4):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
-        self.num_heads = num_heads
 
-        # 为每个头创建权重矩阵
-        self.Wxh1 = [orthogonal()(random.PRNGKey(i), (input_dim, hidden_size1)) for i in range(num_heads)]
-        self.Whh1 = [orthogonal()(random.PRNGKey(i + num_heads), (hidden_size1, hidden_size1)) for i in range(num_heads)]
-        self.Wxh2 = [orthogonal()(random.PRNGKey(i + 2*num_heads), (hidden_size1, hidden_size2)) for i in range(num_heads)]
-        self.Whh2 = [orthogonal()(random.PRNGKey(i + 3*num_heads), (hidden_size2, hidden_size2)) for i in range(num_heads)]
-        self.Why = [orthogonal()(random.PRNGKey(i + 4*num_heads), (hidden_size2, output_dim)) for i in range(num_heads)]
+        # 第一层权重矩阵
+        self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
+        self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+        
+        # 门控权重矩阵
+        self.Wg1 = orthogonal()(random.PRNGKey(2), (input_dim, hidden_size1))
+        self.Ug1 = orthogonal()(random.PRNGKey(3), (hidden_size1, hidden_size1))
 
+        # 第二层权重矩阵
+        self.Wxh2 = orthogonal()(random.PRNGKey(4), (hidden_size1, hidden_size2))
+        self.Whh2 = orthogonal()(random.PRNGKey(5), (hidden_size2, hidden_size2))
+        
+        # 门控权重矩阵
+        self.Wg2 = orthogonal()(random.PRNGKey(6), (hidden_size1, hidden_size2))
+        self.Ug2 = orthogonal()(random.PRNGKey(7), (hidden_size2, hidden_size2))
+
+        # 输出层权重矩阵
+        self.Why = orthogonal()(random.PRNGKey(8), (hidden_size2, output_dim))
+    
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+        # 第一层计算
+        gate1 = sigmoid(jnp.dot(x, self.Wg1) + jnp.dot(hidden_state1, self.Ug1))
+        hidden_state1_new = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+        hidden_state1 = gate1 * hidden_state1_new + (1 - gate1) * hidden_state1  # 门控机制
 
-        # 通过每个头进行处理
-        outputs = []
-        for i in range(self.num_heads):
-            # 第一层计算
-            hs1 = jnp.dot(x, self.Wxh1[i]) + jnp.dot(hidden_state1, self.Whh1[i])
+        # 第二层计算
+        gate2 = sigmoid(jnp.dot(hidden_state1, self.Wg2) + jnp.dot(hidden_state2, self.Ug2))
+        hidden_state2_new = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+        hidden_state2 = gate2 * hidden_state2_new + (1 - gate2) * hidden_state2  # 门控机制
 
-            # 第二层计算
-            hs2 = jnp.dot(hs1, self.Wxh2[i]) + jnp.dot(hidden_state2, self.Whh2[i])
+        # 输出计算
+        output = jnp.dot(hidden_state2, self.Why)
 
-            # 输出计算
-            output = jnp.dot(hs2, self.Why[i])
-            outputs.append(output)
-
-        # 合并多个头的输出
-        final_output = jnp.max(jnp.stack(outputs, axis=-1), axis=-1)  # 这里使用平均值，也可以选择其他合并策略
-
-        return final_output
+        return output
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
