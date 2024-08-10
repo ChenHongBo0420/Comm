@@ -443,9 +443,9 @@ class TwoLayerRNN:
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
-            hidden_state1 = orthogonal()(random.PRNGKey(5), (x.shape[0], self.hidden_size1))
+            hidden_state1 = jnp.ones((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
-            hidden_state2 = orthogonal()(random.PRNGKey(6), (x.shape[0], self.hidden_size2))
+            hidden_state2 = jnp.ones((x.shape[0], self.hidden_size2))
         
         hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
         hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
