@@ -523,7 +523,7 @@ class TwoLayerRNN:
         # 使用线性层 B1 和 B2 进行动态计算
         B1 = self.B1_layer(x)
         B2 = self.B2_layer(jnp.sin(step) * x)
-        return B1 + B2
+        return B1, B2
 
     def s_C(self, hidden_state2, step):
         # 使用线性层 C 进行动态计算
@@ -535,19 +535,18 @@ class TwoLayerRNN:
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
 
-        # 动态生成 B 和 C 矩阵
-        B1 = self.s_B(x, step)
-        B2 = self.s_B(hidden_state1, step)
-        C = self.s_C(hidden_state2, step)
+        # 动态生成 B1 和 B2 矩阵
+        B1, B2 = self.s_B(x, step)
 
         # 使用 HIPPO 矩阵进行状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, B1)
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, B2)
+        hidden_state1 = jnp.dot(hidden_state1, self.A1) + B1
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + B2
 
-        # 观测方程
+        # 动态生成 C 矩阵并计算输出
+        C = self.s_C(hidden_state2, step)
         output = jnp.dot(hidden_state2, C)
 
-        return output     
+        return output
       
 # def fdbp(
 #     scope: Scope,
