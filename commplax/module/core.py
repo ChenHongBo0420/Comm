@@ -459,7 +459,7 @@ def complex_channel_attention(x):
 #         return output
 
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, num_hidden_states=2):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, num_hidden_states=1):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
         self.num_hidden_states = num_hidden_states
