@@ -466,10 +466,15 @@ def complex_channel_attention(x):
 #     return A
 
 
+# def generate_hippo_matrix(size):
+#     # 2.对数函数
+#     n = size
+#     P = jnp.log1p(jnp.arange(1, n+1))  
+#     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
+#     return A
+
 def generate_hippo_matrix(size):
-    n = size
-    P = jnp.log1p(jnp.arange(1, n+1))  # 使用对数函数生成对角元素
-    A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
+    A = orthogonal()(jax.random.PRNGKey(0), (size, size))
     return A
   
 class TwoLayerRNN:
