@@ -458,41 +458,44 @@ def complex_channel_attention(x):
         
 #         return output
 
+def generate_hippo_matrix(size):
+    # 这里生成一个简单的 HIPPO 矩阵
+    # 实际上，HIPPO 矩阵可以更复杂，且要根据需要调整
+    n = size
+    P = jnp.arange(1, n+1)
+    A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
+    return A
+
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
 
-        # 状态转移矩阵 A 和输入矩阵 B
-        self.A1 = orthogonal()(random.PRNGKey(0), (hidden_size1, hidden_size1))
+        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+        self.A1 = generate_hippo_matrix(hidden_size1)
+        self.A2 = generate_hippo_matrix(hidden_size2)
+        
+        # 输入矩阵 B
         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.A2 = orthogonal()(random.PRNGKey(2), (hidden_size2, hidden_size2))
-        self.B2 = orthogonal()(random.PRNGKey(3), (hidden_size1, hidden_size2))
+        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
 
         # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None, process_noise_std=0.1, observation_noise_std=0.1):
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        # 添加过程噪声
-        process_noise1 = random.normal(random.PRNGKey(5), hidden_state1.shape) * process_noise_std
-        process_noise2 = random.normal(random.PRNGKey(6), hidden_state2.shape) * process_noise_std
-        
-        # 状态方程
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1) + process_noise1
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2) + process_noise2
-        
-        # 添加观测噪声
-        observation_noise = random.normal(random.PRNGKey(7), hidden_state2.shape) * observation_noise_std
+        # 使用 HIPPO 矩阵进行状态更新
+        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
         
         # 观测方程
-        output = jnp.dot(hidden_state2, self.C) + observation_noise
+        output = jnp.dot(hidden_state2, self.C)
         
-        return output
+        return output, hidden_state1, hidden_state2
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
