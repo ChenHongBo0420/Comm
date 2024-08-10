@@ -431,7 +431,7 @@ class LinearRNN:
 
 
 
-class TwoLayerRNN:
+class TwoLayerRNNWithContext:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
@@ -446,6 +446,9 @@ class TwoLayerRNN:
 
         # 输出层权重矩阵
         self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+
+        # 组合上下文的权重矩阵
+        self.W_combined = orthogonal()(random.PRNGKey(5), (input_dim + hidden_size1 + hidden_size2, input_dim))
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
@@ -454,17 +457,19 @@ class TwoLayerRNN:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
         # 第一层计算
-        hidden_state1_new = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
-        hidden_state1 = hidden_state1_new + hidden_state1  # 添加残差连接
-        
-        # 第二层计算
-        hidden_state2_new = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
-        hidden_state2 = hidden_state2_new + hidden_state2  # 添加残差连接
-        
-        # 输出计算
-        output = jnp.dot(hidden_state2, self.Why)
+        hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
 
-        return output
+        # 第二层计算
+        hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+
+        # 组合上下文信息
+        combined_input = jnp.concatenate([x, hidden_state1, hidden_state2], axis=-1)
+        combined_input = jnp.dot(combined_input, self.W_combined)  # 恢复到原始维度
+
+        # 输出计算
+        output = jnp.dot(combined_input, self.Why)
+
+        return output, hidden_state1, hidden_state2
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
