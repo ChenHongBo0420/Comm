@@ -459,16 +459,16 @@ def complex_channel_attention(x):
 #         return output
 
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, num_hidden_states=3):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, num_hidden_states):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
         self.num_hidden_states = num_hidden_states
 
         # 每个隐状态对应的状态转移矩阵 A 和输入矩阵 B
-        self.A1 = [orthogonal()(random.PRNGKey(i), (hidden_size1, hidden_size1)) for i in range(num_hidden_states)]
-        self.B1 = [orthogonal()(random.PRNGKey(i + num_hidden_states), (input_dim, hidden_size1)) for i in range(num_hidden_states)]
-        self.A2 = [orthogonal()(random.PRNGKey(i + 2 * num_hidden_states), (hidden_size2, hidden_size2)) for i in range(num_hidden_states)]
-        self.B2 = [orthogonal()(random.PRNGKey(i + 3 * num_hidden_states), (hidden_size1, hidden_size2)) for i in range(num_hidden_states)]
+        self.A1 = jnp.stack([orthogonal()(random.PRNGKey(i), (hidden_size1, hidden_size1)) for i in range(num_hidden_states)], axis=0)
+        self.B1 = jnp.stack([orthogonal()(random.PRNGKey(i + num_hidden_states), (input_dim, hidden_size1)) for i in range(num_hidden_states)], axis=0)
+        self.A2 = jnp.stack([orthogonal()(random.PRNGKey(i + 2 * num_hidden_states), (hidden_size2, hidden_size2)) for i in range(num_hidden_states)], axis=0)
+        self.B2 = jnp.stack([orthogonal()(random.PRNGKey(i + 3 * num_hidden_states), (hidden_size1, hidden_size2)) for i in range(num_hidden_states)], axis=0)
 
         # 状态转移概率矩阵 P(z_t | z_{t-1})
         self.P_z = jax.nn.softmax(random.normal(random.PRNGKey(4), (num_hidden_states, num_hidden_states)), axis=-1)
@@ -477,20 +477,29 @@ class TwoLayerRNN:
         self.C = orthogonal()(random.PRNGKey(5), (hidden_size2, output_dim))
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None, z_t_minus_1=None):
+        batch_size = x.shape[0]
+
         if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+            hidden_state1 = jnp.zeros((batch_size, self.hidden_size1))
         if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+            hidden_state2 = jnp.zeros((batch_size, self.hidden_size2))
         if z_t_minus_1 is None:
-            z_t_minus_1 = jnp.zeros((x.shape[0], self.num_hidden_states))
+            z_t_minus_1 = jnp.zeros((batch_size, self.num_hidden_states))
         
-        # 根据上一时刻的隐状态 z_t_minus_1，选择当前的隐状态 z_t
-        z_t_prob = jnp.dot(z_t_minus_1, self.P_z)  # 计算每个可能的 z_t 的概率分布
-        z_t = jax.random.categorical(random.PRNGKey(6), jnp.log(z_t_prob))  # 随机采样得到当前的 z_t
+        # 计算每个可能的 z_t 的概率分布
+        z_t_prob = jax.nn.softmax(jnp.dot(z_t_minus_1, self.P_z), axis=-1)
+        
+        # 对于批处理中的每个样本，采样一个 z_t
+        z_t = jax.random.categorical(random.PRNGKey(6), jnp.log(z_t_prob), axis=-1)
 
         # 使用 z_t 对应的矩阵来更新状态
-        hidden_state1 = jnp.dot(hidden_state1, self.A1[z_t]) + jnp.dot(x, self.B1[z_t])
-        hidden_state2 = jnp.dot(hidden_state2, self.A2[z_t]) + jnp.dot(hidden_state1, self.B2[z_t])
+        A1_z_t = self.A1[z_t]  # 从批次中每个样本的 z_t 中选择对应的矩阵
+        B1_z_t = self.B1[z_t]
+        A2_z_t = self.A2[z_t]
+        B2_z_t = self.B2[z_t]
+
+        hidden_state1 = jnp.einsum('ij,ikj->ik', hidden_state1, A1_z_t) + jnp.einsum('ij,ikj->ik', x, B1_z_t)
+        hidden_state2 = jnp.einsum('ij,ikj->ik', hidden_state2, A2_z_t) + jnp.einsum('ij,ikj->ik', hidden_state1, B2_z_t)
         
         # 观测方程
         output = jnp.dot(hidden_state2, self.C)
