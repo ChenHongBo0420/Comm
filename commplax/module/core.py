@@ -448,7 +448,7 @@ class TwoLayerRNN:
         self.Whh2_bwd = orthogonal()(random.PRNGKey(7), (hidden_size2, hidden_size2))
 
         # 输出层权重矩阵
-        self.Why = orthogonal()(random.PRNGKey(8), (hidden_size2 * 2, output_dim))  # 双向的输出需要加倍
+        self.Why = orthogonal()(random.PRNGKey(8), (hidden_size2, output_dim))
     
     def __call__(self, x, hidden_state1_fwd=None, hidden_state2_fwd=None, hidden_state1_bwd=None, hidden_state2_bwd=None):
         # 初始化前向和后向的隐藏状态
@@ -469,8 +469,8 @@ class TwoLayerRNN:
         hidden_state1_bwd = jnp.dot(x, self.Wxh1_bwd) + jnp.dot(hidden_state1_bwd, self.Whh1_bwd)
         hidden_state2_bwd = jnp.dot(hidden_state1_bwd, self.Wxh2_bwd) + jnp.dot(hidden_state2_bwd, self.Whh2_bwd)
 
-        # 将前向和后向的隐藏状态连接起来
-        combined_hidden_state2 = jnp.concatenate([hidden_state2_fwd, hidden_state2_bwd], axis=-1)
+        # 对前向和后向的隐藏状态进行加权平均或求和
+        combined_hidden_state2 = (hidden_state2_fwd + hidden_state2_bwd) / 2
 
         # 输出计算
         output = jnp.dot(combined_hidden_state2, self.Why)
