@@ -459,37 +459,42 @@ def complex_channel_attention(x):
 #         return output
 
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, num_hidden_states=3):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
+        self.num_hidden_states = num_hidden_states
 
-        # 第一层（低层）状态方程参数
-        self.A1 = orthogonal()(random.PRNGKey(0), (hidden_size1, hidden_size1))
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+        # 每个隐状态对应的状态转移矩阵 A 和输入矩阵 B
+        self.A1 = [orthogonal()(random.PRNGKey(i), (hidden_size1, hidden_size1)) for i in range(num_hidden_states)]
+        self.B1 = [orthogonal()(random.PRNGKey(i + num_hidden_states), (input_dim, hidden_size1)) for i in range(num_hidden_states)]
+        self.A2 = [orthogonal()(random.PRNGKey(i + 2 * num_hidden_states), (hidden_size2, hidden_size2)) for i in range(num_hidden_states)]
+        self.B2 = [orthogonal()(random.PRNGKey(i + 3 * num_hidden_states), (hidden_size1, hidden_size2)) for i in range(num_hidden_states)]
 
-        # 第二层（高层）状态方程参数
-        self.A2 = orthogonal()(random.PRNGKey(2), (hidden_size2, hidden_size2))
-        self.B2 = orthogonal()(random.PRNGKey(3), (hidden_size1, hidden_size2))
+        # 状态转移概率矩阵 P(z_t | z_{t-1})
+        self.P_z = jax.nn.softmax(random.normal(random.PRNGKey(4), (num_hidden_states, num_hidden_states)), axis=-1)
 
-        # 观测方程参数
-        self.C1 = orthogonal()(random.PRNGKey(4), (hidden_size1, output_dim))
-        self.C2 = orthogonal()(random.PRNGKey(5), (hidden_size2, output_dim))
+        # 观测矩阵 C
+        self.C = orthogonal()(random.PRNGKey(5), (hidden_size2, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+    def __call__(self, x, hidden_state1=None, hidden_state2=None, z_t_minus_1=None):
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        if z_t_minus_1 is None:
+            z_t_minus_1 = jnp.zeros((x.shape[0], self.num_hidden_states))
+        
+        # 根据上一时刻的隐状态 z_t_minus_1，选择当前的隐状态 z_t
+        z_t_prob = jnp.dot(z_t_minus_1, self.P_z)  # 计算每个可能的 z_t 的概率分布
+        z_t = jax.random.categorical(random.PRNGKey(6), jnp.log(z_t_prob))  # 随机采样得到当前的 z_t
 
-        # 第一层状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-
-        # 第二层状态更新
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-
-        # 观测方程生成输出
-        output = jnp.dot(hidden_state1, self.C1) + jnp.dot(hidden_state2, self.C2)
-
+        # 使用 z_t 对应的矩阵来更新状态
+        hidden_state1 = jnp.dot(hidden_state1, self.A1[z_t]) + jnp.dot(x, self.B1[z_t])
+        hidden_state2 = jnp.dot(hidden_state2, self.A2[z_t]) + jnp.dot(hidden_state1, self.B2[z_t])
+        
+        # 观测方程
+        output = jnp.dot(hidden_state2, self.C)
+        
         return output
       
 class LinearLayer:
