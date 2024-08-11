@@ -495,9 +495,16 @@ def generate_hippo_matrix(size):
         
 #         return output
       
+# class LinearLayer:
+#     def __init__(self, input_dim, output_dim):
+#         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
+        
+#     def __call__(self, x):
+#         return jnp.dot(x, self.W) 
+
 class LinearLayer:
-    def __init__(self, input_dim, output_dim):
-        self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
+    def __init__(self, input_dim, output_dim, key):
+        self.W = random.normal(key, (input_dim, output_dim))
         
     def __call__(self, x):
         return jnp.dot(x, self.W) 
