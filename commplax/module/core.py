@@ -459,7 +459,6 @@ def complex_channel_attention(x):
 #         return output
 
 def generate_hippo_matrix(size):
-    # 1.下三角
     n = size
     P = jnp.arange(1, n+1)
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
@@ -502,52 +501,6 @@ class LinearLayer:
         
     def __call__(self, x):
         return jnp.dot(x, self.W)  
-      
-class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-        self.hidden_size1 = hidden_size1
-        self.hidden_size2 = hidden_size2
-
-        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-        self.A1 = generate_hippo_matrix(hidden_size1)
-        self.A2 = generate_hippo_matrix(hidden_size2)
-        
-        # 输入矩阵 B 使用 LinearLayer 进行初始化
-        self.B1_layer = LinearLayer(input_dim, hidden_size1)
-        self.B2_layer = LinearLayer(hidden_size1, hidden_size2)
-
-        # 观测矩阵 C 使用 LinearLayer 进行初始化
-        # 注意这里需要确保 C 的输出维度是 (hidden_size2, output_dim)
-        self.C_layer = LinearLayer(hidden_size2, output_dim)
-    
-    def s_B(self, x, step):
-        # 使用线性层 B1 和 B2 进行动态计算
-        B1 = self.B1_layer(x)
-        B2 = self.B2_layer(step * x)
-        return B1, B2
-
-    def s_C(self, hidden_state2, step):
-        # 使用线性层 C 进行动态计算
-        return self.C_layer(hidden_state2 * step)
-
-    def __call__(self, x, hidden_state1=None, hidden_state2=None, step=0):
-        if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-
-        # 动态生成 B1 和 B2 矩阵
-        B1, B2 = self.s_B(x, step)
-
-        # 使用 HIPPO 矩阵进行状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + B1
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + B2
-
-        # 动态生成 C 矩阵并计算输出
-        output = self.s_C(hidden_state2, step)
-
-        return output
-
       
 # def fdbp(
 #     scope: Scope,
