@@ -491,7 +491,7 @@ class TwoLayerRNN:
         hidden_state1 = complex_channel_attention(hidden_state1)  # 应用注意力机制
 
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        hidden_state2 = complex_channel_attention(hidden_state2)  # 应用注意力机制
+        hidden_state2 = squeeze_excite_attention(hidden_state2)  # 应用注意力机制
         
         # 观测方程
         output = jnp.dot(hidden_state2, self.C)
