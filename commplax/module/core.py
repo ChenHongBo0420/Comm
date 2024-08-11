@@ -494,8 +494,14 @@ def generate_hippo_matrix(size):
 #         output = jnp.dot(hidden_state2, self.C)
         
 #         return output
-
-
+      
+class LinearLayer:
+    def __init__(self, input_dim, output_dim):
+        self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
+        
+    def __call__(self, x):
+        return jnp.dot(x, self.W) 
+      
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
@@ -507,45 +513,35 @@ class TwoLayerRNN:
         self.A1_bwd = generate_hippo_matrix(hidden_size1)
         self.A2_bwd = generate_hippo_matrix(hidden_size2)
         
-        # 输入矩阵 B
-        self.B1_fwd = random.orthogonal(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.B2_fwd = random.orthogonal(random.PRNGKey(2), (hidden_size1, hidden_size2))
-        self.B1_bwd = random.orthogonal(random.PRNGKey(3), (input_dim, hidden_size1))
-        self.B2_bwd = random.orthogonal(random.PRNGKey(4), (hidden_size1, hidden_size2))
-
-        # 观测矩阵 C
-        self.C_fwd = random.orthogonal(random.PRNGKey(5), (hidden_size2, output_dim))
-        self.C_bwd = random.orthogonal(random.PRNGKey(6), (hidden_size2, output_dim))
+        # 输入矩阵 B 和观测矩阵 C
+        self.B1_layer_fwd = LinearLayer(input_dim, hidden_size1, random.PRNGKey(1))
+        self.B2_layer_fwd = LinearLayer(hidden_size1, hidden_size2, random.PRNGKey(2))
+        self.B1_layer_bwd = LinearLayer(input_dim, hidden_size1, random.PRNGKey(3))
+        self.B2_layer_bwd = LinearLayer(hidden_size1, hidden_size2, random.PRNGKey(4))
+        self.C_layer_fwd = LinearLayer(hidden_size2, output_dim, random.PRNGKey(5))
+        self.C_layer_bwd = LinearLayer(hidden_size2, output_dim, random.PRNGKey(6))
     
     def __call__(self, x):
         # 前向过程
         hidden_state1_fwd = jnp.zeros((x.shape[0], self.hidden_size1))
         hidden_state2_fwd = jnp.zeros((x.shape[0], self.hidden_size2))
         for t in range(x.shape[1]):
-            hidden_state1_fwd = jnp.dot(hidden_state1_fwd, self.A1_fwd) + jnp.dot(x[:, t, :], self.B1_fwd)
-            hidden_state2_fwd = jnp.dot(hidden_state2_fwd, self.A2_fwd) + jnp.dot(hidden_state1_fwd, self.B2_fwd)
-        output_fwd = jnp.dot(hidden_state2_fwd, self.C_fwd)
+            hidden_state1_fwd = jnp.dot(hidden_state1_fwd, self.A1_fwd) + self.B1_layer_fwd(x[:, t, :])
+            hidden_state2_fwd = jnp.dot(hidden_state2_fwd, self.A2_fwd) + self.B2_layer_fwd(hidden_state1_fwd)
+        output_fwd = self.C_layer_fwd(hidden_state2_fwd)
 
         # 后向过程
         hidden_state1_bwd = jnp.zeros((x.shape[0], self.hidden_size1))
         hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
         for t in reversed(range(x.shape[1])):
-            hidden_state1_bwd = jnp.dot(hidden_state1_bwd, self.A1_bwd) + jnp.dot(x[:, t, :], self.B1_bwd)
-            hidden_state2_bwd = jnp.dot(hidden_state2_bwd, self.A2_bwd) + jnp.dot(hidden_state1_bwd, self.B2_bwd)
-        output_bwd = jnp.dot(hidden_state2_bwd, self.C_bwd)
+            hidden_state1_bwd = jnp.dot(hidden_state1_bwd, self.A1_bwd) + self.B1_layer_bwd(x[:, t, :])
+            hidden_state2_bwd = jnp.dot(hidden_state2_bwd, self.A2_bwd) + self.B2_layer_bwd(hidden_state1_bwd)
+        output_bwd = self.C_layer_bwd(hidden_state2_bwd)
 
         # 前后向输出相加
         output = output_fwd + output_bwd
         
-        return output
-      
-class LinearLayer:
-    def __init__(self, input_dim, output_dim):
-        self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
-        
-    def __call__(self, x):
-        return jnp.dot(x, self.W)  
-      
+        return output     
 # def fdbp(
 #     scope: Scope,
 #     signal,
