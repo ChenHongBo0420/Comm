@@ -520,8 +520,7 @@ def fdbp(
     input_dim = x.shape[1]
     hidden_size = 2  
     output_dim = x.shape[1]
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    rnn_layer = ThreeLayerRNN(input_dim, hidden_size, hidden_size, hidden_size, output_dim)
+    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
