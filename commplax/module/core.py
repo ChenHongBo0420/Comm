@@ -514,41 +514,45 @@ class TwoLayerRNN:
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
 
-        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+        # 前向方向矩阵
         self.A1_fwd = generate_hippo_matrix(hidden_size1)
         self.A2_fwd = generate_hippo_matrix(hidden_size2)
+        self.B1_layer_fwd = LinearLayer(input_dim, hidden_size1)
+        self.B2_layer_fwd = LinearLayer(hidden_size1, hidden_size2)
+        self.C_layer_fwd = LinearLayer(hidden_size2, output_dim)
+
+        # 后向方向矩阵
         self.A1_bwd = generate_hippo_matrix(hidden_size1)
         self.A2_bwd = generate_hippo_matrix(hidden_size2)
-        
-        # 输入矩阵 B 和观测矩阵 C
-        self.B1_layer_fwd = LinearLayer(input_dim, hidden_size1, random.PRNGKey(1))
-        self.B2_layer_fwd = LinearLayer(hidden_size1, hidden_size2, random.PRNGKey(2))
-        self.B1_layer_bwd = LinearLayer(input_dim, hidden_size1, random.PRNGKey(3))
-        self.B2_layer_bwd = LinearLayer(hidden_size1, hidden_size2, random.PRNGKey(4))
-        self.C_layer_fwd = LinearLayer(hidden_size2, output_dim, random.PRNGKey(5))
-        self.C_layer_bwd = LinearLayer(hidden_size2, output_dim, random.PRNGKey(6))
-    
+        self.B1_layer_bwd = LinearLayer(input_dim, hidden_size1)
+        self.B2_layer_bwd = LinearLayer(hidden_size1, hidden_size2)
+        self.C_layer_bwd = LinearLayer(hidden_size2, output_dim)
+
     def __call__(self, x):
-        # 前向过程
+        # 初始化隐藏状态
         hidden_state1_fwd = jnp.zeros((x.shape[0], self.hidden_size1))
         hidden_state2_fwd = jnp.zeros((x.shape[0], self.hidden_size2))
-        for t in range(x.shape[1]):
-            hidden_state1_fwd = jnp.dot(hidden_state1_fwd, self.A1_fwd) + self.B1_layer_fwd(x[:, t, :])
+        
+        hidden_state1_bwd = jnp.zeros((x.shape[0], self.hidden_size1))
+        hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
+
+        # 前向传播
+        for t in range(x.shape[0]):  # 在第一个维度 (batch_size) 上迭代
+            hidden_state1_fwd = jnp.dot(hidden_state1_fwd, self.A1_fwd) + self.B1_layer_fwd(x[t, :])
             hidden_state2_fwd = jnp.dot(hidden_state2_fwd, self.A2_fwd) + self.B2_layer_fwd(hidden_state1_fwd)
         output_fwd = self.C_layer_fwd(hidden_state2_fwd)
 
-        # 后向过程
-        hidden_state1_bwd = jnp.zeros((x.shape[0], self.hidden_size1))
-        hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
-        for t in reversed(range(x.shape[1])):
-            hidden_state1_bwd = jnp.dot(hidden_state1_bwd, self.A1_bwd) + self.B1_layer_bwd(x[:, t, :])
+        # 后向传播
+        for t in range(x.shape[0] - 1, -1, -1):  # 在第一个维度 (batch_size) 上逆向迭代
+            hidden_state1_bwd = jnp.dot(hidden_state1_bwd, self.A1_bwd) + self.B1_layer_bwd(x[t, :])
             hidden_state2_bwd = jnp.dot(hidden_state2_bwd, self.A2_bwd) + self.B2_layer_bwd(hidden_state1_bwd)
         output_bwd = self.C_layer_bwd(hidden_state2_bwd)
 
-        # 前后向输出相加
+        # 将前向和后向的输出相加
         output = output_fwd + output_bwd
-        
-        return output     
+
+        return output
+      
 # def fdbp(
 #     scope: Scope,
 #     signal,
