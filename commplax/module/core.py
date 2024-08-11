@@ -185,16 +185,25 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-    running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-    if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-    else:
-        mean = running_mean.value
-    return signal / jnp.sqrt(mean)
+# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+#     running_mean = scope.variable('norm', 'running_mean',
+#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+#     if mode == 'train':
+#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+#     else:
+#         mean = running_mean.value
+#     return signal / jnp.sqrt(mean)
 
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+    running_rms = scope.variable('norm', 'running_rms',
+                                 lambda *_: jnp.ones(signal.val.shape[-1]), ())
+    if mode == 'train':
+        rms = jnp.sqrt(jnp.mean(signal.val**2, axis=0))
+        running_rms.value = momentum * running_rms.value + (1 - momentum) * rms
+    else:
+        rms = running_rms.value
+    return signal / (rms) 
   
 def conv1d(
     scope: Scope,
