@@ -464,36 +464,36 @@ def generate_hippo_matrix(size):
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
 
-# class TwoLayerRNN:
-#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-#         self.hidden_size1 = hidden_size1
-#         self.hidden_size2 = hidden_size2
+class TwoLayerRNN:
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+        self.hidden_size1 = hidden_size1
+        self.hidden_size2 = hidden_size2
 
-#         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-#         self.A1 = generate_hippo_matrix(hidden_size1)
-#         self.A2 = generate_hippo_matrix(hidden_size2)
+        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+        self.A1 = generate_hippo_matrix(hidden_size1)
+        self.A2 = generate_hippo_matrix(hidden_size2)
         
-#         # 输入矩阵 B
-#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-#         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        # 输入矩阵 B
+        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
 
-#         # 观测矩阵 C
-#         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+        # 观测矩阵 C
+        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
     
-#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
-#         if hidden_state1 is None:
-#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-#         if hidden_state2 is None:
-#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+        if hidden_state1 is None:
+            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+        if hidden_state2 is None:
+            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-#         # 使用 HIPPO 矩阵进行状态更新
-#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        # 使用 HIPPO 矩阵进行状态更新
+        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
         
-#         # 观测方程
-#         output = jnp.dot(hidden_state2, self.C)
+        # 观测方程
+        output = jnp.dot(hidden_state2, self.C)
         
-#         return output
+        return output
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
