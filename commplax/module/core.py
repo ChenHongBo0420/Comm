@@ -497,7 +497,6 @@ def generate_hippo_matrix(size):
 #         output = jnp.dot(hidden_state2, self.C)
         
 #         return output
-
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
@@ -514,9 +513,11 @@ class TwoLayerRNN:
         # 观测矩阵 C
         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
 
-        # 可训练的时间步长参数
-        self.delta_t1 = jnp.ones((hidden_size1,))
-        self.delta_t2 = jnp.ones((hidden_size2,))
+        # 门控机制参数
+        self.gate_W1 = orthogonal()(random.PRNGKey(4), (input_dim, hidden_size1))
+        self.gate_U1 = orthogonal()(random.PRNGKey(5), (hidden_size1, hidden_size1))
+        self.gate_W2 = orthogonal()(random.PRNGKey(6), (hidden_size1, hidden_size2))
+        self.gate_U2 = orthogonal()(random.PRNGKey(7), (hidden_size2, hidden_size2))
     
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
@@ -524,18 +525,21 @@ class TwoLayerRNN:
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
+        # 计算门控机制输出
+        gate1 = jax.nn.sigmoid(jnp.dot(x, self.gate_W1) + jnp.dot(hidden_state1, self.gate_U1))
+        gate2 = jax.nn.sigmoid(jnp.dot(hidden_state1, self.gate_W2) + jnp.dot(hidden_state2, self.gate_U2))
+
         # 使用 HIPPO 矩阵进行状态更新并应用注意力机制
-        hidden_state1 = jnp.dot(hidden_state1, self.A1 * self.delta_t1) + jnp.dot(x, self.B1)
+        hidden_state1 = gate1 * (jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1))
         hidden_state1 = complex_channel_attention(hidden_state1)  # 应用注意力机制
 
-        hidden_state2 = jnp.dot(hidden_state2, self.A2 * self.delta_t2) + jnp.dot(hidden_state1, self.B2)
+        hidden_state2 = gate2 * (jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2))
         hidden_state2 = squeeze_excite_attention(hidden_state2)  # 应用注意力机制
         
         # 观测方程
         output = jnp.dot(hidden_state2, self.C)
         
-        return output
-      
+        return output      
       
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
