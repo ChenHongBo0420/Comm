@@ -458,11 +458,43 @@ def complex_channel_attention(x):
         
 #         return output
 
-def generate_hippo_matrix(size):
-    n = size
-    P = jnp.arange(1, n+1)
-    A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
-    return A
+# def generate_hippo_matrix(size):
+#     n = size
+#     P = jnp.arange(1, n+1)
+#     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
+#     return A
+
+# class TwoLayerRNN:
+#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+#         self.hidden_size1 = hidden_size1
+#         self.hidden_size2 = hidden_size2
+
+#         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+#         self.A1 = generate_hippo_matrix(hidden_size1)
+#         self.A2 = generate_hippo_matrix(hidden_size2)
+        
+#         # 输入矩阵 B
+#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+#         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+
+#         # 观测矩阵 C
+#         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+    
+#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
+#         if hidden_state1 is None:
+#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+#         if hidden_state2 is None:
+#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+#         # 使用 HIPPO 矩阵进行状态更新
+#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        
+#         # 观测方程
+#         output = jnp.dot(hidden_state2, self.C)
+        
+#         return output
+
 
 class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
@@ -470,28 +502,40 @@ class TwoLayerRNN:
         self.hidden_size2 = hidden_size2
 
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-        self.A1 = generate_hippo_matrix(hidden_size1)
-        self.A2 = generate_hippo_matrix(hidden_size2)
+        self.A1_fwd = generate_hippo_matrix(hidden_size1)
+        self.A2_fwd = generate_hippo_matrix(hidden_size2)
+        self.A1_bwd = generate_hippo_matrix(hidden_size1)
+        self.A2_bwd = generate_hippo_matrix(hidden_size2)
         
         # 输入矩阵 B
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.B1_fwd = random.orthogonal(random.PRNGKey(1), (input_dim, hidden_size1))
+        self.B2_fwd = random.orthogonal(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.B1_bwd = random.orthogonal(random.PRNGKey(3), (input_dim, hidden_size1))
+        self.B2_bwd = random.orthogonal(random.PRNGKey(4), (hidden_size1, hidden_size2))
 
         # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+        self.C_fwd = random.orthogonal(random.PRNGKey(5), (hidden_size2, output_dim))
+        self.C_bwd = random.orthogonal(random.PRNGKey(6), (hidden_size2, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
-        if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
-        # 使用 HIPPO 矩阵进行状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        
-        # 观测方程
-        output = jnp.dot(hidden_state2, self.C)
+    def __call__(self, x):
+        # 前向过程
+        hidden_state1_fwd = jnp.zeros((x.shape[0], self.hidden_size1))
+        hidden_state2_fwd = jnp.zeros((x.shape[0], self.hidden_size2))
+        for t in range(x.shape[1]):
+            hidden_state1_fwd = jnp.dot(hidden_state1_fwd, self.A1_fwd) + jnp.dot(x[:, t, :], self.B1_fwd)
+            hidden_state2_fwd = jnp.dot(hidden_state2_fwd, self.A2_fwd) + jnp.dot(hidden_state1_fwd, self.B2_fwd)
+        output_fwd = jnp.dot(hidden_state2_fwd, self.C_fwd)
+
+        # 后向过程
+        hidden_state1_bwd = jnp.zeros((x.shape[0], self.hidden_size1))
+        hidden_state2_bwd = jnp.zeros((x.shape[0], self.hidden_size2))
+        for t in reversed(range(x.shape[1])):
+            hidden_state1_bwd = jnp.dot(hidden_state1_bwd, self.A1_bwd) + jnp.dot(x[:, t, :], self.B1_bwd)
+            hidden_state2_bwd = jnp.dot(hidden_state2_bwd, self.A2_bwd) + jnp.dot(hidden_state1_bwd, self.B2_bwd)
+        output_bwd = jnp.dot(hidden_state2_bwd, self.C_bwd)
+
+        # 前后向输出相加
+        output = output_fwd + output_bwd
         
         return output
       
