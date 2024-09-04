@@ -551,7 +551,7 @@ def fdbp(
     x2 = x[:, 1]
     x1_updated, x2_updated = non_local_attention(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    print(x_updated.shape)
+    x_reshaped = x_updated.reshape(x_updated.shape[0], -1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
     for i in range(steps):
