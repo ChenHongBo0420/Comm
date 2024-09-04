@@ -505,33 +505,12 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W) 
 
-def non_local_attention(x1, x2):
-    """
-    使用非局部注意力来处理两个偏振态的信号。
-    Args:
-        x1: 第一个偏振态的输入信号，形状为 (batch_size, features)
-        x2: 第二个偏振态的输入信号，形状为 (batch_size, features)
-    Returns:
-        x1_updated, x2_updated: 应用非局部注意力后的两个偏振态信号
-    """
-    # 扩展为二维矩阵，确保可以进行矩阵乘法
-    if len(x1.shape) == 1:
-        x1 = jnp.expand_dims(x1, axis=-1)  # 变为 (batch_size, 1)
-    if len(x2.shape) == 1:
-        x2 = jnp.expand_dims(x2, axis=-1)  # 变为 (batch_size, 1)
-
-    # 计算相似性矩阵
-    similarity = jnp.dot(x1, jnp.transpose(x2))  # 计算x1和x2之间的相似度
-
-    # 计算注意力权重
-    attention = jax.nn.softmax(similarity, axis=-1)
-
-    # 应用注意力权重更新x1和x2
-    x1_updated = jnp.dot(attention, x2)  # 应用注意力更新x1
-    x2_updated = jnp.dot(attention, x1)  # 应用注意力更新x2
-
+def weighted_interaction(x1, x2):
+    # 定义简单的加权相互作用
+    weight = jnp.mean(x1 * x2)  # 计算交互权重
+    x1_updated = x1 + weight * x2  # 加权求和
+    x2_updated = x2 + weight * x1  # 加权求和
     return x1_updated, x2_updated
-
   
 def fdbp(
     scope: Scope,
@@ -549,9 +528,9 @@ def fdbp(
     output_dim = x.shape[1]
     x1 = x[:, 0]
     x2 = x[:, 1]
-    x1_updated, x2_updated = non_local_attention(x1, x2)
+    x1_updated, x2_updated = weighted_interaction(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    x_updated = x_updated.reshape(x_updated.shape[0], -1)
+    # x_updated = x_updated.reshape(x_updated.shape[0], -1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
     for i in range(steps):
