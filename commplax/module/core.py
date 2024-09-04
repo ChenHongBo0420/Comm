@@ -505,41 +505,30 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W) 
 
-def non_local_attention(x1, x2, embed_dim=2):
+def non_local_attention(x1, x2):
     """
     使用非局部注意力来处理两个偏振态的信号。
     Args:
         x1: 第一个偏振态的输入信号，形状为 (batch_size, features)
         x2: 第二个偏振态的输入信号，形状为 (batch_size, features)
-        embed_dim: 用于嵌入和计算相似性的维度大小
     Returns:
         x1_updated, x2_updated: 应用非局部注意力后的两个偏振态信号
     """
-    # 扩展为二维矩阵
-    x1 = jnp.expand_dims(x1, axis=1)  # 将x1变为 (8000, 1)
-    x2 = jnp.expand_dims(x2, axis=1)  # 将x2变为 (8000, 1)
+    # 扩展为二维矩阵，确保可以进行矩阵乘法
+    if len(x1.shape) == 1:
+        x1 = jnp.expand_dims(x1, axis=-1)  # 变为 (batch_size, 1)
+    if len(x2.shape) == 1:
+        x2 = jnp.expand_dims(x2, axis=-1)  # 变为 (batch_size, 1)
 
-    # 计算嵌入
-    theta_x1 = jnp.dot(x1, jnp.eye(embed_dim))  # 使用单位矩阵进行简单的线性变换
-    phi_x2 = jnp.dot(x2, jnp.eye(embed_dim))
-
-    # 计算相似性
-    similarity = jnp.dot(theta_x1, jnp.transpose(phi_x2))  # 相似度计算
+    # 计算相似性矩阵
+    similarity = jnp.dot(x1, jnp.transpose(x2))  # 计算x1和x2之间的相似度
 
     # 计算注意力权重
     attention = jax.nn.softmax(similarity, axis=-1)
 
-    # 应用注意力权重
-    g_x2 = jnp.dot(x2, jnp.eye(embed_dim))  # g函数，生成新的表示
-    x1_updated = jnp.dot(attention, g_x2)
-
-    # x1 和 x2 互相作用后更新
-    x2_updated = x2 + x1_updated
-    x1_updated = x1 + x1_updated
-
-    # 将x1_updated和x2_updated从二维变回一维
-    x1_updated = jnp.squeeze(x1_updated, axis=1)
-    x2_updated = jnp.squeeze(x2_updated, axis=1)
+    # 应用注意力权重更新x1和x2
+    x1_updated = jnp.dot(attention, x2)  # 应用注意力更新x1
+    x2_updated = jnp.dot(attention, x1)  # 应用注意力更新x2
 
     return x1_updated, x2_updated
 
