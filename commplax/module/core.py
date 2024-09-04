@@ -520,20 +520,21 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated
 
-def weighted_interaction(x1, x2):
-    # 自适应计算每个信号的动态范围
-    x1_range = jnp.max(x1) - jnp.min(x1)
-    x2_range = jnp.max(x2) - jnp.min(x2)
-
-    # 根据信号范围自适应归一化
-    x1_normalized = (x1 - jnp.mean(x1)) / (x1_range + 1e-6)
-    x2_normalized = (x2 - jnp.mean(x2)) / (x2_range + 1e-6)
-    
+def weighted_interaction(x1, x2, layer_num=2):
+    x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
+    x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
     weight = jnp.mean(x1_normalized * x2_normalized)
-    x1_updated = x1 + weight * x2
-    x2_updated = x2 + weight * x1
+    
+    # 分层交互
+    for _ in range(layer_num):
+        x1_normalized = (x1_normalized - jnp.mean(x1_normalized)) / (jnp.std(x1_normalized) + 1e-6)
+        x2_normalized = (x2_normalized - jnp.mean(x2_normalized)) / (jnp.std(x2_normalized) + 1e-6)
+        weight = jnp.mean(x1_normalized * x2_normalized)
+        x1_updated = x1 + weight * x2
+        x2_updated = x2 + weight * x1
     
     return x1_updated, x2_updated
+
 
 
 
