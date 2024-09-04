@@ -515,8 +515,12 @@ def non_local_attention(x1, x2, embed_dim=2):
     Returns:
         x1_updated, x2_updated: 应用非局部注意力后的两个偏振态信号
     """
+    # 扩展为二维矩阵
+    x1 = jnp.expand_dims(x1, axis=1)  # 将x1变为 (8000, 1)
+    x2 = jnp.expand_dims(x2, axis=1)  # 将x2变为 (8000, 1)
+
     # 计算嵌入
-    theta_x1 = jnp.dot(x1, jnp.eye(embed_dim))  # 简单线性变换，可以替换为卷积等操作
+    theta_x1 = jnp.dot(x1, jnp.eye(embed_dim))  # 使用单位矩阵进行简单的线性变换
     phi_x2 = jnp.dot(x2, jnp.eye(embed_dim))
 
     # 计算相似性
@@ -533,7 +537,12 @@ def non_local_attention(x1, x2, embed_dim=2):
     x2_updated = x2 + x1_updated
     x1_updated = x1 + x1_updated
 
+    # 将x1_updated和x2_updated从二维变回一维
+    x1_updated = jnp.squeeze(x1_updated, axis=1)
+    x2_updated = jnp.squeeze(x2_updated, axis=1)
+
     return x1_updated, x2_updated
+
   
 def fdbp(
     scope: Scope,
