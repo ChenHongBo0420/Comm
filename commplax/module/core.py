@@ -505,13 +505,20 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W) 
 
-def weighted_interaction(x1, x2):
-    # 定义简单的加权相互作用
-    weight = jnp.mean(x1 * x2)  # 计算交互权重
-    x1_updated = x1 + weight * x2  # 加权求和
-    x2_updated = x2 + weight * x1  # 加权求和
+# def weighted_interaction(x1, x2):
+#     # 定义简单的加权相互作用
+#     weight = jnp.mean(x1 * x2)  # 计算交互权重
+#     x1_updated = x1 + weight * x2  # 加权求和
+#     x2_updated = x2 + weight * x1  # 加权求和
+#     return x1_updated, x2_updated
+
+def weighted_interaction(x1, x2, num_heads=4):
+    # 初始化多个头的权重
+    weights = [jnp.mean(x1 * x2) for _ in range(num_heads)]
+    x1_updated = sum([x1 + weight * x2 for weight in weights]) / num_heads
+    x2_updated = sum([x2 + weight * x1 for weight in weights]) / num_heads
     return x1_updated, x2_updated
-  
+
 def fdbp(
     scope: Scope,
     signal,
