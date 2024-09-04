@@ -520,12 +520,13 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated
 
-def weighted_interaction(x1, x2, decay_factor=0.9):
-    weight = jnp.mean(x1 * x2)
-    decayed_weight = weight * decay_factor  # 递减加权
-    x1_updated = x1 + decayed_weight * x2
-    x2_updated = x2 + decayed_weight * x1
+def weighted_interaction(x1, x2):
+    weight1 = jnp.mean(x1 * x2)
+    weight2 = jnp.mean(x2 * x1)
+    x1_updated = x1 + weight1 * x2  # 对x1使用weight1
+    x2_updated = x2 + weight2 * x1  # 对x2使用weight2
     return x1_updated, x2_updated
+
 
 
 def fdbp(
