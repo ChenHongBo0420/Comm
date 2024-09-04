@@ -520,12 +520,17 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated
 
-def weighted_interaction(x1, x2, threshold=1.0):
+def weighted_interaction(x1, x2):
     weight = jnp.mean(x1 * x2)
-    weight = jnp.clip(weight, -threshold, threshold)  # 限制权重在 [-threshold, threshold] 范围内
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
+
+    # 对更新后的信号进行归一化
+    x1_updated = (x1_updated - jnp.mean(x1_updated)) / (jnp.std(x1_updated) + 1e-6)
+    x2_updated = (x2_updated - jnp.mean(x2_updated)) / (jnp.std(x2_updated) + 1e-6)
+    
     return x1_updated, x2_updated
+
 
 
 
