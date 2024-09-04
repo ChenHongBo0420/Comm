@@ -505,14 +505,35 @@ class LinearLayer:
     def __call__(self, x):
         return jnp.dot(x, self.W) 
 
-def polarization_interaction_layer(x1, x2):
+def non_local_attention(x1, x2, embed_dim=2):
     """
-    处理两个偏振态的信号，并使它们相互影响
+    使用非局部注意力来处理两个偏振态的信号。
+    Args:
+        x1: 第一个偏振态的输入信号，形状为 (batch_size, features)
+        x2: 第二个偏振态的输入信号，形状为 (batch_size, features)
+        embed_dim: 用于嵌入和计算相似性的维度大小
+    Returns:
+        x1_updated, x2_updated: 应用非局部注意力后的两个偏振态信号
     """
-    interaction = jnp.dot(x1, jnp.transpose(x2))  # 偏振态1和偏振态2的交互
-    x1_updated = x1 + interaction  # 更新偏振态1
-    x2_updated = x2 + interaction  # 更新偏振态2
-    return x1_updated, x2_updated   
+    # 计算嵌入
+    theta_x1 = jnp.dot(x1, jnp.eye(embed_dim))  # 简单线性变换，可以替换为卷积等操作
+    phi_x2 = jnp.dot(x2, jnp.eye(embed_dim))
+
+    # 计算相似性
+    similarity = jnp.dot(theta_x1, jnp.transpose(phi_x2))  # 相似度计算
+
+    # 计算注意力权重
+    attention = jax.nn.softmax(similarity, axis=-1)
+
+    # 应用注意力权重
+    g_x2 = jnp.dot(x2, jnp.eye(embed_dim))  # g函数，生成新的表示
+    x1_updated = jnp.dot(attention, g_x2)
+
+    # x1 和 x2 互相作用后更新
+    x2_updated = x2 + x1_updated
+    x1_updated = x1 + x1_updated
+
+    return x1_updated, x2_updated
   
 def fdbp(
     scope: Scope,
@@ -530,7 +551,7 @@ def fdbp(
     output_dim = x.shape[1]
     x1 = x[:, 0]
     x2 = x[:, 1]
-    x1_updated, x2_updated = polarization_interaction_layer(x1, x2)
+    x1_updated, x2_updated = non_local_attention(x1, x2, embed_dim=x1.shape[-1])
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
