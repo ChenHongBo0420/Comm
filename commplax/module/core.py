@@ -512,16 +512,14 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1  # 加权求和
 #     return x1_updated, x2_updated
 
-def weighted_interaction(x1, x2, kernel_size=3):
-    conv_filter = jnp.ones((kernel_size,))  # 简单的卷积核
-    x1_conv = jnp.convolve(x1, conv_filter, mode='same')
-    x2_conv = jnp.convolve(x2, conv_filter, mode='same')
-    
-    # 使用加权交互
-    weight = jnp.mean(x1_conv * x2_conv)
-    x1_updated = x1_conv + weight * x2_conv
-    x2_updated = x2_conv + weight * x1_conv
+def weighted_interaction(x1, x2, threshold=0.1):
+    interaction = x1 * x2
+    mask = jnp.where(interaction > threshold, 1, 0)
+    weight = jnp.mean(interaction * mask)  # 仅考虑大于阈值的交互
+    x1_updated = x1 + weight * x2
+    x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
+
 
 
 def fdbp(
