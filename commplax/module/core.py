@@ -521,26 +521,23 @@ class LinearLayer:
 #     return x1_updated, x2_updated
 
 def weighted_interaction(x1, x2):
-    # 计算差分信号
-    x1_diff = jnp.diff(x1, append=x1[-1])
-    x2_diff = jnp.diff(x2, append=x2[-1])
-
-    # 将原始信号与差分信号组合
-    x1_combined = x1 + x1_diff
-    x2_combined = x2 + x2_diff
-
-    # 对组合后的信号进行归一化
-    x1_normalized = (x1_combined - jnp.mean(x1_combined)) / (jnp.std(x1_combined) + 1e-6)
-    x2_normalized = (x2_combined - jnp.mean(x2_combined)) / (jnp.std(x2_combined) + 1e-6)
+    # 对原始信号进行加权交互
+    x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
+    x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
 
     # 计算加权系数
     weight = jnp.mean(x1_normalized * x2_normalized)
 
-    # 更新信号，基于组合信号的加权交互
-    x1_updated = x1_combined + weight * x2_combined
-    x2_updated = x2_combined + weight * x1_combined
-    
-    return x1_updated, x2_updated
+    # 更新信号，基于原始信号的加权交互
+    x1_updated = x1 + weight * x2
+    x2_updated = x2 + weight * x1
+
+    # 计算交互后信号的差分
+    x1_diff = jnp.diff(x1_updated, append=x1_updated[-1])
+    x2_diff = jnp.diff(x2_updated, append=x2_updated[-1])
+
+    return x1_diff, x2_diff
+
 
 
 def fdbp(
