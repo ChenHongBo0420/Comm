@@ -532,8 +532,7 @@ def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0),
     if np.random.rand() < p_mask:
         total_length = x.shape[0]
         mask = np.random.choice([0, 1], size=total_length, p=[1-p_mask, p_mask])
-        mask = jnp.array(mask)[:, None]
-        mask = jnp.broadcast_to(mask, x.shape)
+        mask = jnp.array(mask)  # 保持 mask 为一维数组
         x = x * mask
 
     if np.random.rand() < p_noise:
@@ -544,6 +543,7 @@ def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0),
     if np.random.rand() < p:
         t_shift = np.random.randint(shift_range1[0], shift_range1[1])
         x = jnp.roll(x, shift=t_shift)
+    
     return x
 
 def weighted_interaction(x1, x2):
