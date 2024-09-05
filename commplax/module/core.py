@@ -512,53 +512,12 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1  # 加权求和
 #     return x1_updated, x2_updated
 
-# def weighted_interaction(x1, x2):
-#     x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
-#     x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
-#     weight = jnp.mean(x1_normalized * x2_normalized)
-#     x1_updated = x1 + weight * x2
-#     x2_updated = x2 + weight * x1
-#     return x1_updated, x2_updated
-
-def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0), shift_range1=(-100, 100), mask_range=(0, 30), noise_range=(0.0, 0.2), p_scale=0.5, p_shift=0.5, p_mask=0.5, p_noise=0.5, p=0.5):
-    if np.random.rand() < p_scale:
-        scale = np.random.uniform(scale_range[0], scale_range[1])
-        x = x * scale
-
-    if np.random.rand() < p_shift:
-        shift = np.random.uniform(shift_range[0], shift_range[1])
-        x = x + shift
-
-    if np.random.rand() < p_mask:
-        total_length = x.shape[0]
-        mask = np.random.choice([0, 1], size=total_length, p=[1-p_mask, p_mask])
-        mask = jnp.array(mask)  # 保持 mask 为一维数组
-        x = x * mask
-
-    if np.random.rand() < p_noise:
-        sigma = np.random.uniform(noise_range[0], noise_range[1])
-        noise = np.random.normal(0, sigma, x.shape)
-        x = x + noise
-
-    if np.random.rand() < p:
-        t_shift = np.random.randint(shift_range1[0], shift_range1[1])
-        x = jnp.roll(x, shift=t_shift)
-    
-    return x
-
 def weighted_interaction(x1, x2):
-    # 对 x1 和 x2 进行扰动
-    x1 = apply_combined_transform(x1)
-    x2 = apply_combined_transform(x2)
-    
-    # 正常的加权交互
     x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
     x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
     weight = jnp.mean(x1_normalized * x2_normalized)
-    
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
-    
     return x1_updated, x2_updated
 
 def fdbp(
