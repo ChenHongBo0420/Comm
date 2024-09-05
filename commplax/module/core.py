@@ -520,24 +520,20 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated
 
-def weighted_interaction(x1, x2):
-    # 归一化
-    x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
-    x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
-
-    # 根据归一化信号计算权重
-    weight1 = jnp.mean(x1_normalized * x2_normalized)
-    weight2 = jnp.mean(x2_normalized * x1_normalized)
+def weighted_interaction(x1, x2, epsilon=1e-6, alpha=0.5):
+    x1_mean = jnp.mean(x1)
+    x2_mean = jnp.mean(x2)
+    x1_std = jnp.std(x1) + epsilon
+    x2_std = jnp.std(x2) + epsilon
     
-    # 动态加权
-    x1_updated = x1 + weight1 * x2
-    x2_updated = x2 + weight2 * x1
+    # 加入参数化的比例因子
+    x1_normalized = (x1 - alpha * x1_mean) / (alpha * x1_std)
+    x2_normalized = (x2 - alpha * x2_mean) / (alpha * x2_std)
     
+    weight = jnp.mean(x1_normalized * x2_normalized)
+    x1_updated = x1 + weight * x2
+    x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
-
-
-
-
 
 
 def fdbp(
