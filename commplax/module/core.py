@@ -536,7 +536,11 @@ def weighted_interaction(x1, x2):
     x1_diff = jnp.diff(x1_updated, append=x1_updated[-1])
     x2_diff = jnp.diff(x2_updated, append=x2_updated[-1])
 
-    return x1_diff, x2_diff
+    # 返回组合后的信号：x1_updated + x1_diff 和 x2_updated + x2_diff
+    x1_combined = x1_updated + x1_diff
+    x2_combined = x2_updated + x2_diff
+    
+    return x1_combined, x2_combined
 
 
 
