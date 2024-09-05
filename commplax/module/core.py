@@ -512,29 +512,13 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1  # 加权求和
 #     return x1_updated, x2_updated
 
-# def weighted_interaction(x1, x2):
-#     x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
-#     x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
-#     weight = jnp.mean(x1_normalized * x2_normalized)
-#     x1_updated = x1 + weight * x2
-#     x2_updated = x2 + weight * x1
-#     return x1_updated, x2_updated
-
-def weighted_interaction(x1, x2, threshold=0.1):
+def weighted_interaction(x1, x2):
     x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
     x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
-
-    # 仅在交互结果大于阈值时进行加权
     weight = jnp.mean(x1_normalized * x2_normalized)
-    if weight > threshold:
-        x1_updated = x1 + weight * x2
-        x2_updated = x2 + weight * x1
-    else:
-        x1_updated, x2_updated = x1, x2  # 如果权重大于阈值才更新
-
+    x1_updated = x1 + weight * x2
+    x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
-
-
 
 def fdbp(
     scope: Scope,
@@ -550,13 +534,15 @@ def fdbp(
     input_dim = x.shape[1]
     hidden_size = 2  
     output_dim = x.shape[1]
+    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    x = rnn_layer(x_updated)
     x1 = x[:, 0]
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     # x_updated = x_updated.reshape(x_updated.shape[0], -1)
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
