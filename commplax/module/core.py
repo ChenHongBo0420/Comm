@@ -535,7 +535,7 @@ def fdbp(
     hidden_size = 2  
     output_dim = x.shape[1]
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    x = rnn_layer(x)
     x1 = x[:, 0]
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
