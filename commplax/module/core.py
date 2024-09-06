@@ -514,28 +514,32 @@ class TwoLayerRNN:
         # 观测矩阵 C
         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
 
-    # 并行处理所有输入
-    def __call__(self, x):
-        # 假设输入 x 的形状为 (batch_size, sequence_length, input_dim)
-        
-        # 状态更新，使用状态空间方程直接计算
-        hidden_state1 = jnp.dot(x, self.B1)  # 输入层直接映射到隐藏层1
-        hidden_state1 = jnp.dot(hidden_state1, self.A1)  # 状态转移矩阵
-        
-        # 应用注意力机制 (保持)
-        hidden_state1 = squeeze_excite_attention(hidden_state1)
+        # 用于处理序列依赖的隐藏状态
+        self.hidden_state1 = None
+        self.hidden_state2 = None
 
-        # 第二层状态更新
-        hidden_state2 = jnp.dot(hidden_state1, self.B2)  # 从隐藏层1到隐藏层2
-        hidden_state2 = jnp.dot(hidden_state2, self.A2)  # 状态转移矩阵
+    # 在调用时处理序列输入
+    def __call__(self, x, reset_hidden_states=False):
+        # 如果需要重置隐藏状态
+        if reset_hidden_states or self.hidden_state1 is None:
+            self.hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+        if reset_hidden_states or self.hidden_state2 is None:
+            self.hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        # 应用复杂通道注意力机制 (保持)
-        hidden_state2 = complex_channel_attention(hidden_state2)
+        # 处理每个时间步的数据 (批量并行)
+        for t in range(x.shape[1]):
+            # 使用 HIPPO 矩阵进行状态更新
+            self.hidden_state1 = jnp.dot(self.hidden_state1, self.A1) + jnp.dot(x[:, t], self.B1)
+            self.hidden_state1 = squeeze_excite_attention(self.hidden_state1)  # 应用注意力机制
 
-        # 输出层
-        output = jnp.dot(hidden_state2, self.C)  # 最终输出
+            self.hidden_state2 = jnp.dot(self.hidden_state2, self.A2) + jnp.dot(self.hidden_state1, self.B2)
+            self.hidden_state2 = complex_channel_attention(self.hidden_state2)  # 应用注意力机制
+        
+        # 最终观测方程
+        output = jnp.dot(self.hidden_state2, self.C)
         
         return output
+      
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
