@@ -581,8 +581,7 @@ def fdbp(
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     input_dim = x.shape[1]
-    # hidden_size = 2 
-    hidden_size = [2, 2]
+    hidden_size = 2 
     output_dim = x.shape[1]
     x1 = x[:, 0]
     x2 = x[:, 1]
