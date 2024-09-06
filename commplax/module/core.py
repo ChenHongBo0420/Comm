@@ -499,51 +499,35 @@ def generate_hippo_matrix(size):
 #         return output
 
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, dropout_rate=0.5):
-        self.hidden_size1 = hidden_size1
-        self.hidden_size2 = hidden_size2
-        self.dropout_rate = dropout_rate
+    def __init__(self, input_dim, hidden_sizes, output_dim):
+        self.hidden_sizes = hidden_sizes
+        self.num_layers = len(hidden_sizes)
 
-        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-        self.A1 = generate_hippo_matrix(hidden_size1)
-        self.A2 = generate_hippo_matrix(hidden_size2)
-        
-        # 输入矩阵 B
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        # 初始化所有层的参数
+        self.As = [generate_hippo_matrix(size) for size in hidden_sizes]
+        self.Bs = [orthogonal()(random.PRNGKey(i), (input_dim if i == 0 else hidden_sizes[i-1], hidden_sizes[i])) for i in range(self.num_layers)]
+        self.C = orthogonal()(random.PRNGKey(self.num_layers), (hidden_sizes[-1], output_dim))
 
-        # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
-
-    def __call__(self, x, hidden_state1=None, hidden_state2=None, train=True):
+    def __call__(self, x, hidden_states=None, train=True):
         batch_size, input_dim = x.shape
 
         # 初始化隐藏状态（确保维度匹配）
-        if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((batch_size, self.hidden_size1))
-        if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((batch_size, self.hidden_size2))
+        if hidden_states is None:
+            hidden_states = [jnp.zeros((batch_size, size)) for size in self.hidden_sizes]
 
-        # 残差连接：hidden_state1 保留一份拷贝传递到下一层
-        residual1 = hidden_state1
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        hidden_state1 = squeeze_excite_attention(hidden_state1)
+        # 逐层更新隐藏状态
+        for i in range(self.num_layers):
+            residual = hidden_states[i]  # 保留残差
+            hidden_states[i] = jnp.dot(hidden_states[i], self.As[i]) + jnp.dot(x if i == 0 else hidden_states[i-1], self.Bs[i])
+            hidden_states[i] = squeeze_excite_attention(hidden_states[i])
 
-        # 加上残差连接
-        hidden_state1 += residual1
+            # 加入残差连接
+            hidden_states[i] += residual
 
-        # 残差连接：hidden_state2 也保留一份拷贝
-        residual2 = hidden_state2
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        hidden_state2 = complex_channel_attention(hidden_state2)
-
-        # 加上残差连接
-        hidden_state2 += residual2
-
-        # 最终的观测方程
-        output = jnp.dot(hidden_state2, self.C)
-        
+        # 输出层
+        output = jnp.dot(hidden_states[-1], self.C)
         return output
+
     
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
