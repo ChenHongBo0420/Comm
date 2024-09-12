@@ -464,85 +464,38 @@ def generate_hippo_matrix(size):
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
 
-# class TwoLayerRNN:
-#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-#         self.hidden_size1 = hidden_size1
-#         self.hidden_size2 = hidden_size2
-
-#         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-#         self.A1 = generate_hippo_matrix(hidden_size1)
-#         self.A2 = generate_hippo_matrix(hidden_size2)
-        
-#         # 输入矩阵 B
-#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-#         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-
-#         # 观测矩阵 C
-#         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
-    
-#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
-#         if hidden_state1 is None:
-#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-#         if hidden_state2 is None:
-#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
-#         # 使用 HIPPO 矩阵进行状态更新并应用注意力机制
-#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-#         hidden_state1 = squeeze_excite_attention(hidden_state1)  # 应用注意力机制
-
-#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-#         hidden_state2 = complex_channel_attention(hidden_state2)  # 应用注意力机制
-        
-#         # 观测方程
-#         output = jnp.dot(hidden_state2, self.C)
-        
-#         return output
-
 class TwoLayerRNN:
-    def __init__(self, input_dim, hidden_size, output_dim):
-        self.hidden_size = hidden_size
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+        self.hidden_size1 = hidden_size1
+        self.hidden_size2 = hidden_size2
 
-        # 定义不同的分支，每个分支使用不同的操作
-        self.A1 = generate_hippo_matrix(hidden_size)
-        self.A2 = generate_hippo_matrix(hidden_size)
-        self.A3 = generate_hippo_matrix(hidden_size // 2)  # 一个较小的分支
-
+        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+        self.A1 = generate_hippo_matrix(hidden_size1)
+        self.A2 = generate_hippo_matrix(hidden_size2)
+        
         # 输入矩阵 B
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size))
-        self.B2 = orthogonal()(random.PRNGKey(2), (input_dim, hidden_size))
-        self.B3 = orthogonal()(random.PRNGKey(3), (input_dim, hidden_size // 2))
+        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
 
-        # 输出层矩阵 C
-        self.C = orthogonal()(random.PRNGKey(4), (hidden_size + hidden_size // 2, output_dim))
-
-    def __call__(self, x, hidden_state1=None, hidden_state2=None, hidden_state3=None, train=True):
-        batch_size, input_dim = x.shape
-
-        # 初始化隐藏状态
+        # 观测矩阵 C
+        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+    
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
         if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((batch_size, self.hidden_size))
+            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((batch_size, self.hidden_size))
-        if hidden_state3 is None:
-            hidden_state3 = jnp.zeros((batch_size, self.hidden_size // 2))  # 较小的分支
-
-        # 分支1：标准处理
+            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+        # 使用 HIPPO 矩阵进行状态更新并应用注意力机制
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        hidden_state1 = squeeze_excite_attention(hidden_state1)
+        hidden_state1 = squeeze_excite_attention(hidden_state1)  # 应用注意力机制
 
-        # 分支2：第二条不同处理路径
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(x, self.B2)
-        hidden_state2 = complex_channel_attention(hidden_state2)
-
-        # 分支3：较小的分支
-        hidden_state3 = jnp.dot(hidden_state3, self.A3) + jnp.dot(x, self.B3)
-
-        # 将所有分支的输出拼接
-        combined_hidden_states = jnp.concatenate([hidden_state1, hidden_state2, hidden_state3], axis=-1)
-
-        # 输出层
-        output = jnp.dot(combined_hidden_states, self.C)
-
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        hidden_state2 = complex_channel_attention(hidden_state2)  # 应用注意力机制
+        
+        # 观测方程
+        output = jnp.dot(hidden_state2, self.C)
+        
         return output
     
 class LinearLayer:
