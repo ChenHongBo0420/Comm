@@ -519,8 +519,16 @@ def weighted_interaction(x1, x2):
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
-
-
+  
+def variational_layer(x, latent_dim):
+    input_dim = x.shape[1]
+    W_mu = orthogonal()(random.PRNGKey(0), (input_dim, latent_dim))
+    W_sigma = orthogonal()(random.PRNGKey(1), (input_dim, latent_dim))
+    mu = jnp.dot(x, W_mu)
+    log_sigma = jnp.dot(x, W_sigma)
+    epsilon = random.normal(random.PRNGKey(2), log_sigma.shape)
+    z = mu + jnp.exp(0.5 * log_sigma) * epsilon
+    return z
 
 def fdbp(
     scope: Scope,
@@ -538,7 +546,10 @@ def fdbp(
     output_dim = x.shape[1]
     x1 = x[:, 0]
     x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
+    z1 = variational_layer(x1, hidden_size)
+    z2 = variational_layer(x2, hidden_size)
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    x1_updated, x2_updated = weighted_interaction(z1, z2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
