@@ -520,15 +520,25 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
   
-def variational_layer(x, latent_dim):
+def variational_layer(x, latent_dim, rng_key):
     input_dim = x.shape[1]
-    W_mu = orthogonal()(random.PRNGKey(0), (input_dim, latent_dim))
-    W_sigma = orthogonal()(random.PRNGKey(1), (input_dim, latent_dim))
+    
+    # 初始化均值和方差的权重
+    W_mu = orthogonal()(random.split(rng_key, 1)[0], (input_dim, latent_dim))
+    W_sigma = orthogonal()(random.split(rng_key, 1)[0], (input_dim, latent_dim))
+    
+    # 计算均值和对数方差
     mu = jnp.dot(x, W_mu)
     log_sigma = jnp.dot(x, W_sigma)
-    epsilon = random.normal(random.PRNGKey(2), log_sigma.shape)
+    
+    # 使用新的随机数生成器来生成 epsilon，使用均匀分布替代正态分布
+    rng_key, subkey = random.split(rng_key)  # 生成新的随机数 key
+    epsilon = random.uniform(subkey, log_sigma.shape, minval=-1.0, maxval=1.0)  # 均匀分布
+    
+    # 重参数化技巧
     z = mu + jnp.exp(0.5 * log_sigma) * epsilon
-    return z
+    return z, rng_key  # 返回更新后的随机数 key
+
 
 def fdbp(
     scope: Scope,
