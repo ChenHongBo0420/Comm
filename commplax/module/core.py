@@ -519,25 +519,6 @@ def weighted_interaction(x1, x2):
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
-  
-def variational_layer(x, latent_dim):
-    # 输入 x 的 shape 为 (batch_size, input_dim)
-    input_dim = x.shape[1]
-
-    # 创建均值和标准差参数
-    W_mu = orthogonal()(random.PRNGKey(0), (input_dim, latent_dim))
-    W_sigma = orthogonal()(random.PRNGKey(1), (input_dim, latent_dim))
-
-    # 计算均值和方差
-    mu = jnp.dot(x, W_mu)
-    log_sigma = jnp.dot(x, W_sigma)
-
-    # 使用重参数化技巧进行采样
-    epsilon = random.gamma(random.PRNGKey(2), log_sigma.shape)
-    z = mu + jnp.exp(0.5 * log_sigma) * epsilon
-
-    # 返回隐变量 z，不再返回 KL 散度项
-    return z
 
 
 def fdbp(
@@ -554,7 +535,6 @@ def fdbp(
     input_dim = x.shape[1]
     hidden_size = 2 
     output_dim = x.shape[1]
-    x = variational_layer(x, hidden_size)
     x1 = x[:, 0]
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
