@@ -512,14 +512,34 @@ class LinearLayer:
 #     x2_updated = x2 + weight * x1  # 加权求和
 #     return x1_updated, x2_updated
 
-def weighted_interaction(x1, x2):
-    x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
-    x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
-    weight = jnp.mean(x1_normalized * x2_normalized)
-    x1_updated = x1 + weight * x2
-    x2_updated = x2 + weight * x1
-    return x1_updated, x2_updated
+# def weighted_interaction(x1, x2):
+#     x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
+#     x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
+#     weight = jnp.mean(x1_normalized * x2_normalized)
+#     x1_updated = x1 + weight * x2
+#     x2_updated = x2 + weight * x1
+#     return x1_updated, x2_updated
 
+class DynamicWeightedInteraction(nn.Module):
+    init_alpha: float  # Initial alpha value
+    
+    @nn.compact
+    def __call__(self, x1, x2):
+        # Initialize alpha as a learnable parameter
+        alpha = self.param('alpha', lambda rng, shape: jnp.full(shape, self.init_alpha), ())
+
+        # Normalize x1 and x2
+        x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
+        x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
+        
+        # Dynamic weight calculation
+        weight = alpha * jnp.mean(x1_normalized * x2_normalized)
+        
+        # Update x1 and x2
+        x1_updated = x1 + weight * x2
+        x2_updated = x2 + weight * x1
+        
+        return x1_updated, x2_updated
 
 def fdbp(
     scope: Scope,
@@ -537,7 +557,9 @@ def fdbp(
     output_dim = x.shape[1]
     x1 = x[:, 0]
     x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
+    dynamic_interaction = DynamicWeightedInteraction(init_alpha=0.5)
+    x1_updated, x2_updated = dynamic_interaction.apply({'params': scope.params}, x1, x2)
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
