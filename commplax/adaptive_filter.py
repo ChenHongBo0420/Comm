@@ -138,12 +138,26 @@ def array(af_maker, replicas, axis=-1):
             print_shapes(af_inp, "af_inp")
             print(f"i: {i}")
 
-            # 确保 af_state 和 af_inp 的维度一致
-            af_state_fixed = tuple(jnp.broadcast_to(s, (100, 2)) if s.shape != (100, 2) else s for s in af_state)
-            af_inp_fixed = tuple(jnp.broadcast_to(inp, (100, 2)) if inp.shape != (100, 2) else inp for inp in af_inp)
+            # 处理维度不匹配问题
+            af_state_fixed = []
+            af_inp_fixed = []
+
+            # 遍历 af_state 的每个元素，确保其可以广播
+            for s in af_state:
+                if len(s.shape) < 3:  # 如果维度小于3，扩展到 (2, 1, 2)
+                    af_state_fixed.append(jnp.expand_dims(s, axis=1))  # 添加一个维度
+                else:
+                    af_state_fixed.append(s)
+
+            # 遍历 af_inp 的每个元素，确保其形状为 (100, 2)
+            for inp in af_inp:
+                if len(inp.shape) < 2:  # 如果维度小于2，扩展到 (100, 2)
+                    af_inp_fixed.append(jnp.broadcast_to(inp, (100, 2)))
+                else:
+                    af_inp_fixed.append(inp)
 
             # 使用 vmap 对 update 进行批处理
-            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state_fixed, af_inp_fixed)
+            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, tuple(af_state_fixed), tuple(af_inp_fixed))
             return af_state, af_out
 
         @jax.jit
