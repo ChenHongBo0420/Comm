@@ -76,6 +76,34 @@ def adaptive_filter(af_maker: Callable, trainable=False):
     return _af_maker
 
 
+# def array(af_maker, replicas, axis=-1):
+#     @functools.wraps(af_maker)
+#     def rep_af_maker(*args, **kwargs):
+#         init, update, apply = af_maker(*args, **kwargs)
+
+#         @functools.wraps(init)
+#         def rep_init(*args, **kwargs):
+#             x0 = init(*args, **kwargs)
+#             x0_flat, x0_tree = tree_flatten(x0)
+#             x0_flat = tuple(map(lambda v: jnp.repeat(v[..., None], replicas, axis=axis), x0_flat))
+#             x0 = tree_unflatten(x0_tree, x0_flat)
+#             return x0
+
+#         @jax.jit
+#         @functools.wraps(update)
+#         def rep_update(i, af_state, af_inp):
+#             af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
+#             return af_state, af_out
+
+#         @jax.jit
+#         @functools.wraps(apply)
+#         def rep_apply(af_ps, af_xs):
+#             return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
+
+#         return AdaptiveFilter(rep_init, rep_update, rep_apply)
+
+#     return rep_af_maker
+
 def array(af_maker, replicas, axis=-1):
     @functools.wraps(af_maker)
     def rep_af_maker(*args, **kwargs):
@@ -92,6 +120,13 @@ def array(af_maker, replicas, axis=-1):
         @jax.jit
         @functools.wraps(update)
         def rep_update(i, af_state, af_inp):
+            # 打印输入的形状用于调试
+            print(f"af_state shape: {af_state.shape}, af_inp shape: {af_inp.shape}, i: {i}")
+            
+            # 检查输入维度是否一致
+            assert af_state.shape[axis] == af_inp.shape[axis], "af_state and af_inp must have the same shape along the specified axis"
+
+            # 使用 vmap 对 update 进行批处理
             af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
             return af_state, af_out
 
@@ -103,8 +138,7 @@ def array(af_maker, replicas, axis=-1):
         return AdaptiveFilter(rep_init, rep_update, rep_apply)
 
     return rep_af_maker
-
-
+    
 def frame(y, taps, sps, rtap=None):
     y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
     yf = jnp.array(xop.frame(y_pad, taps, sps))
