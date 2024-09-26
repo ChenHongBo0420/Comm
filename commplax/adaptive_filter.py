@@ -126,7 +126,6 @@ def array(af_maker, replicas, axis=-1):
         def rep_init(*args, **kwargs):
             x0 = init(*args, **kwargs)
             x0_flat, x0_tree = tree_flatten(x0)
-            # 对 x0_flat 的每个元素应用 jnp.repeat 来创建副本
             x0_flat = tuple(map(lambda v: jnp.repeat(v[..., None], replicas, axis=axis), x0_flat))
             x0 = tree_unflatten(x0_tree, x0_flat)
             return x0
@@ -139,14 +138,17 @@ def array(af_maker, replicas, axis=-1):
             print_shapes(af_inp, "af_inp")
             print(f"i: {i}")
 
+            # 确保 af_state 和 af_inp 的维度一致
+            af_state_fixed = tuple(jnp.broadcast_to(s, (100, 2)) if s.shape != (100, 2) else s for s in af_state)
+            af_inp_fixed = tuple(jnp.broadcast_to(inp, (100, 2)) if inp.shape != (100, 2) else inp for inp in af_inp)
+
             # 使用 vmap 对 update 进行批处理
-            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
+            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state_fixed, af_inp_fixed)
             return af_state, af_out
 
         @jax.jit
         @functools.wraps(apply)
         def rep_apply(af_ps, af_xs):
-            # 使用 vmap 对 apply 进行批处理
             return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
 
         return AdaptiveFilter(rep_init, rep_update, rep_apply)
