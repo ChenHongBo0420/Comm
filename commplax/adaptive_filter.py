@@ -104,6 +104,19 @@ def adaptive_filter(af_maker: Callable, trainable=False):
 
 #     return rep_af_maker
 
+def print_shapes(obj, name):
+    if isinstance(obj, tuple):
+        for i, elem in enumerate(obj):
+            if hasattr(elem, 'shape'):
+                print(f"{name}[{i}] shape: {elem.shape}")
+            else:
+                print(f"{name}[{i}] is not a JAX array")
+    else:
+        if hasattr(obj, 'shape'):
+            print(f"{name} shape: {obj.shape}")
+        else:
+            print(f"{name} is not a JAX array")
+            
 def array(af_maker, replicas, axis=-1):
     @functools.wraps(af_maker)
     def rep_af_maker(*args, **kwargs):
