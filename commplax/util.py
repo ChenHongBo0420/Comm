@@ -206,5 +206,10 @@ def clear_xla_cache():
     compile cache grows without bound, clear on finish otherwise Colab might complain 
     about insufficient RAM. TODO: try to reuse model during initialization to save compilation
     '''
-    xla._xla_callable.cache_clear() 
+    try:
+        import jax
+        jax.clear_backends()  # 尝试清除 XLA 缓存
+    except AttributeError as e:
+        print(f"Error clearing XLA cache: {e}")
+
 
