@@ -567,12 +567,7 @@ def mimoaf(
     mimokwargs={},
     mimoinitargs={}):
 
-    x, t = signal
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x)
+    
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
     x = xop.frame(x, taps, sps)
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
@@ -587,6 +582,12 @@ def mimoaf(
     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
+    x, t = y
+    input_dim = x.shape[1]
+    hidden_size = 2 
+    output_dim = x.shape[1]
+    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    x = rnn_layer(x)
     return Signal(y, t)
       
 # compositors
