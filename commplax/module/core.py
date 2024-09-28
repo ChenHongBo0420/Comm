@@ -571,12 +571,8 @@ def mimoaf(
     input_dim = x.shape[1]
     hidden_size = 2 
     output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    x = rnn_layer(x)
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
     x = xop.frame(x, taps, sps)
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
