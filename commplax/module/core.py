@@ -569,7 +569,7 @@ def mimoaf(
     mimokwargs={},
     mimoinitargs={}):
 
-    
+    x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
     x = xop.frame(x, taps, sps)
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
