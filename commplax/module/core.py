@@ -279,34 +279,34 @@ def mimofoeaf(scope: Scope,
     return signal
 
 
-def mimoaf(
-    scope: Scope,
-    signal,
-    taps=32,
-    rtap=None,
-    dims=2,
-    sps=2,
-    train=False,
-    mimofn=af.ddlms,
-    mimokwargs={},
-    mimoinitargs={}):
+# def mimoaf(
+#     scope: Scope,
+#     signal,
+#     taps=32,
+#     rtap=None,
+#     dims=2,
+#     sps=2,
+#     train=False,
+#     mimofn=af.ddlms,
+#     mimokwargs={},
+#     mimoinitargs={}):
 
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-    x = xop.frame(x, taps, sps)
-    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-    state = scope.variable('af_state', 'mimoaf',
-                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-    truth_var = scope.variable('aux_inputs', 'truth',
-                               lambda *_: None, ())
-    truth = truth_var.value
-    if truth is not None:
-        truth = truth[t.start: truth.shape[0] + t.stop]
-    af_step, af_stats = state.value
-    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-    y = mimo_apply(af_weights, x)
-    state.value = (af_step, af_stats)
-    return Signal(y, t)
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+#     x = xop.frame(x, taps, sps)
+#     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+#     state = scope.variable('af_state', 'mimoaf',
+#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+#     truth_var = scope.variable('aux_inputs', 'truth',
+#                                lambda *_: None, ())
+#     truth = truth_var.value
+#     if truth is not None:
+#         truth = truth[t.start: truth.shape[0] + t.stop]
+#     af_step, af_stats = state.value
+#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+#     y = mimo_apply(af_weights, x)
+#     state.value = (af_step, af_stats)
+#     return Signal(y, t)
 
       
 # def fdbp(
@@ -531,15 +531,15 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -555,7 +555,44 @@ def identity(scope, inputs):
 def fanout(scope, inputs, num):
     return (inputs,) * num
 
+def mimoaf(
+    scope: Scope,
+    signal,
+    taps=32,
+    rtap=None,
+    dims=2,
+    sps=2,
+    train=False,
+    mimofn=af.ddlms,
+    mimokwargs={},
+    mimoinitargs={}):
 
+    x, t = signal
+    input_dim = x.shape[1]
+    hidden_size = 2 
+    output_dim = x.shape[1]
+    x1 = x[:, 0]
+    x2 = x[:, 1]
+    x1_updated, x2_updated = weighted_interaction(x1, x2)
+    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    x = rnn_layer(x_updated)
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+    x = xop.frame(x, taps, sps)
+    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+    state = scope.variable('af_state', 'mimoaf',
+                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+    truth_var = scope.variable('aux_inputs', 'truth',
+                               lambda *_: None, ())
+    truth = truth_var.value
+    if truth is not None:
+        truth = truth[t.start: truth.shape[0] + t.stop]
+    af_step, af_stats = state.value
+    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+    y = mimo_apply(af_weights, x)
+    state.value = (af_step, af_stats)
+    return Signal(y, t)
+      
 # compositors
 
 def serial(*fs):
