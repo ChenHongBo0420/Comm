@@ -279,34 +279,34 @@ def mimofoeaf(scope: Scope,
     return signal
 
 
-# def mimoaf(
-#     scope: Scope,
-#     signal,
-#     taps=32,
-#     rtap=None,
-#     dims=2,
-#     sps=2,
-#     train=False,
-#     mimofn=af.ddlms,
-#     mimokwargs={},
-#     mimoinitargs={}):
+def mimoaf(
+    scope: Scope,
+    signal,
+    taps=32,
+    rtap=None,
+    dims=2,
+    sps=2,
+    train=False,
+    mimofn=af.ddlms,
+    mimokwargs={},
+    mimoinitargs={}):
 
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-#     x = xop.frame(x, taps, sps)
-#     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-#     state = scope.variable('af_state', 'mimoaf',
-#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-#     truth_var = scope.variable('aux_inputs', 'truth',
-#                                lambda *_: None, ())
-#     truth = truth_var.value
-#     if truth is not None:
-#         truth = truth[t.start: truth.shape[0] + t.stop]
-#     af_step, af_stats = state.value
-#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-#     y = mimo_apply(af_weights, x)
-#     state.value = (af_step, af_stats)
-#     return Signal(y, t)
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+    x = xop.frame(x, taps, sps)
+    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+    state = scope.variable('af_state', 'mimoaf',
+                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+    truth_var = scope.variable('aux_inputs', 'truth',
+                               lambda *_: None, ())
+    truth = truth_var.value
+    if truth is not None:
+        truth = truth[t.start: truth.shape[0] + t.stop]
+    af_step, af_stats = state.value
+    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+    y = mimo_apply(af_weights, x)
+    state.value = (af_step, af_stats)
+    return Signal(y, t)
 
       
 # def fdbp(
@@ -555,35 +555,6 @@ def identity(scope, inputs):
 
 def fanout(scope, inputs, num):
     return (inputs,) * num
-
-def mimoaf(
-    scope: Scope,
-    signal,
-    taps=32,
-    rtap=None,
-    dims=2,
-    sps=2,
-    train=False,
-    mimofn=af.ddlms,
-    mimokwargs={},
-    mimoinitargs={}):
-
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-    x = xop.frame(x, taps, sps)
-    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-    state = scope.variable('af_state', 'mimoaf',
-                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-    truth_var = scope.variable('aux_inputs', 'truth',
-                               lambda *_: None, ())
-    truth = truth_var.value
-    if truth is not None:
-        truth = truth[t.start: truth.shape[0] + t.stop]
-    af_step, af_stats = state.value
-    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-    y = mimo_apply(af_weights, x)
-    state.value = (af_step, af_stats)
-    return Signal(y, t)
       
 # compositors
 
