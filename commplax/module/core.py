@@ -613,7 +613,7 @@ def identity(scope, inputs):
 #         return outputs
 #     return _parallel
 
-def fanout(scope: Scope, inputs, *, num):
+def fanout(scope, inputs, num):
     return (inputs,) * num
 
 def fanin_sum(scope: Scope, inputs):
