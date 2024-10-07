@@ -120,7 +120,18 @@ def Serial(*layers, name='serial'):
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
 
 def Parallel(*layers, name='parallel'):
-    names, _, _, core_funs, mutables = zip(*layers)
+    layer_objs = []
+    for item in layers:
+        if isinstance(item, tuple):
+            # 如果是 (name, Layer) 形式
+            layer_name, layer_obj = item
+            # 覆盖 Layer 对象的 name 属性
+            layer_obj = layer_obj._replace(name=layer_name)
+        else:
+            layer_obj = item
+        layer_objs.append(layer_obj)
+
+    names, inits, applies, core_funs, mutables = zip(*layer_objs)
     core_fun = core.parallel(*zip(names, core_funs))
     mutable = reduce(operator.add, list(mutables))
 
@@ -131,5 +142,6 @@ def Parallel(*layers, name='parallel'):
         return apply(core_fun, mutable=mutable)(params, inputs, **kwargs)
 
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
+
 
 
