@@ -29,20 +29,32 @@ class Layer(NamedTuple):
     mutable: Any
 
 
+# def make_layer(f, mutable=()):
+#     def _layer(layer_transform=lambda f: f, **kwargs):
+#         name = kwargs.pop('name', None)
+#         core_fun = layer_transform(partial(f, **kwargs))
+
+#         def init_fun(rng, *args, **kwargs):
+#             return init(core_fun)(rng, *args, **kwargs)
+
+#         def apply_fun(params, *args, **kwargs):
+#             return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+
+#         return Layer(name, init_fun, apply_fun, core_fun, mutable)
+#     return _layer
+
 def make_layer(f, mutable=()):
-    def _layer(layer_transform=lambda f: f, **kwargs):
-        name = kwargs.pop('name', None)
-        core_fun = layer_transform(partial(f, **kwargs))
+    def _layer(*args, name=None, layer_transform=lambda f: f, **kwargs):
+        core_fun = layer_transform(partial(f, *args, **kwargs))
 
-        def init_fun(rng, *args, **kwargs):
-            return init(core_fun)(rng, *args, **kwargs)
+        def init_fun(rng, *args_init, **kwargs_init):
+            return init(core_fun)(rng, *args_init, **kwargs_init)
 
-        def apply_fun(params, *args, **kwargs):
-            return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+        def apply_fun(params, *args_apply, **kwargs_apply):
+            return apply(core_fun, mutable=mutable)(params, *args_apply, **kwargs_apply)
 
         return Layer(name, init_fun, apply_fun, core_fun, mutable)
     return _layer
-
 
 def vmap(layer, **vmap_kwargs):
     return partial(layer, layer_transform=partial(core.vmap, **vmap_kwargs))
@@ -64,6 +76,32 @@ Identity = make_layer(core.identity)
 FanOut = make_layer(core.fanout)
 FanInSum = make_layer(core.fanin_sum)
 
+# def Serial(*layers, name='serial'):
+#     names, _, _, core_funs, mutables = zip(*layers)
+#     core_fun = core.serial(*zip(names, core_funs))
+#     mutable = reduce(operator.add, list(mutables))
+
+#     def init_fun(rng, *args, **kwargs):
+#         return init(core_fun)(rng, *args, **kwargs)
+
+#     def apply_fun(params, *args, **kwargs):
+#         return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+
+#     return Layer(name, init_fun, apply_fun, core_fun, mutable)
+
+
+# def Parallel(*layers, name='parallel'):
+#     names, _, _, core_funs, mutables = zip(*layers)
+#     core_fun = core.serial(*zip(names, core_funs))
+#     mutable = reduce(operator.add, list(mutables))
+
+#     def init_fun(rng, *args, **kwargs):
+#         return init(core_fun)(rng, *args, **kwargs)
+
+#     def apply_fun(params, *args, **kwargs):
+#         return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+
+#     return Layer(name, init_fun, apply_fun, core_fun, mutable)
 def Serial(*layers, name='serial'):
     names, _, _, core_funs, mutables = zip(*layers)
     core_fun = core.serial(*zip(names, core_funs))
@@ -77,10 +115,9 @@ def Serial(*layers, name='serial'):
 
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
 
-
 def Parallel(*layers, name='parallel'):
     names, _, _, core_funs, mutables = zip(*layers)
-    core_fun = core.serial(*zip(names, core_funs))
+    core_fun = core.parallel(*zip(names, core_funs))
     mutable = reduce(operator.add, list(mutables))
 
     def init_fun(rng, *args, **kwargs):
@@ -90,5 +127,4 @@ def Parallel(*layers, name='parallel'):
         return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
 
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
-
 
