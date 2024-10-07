@@ -40,6 +40,24 @@ class SigTime:
 # 在 core 模块中添加
 def fanin_sum(*args):
     return sum(args)
+  
+# 在 core 模块中添加
+
+def parallel(*layers):
+    def init_fun(rng, x):
+        params = []
+        for layer in layers:
+            rng, layer_rng = random.split(rng)
+            params.append(layer.init(layer_rng, x))
+        return params
+
+    def apply_fun(params, x):
+        outputs = []
+        for param, layer in zip(params, layers):
+            outputs.append(layer.apply(param, x))
+        return outputs
+
+    return nn.Module(init_fun, apply_fun)
 
 
 class Signal(NamedTuple):
