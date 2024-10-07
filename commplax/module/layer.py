@@ -44,18 +44,20 @@ class Layer(NamedTuple):
 #     return _layer
 
 def make_layer(f, mutable=()):
-    def _layer(*args, layer_transform=lambda f: f, **kwargs):
+    def _layer(*args, **kwargs):
         name = kwargs.pop('name', None)
-        core_fun = layer_transform(partial(f, *args, **kwargs))
+        layer_transform = kwargs.pop('layer_transform', lambda f: f)
+        core_fun = layer_transform(partial(f, **kwargs))
 
-        def init_fun(rng, *args_init, **kwargs_init):
-            return init(core_fun)(rng, *args_init, **kwargs_init)
+        def init_fun(rng, *init_args, **init_kwargs):
+            return init(core_fun)(rng, *init_args, **init_kwargs)
 
-        def apply_fun(params, *args_apply, **kwargs_apply):
-            return apply(core_fun, mutable=mutable)(params, *args_apply, **kwargs_apply)
+        def apply_fun(params, *apply_args, **apply_kwargs):
+            return apply(core_fun, mutable=mutable)(params, *apply_args, **apply_kwargs)
 
         return Layer(name, init_fun, apply_fun, core_fun, mutable)
     return _layer
+
 
 
 def vmap(layer, **vmap_kwargs):
