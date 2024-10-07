@@ -531,14 +531,14 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
