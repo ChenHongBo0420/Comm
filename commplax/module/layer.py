@@ -47,7 +47,7 @@ def make_layer(f, mutable=()):
     def _layer(*args, **kwargs):
         name = kwargs.pop('name', None)
         layer_transform = kwargs.pop('layer_transform', lambda f: f)
-        core_fun = layer_transform(partial(f, **kwargs))
+        core_fun = layer_transform(partial(f, *args, **kwargs))
 
         def init_fun(rng, *init_args, **init_kwargs):
             return init(core_fun)(rng, *init_args, **init_kwargs)
