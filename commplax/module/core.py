@@ -561,9 +561,9 @@ def fdbp1(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    input_dim = x.shape[1]
+    input_dim = 2
     hidden_size = 2 
-    output_dim = x.shape[1]
+    output_dim = 2
     x1 = x[:, 0]
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
