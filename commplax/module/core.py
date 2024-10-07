@@ -633,15 +633,29 @@ def serial(*fs):
         return inputs
     return _serial
 
-def parallel(*fs):
-    def _parallel(scope: Scope, inputs, **kwargs):
-        outputs = []
-        if not isinstance(inputs, (list, tuple)):
-            inputs = [inputs] * len(fs)
-        for (name, f), inp in zip(fs, inputs):
-            output = scope.child(f, name=name)(inp, **kwargs)
-            outputs.append(output)
-        return outputs
-    return _parallel
+def Parallel(*layers, name='parallel'):
+    layer_objs = []
+    for item in layers:
+        if isinstance(item, tuple):
+            # 如果是 (name, Layer) 形式
+            layer_name, layer_obj = item
+            # 覆盖 Layer 对象的 name 属性
+            layer_obj = layer_obj._replace(name=layer_name)
+        else:
+            layer_obj = item
+        layer_objs.append(layer_obj)
+
+    names, inits, applies, core_funs, mutables = zip(*layer_objs)
+    core_fun = core.parallel(*zip(names, core_funs))
+    mutable = reduce(operator.add, list(mutables))
+
+    def init_fun(rng, inputs, **kwargs):
+        return init(core_fun)(rng, inputs, **kwargs)
+
+    def apply_fun(params, inputs, **kwargs):
+        return apply(core_fun, mutable=mutable)(params, inputs, **kwargs)
+
+    return Layer(name, init_fun, apply_fun, core_fun, mutable)
+
 
 
