@@ -733,11 +733,17 @@ def fanin_weighted_sum(scope, inputs):
     t = inputs[0].t
     return Signal(val, t)
   
-def concatenate(scope, inputs):
-    vals = [signal.val for signal in inputs]
-    concatenated_val = jnp.concatenate(vals, axis=-1)
-    t = inputs[0].t
-    return Signal(concatenated_val, t)
+def fanin_attention(scope, inputs):
+    num_inputs = len(inputs)
+    # 初始化可训练的权重参数，形状为 (num_inputs,)
+    weights = scope.param('weights', nn.initializers.zeros, (num_inputs,))
+    # 使用 softmax 将权重归一化，使其之和为 1
+    normalized_weights = jax.nn.softmax(weights)
+    # 计算加权和
+    val = sum(w * signal.val for w, signal in zip(normalized_weights, inputs))
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(val, t)
+
 
 def serial(*fs):
     def _serial(scope: Scope, inputs, **kwargs):
