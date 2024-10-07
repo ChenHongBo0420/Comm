@@ -44,8 +44,8 @@ class Layer(NamedTuple):
 #     return _layer
 
 def make_layer(f, mutable=()):
-    def _layer(*args, name=None, layer_transform=lambda f: f, **kwargs):
-        core_fun = layer_transform(partial(f, *args, **kwargs))
+    def _layer(name=None, layer_transform=lambda f: f, **kwargs):
+        core_fun = layer_transform(partial(f, **kwargs))
 
         def init_fun(rng, *args_init, **kwargs_init):
             return init(core_fun)(rng, *args_init, **kwargs_init)
