@@ -195,7 +195,16 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     else:
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
-
+  
+def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
+    running_mean = scope.variable('norm', 'running_mean',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+    if mode == 'train':
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+    else:
+        mean = running_mean.value
+    return signal / jnp.sqrt(mean)
   
 def conv1d(
     scope: Scope,
@@ -214,6 +223,24 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
 
     return Signal(x, t)
+      
+def conv1d1(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn = xop.convolve):
+
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel',
+                     kernel_init,
+                     (taps,), np.complex64)
+    x = conv_fn(x, h, mode=mode)
+
+    return Signal(x, t)   
       
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -279,7 +306,51 @@ def mimofoeaf(scope: Scope,
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
 
+def mimofoeaf1(scope: Scope,
+              signal,
+              framesize=100,
+              w0=0,
+              train=False,
+              preslicer=lambda x: x,
+              foekwargs={},
+              mimofn=af.rde,
+              mimokwargs={},
+              mimoinitargs={}):
 
+    sps = 2
+    dims = 2
+    tx = signal.t
+    # MIMO
+    slisig = preslicer(signal)
+    auxsig = scope.child(mimoaf,
+                         mimofn=mimofn,
+                         train=train,
+                         mimokwargs=mimokwargs,
+                         mimoinitargs=mimoinitargs,
+                         name='MIMO4FOE')(slisig)
+    y, ty = auxsig # assume y is continuous in time
+    yf = xop.frame(y, framesize, framesize)
+
+    foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
+    state = scope.variable('af_state', 'framefoeaf',
+                           lambda *_: (0., 0, foe_init(w0)), ())
+    phi, af_step, af_stats = state.value
+
+    af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
+    wp = wf.reshape((-1, dims)).mean(axis=-1)
+    w = jnp.interp(jnp.arange(y.shape[0] * sps) / sps,
+                   jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2, wp) / sps
+    psi = phi + jnp.cumsum(w)
+    state.value = (psi[-1], af_step, af_stats)
+
+    # apply FOE to original input signal via linear extrapolation
+    psi_ext = jnp.concatenate([w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
+                               psi,
+                               w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]])
+
+    signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+    return signal
+                
 def mimoaf(
     scope: Scope,
     signal,
@@ -308,7 +379,35 @@ def mimoaf(
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
     return Signal(y, t)
+      
+def mimoaf1(
+    scope: Scope,
+    signal,
+    taps=32,
+    rtap=None,
+    dims=2,
+    sps=2,
+    train=False,
+    mimofn=af.ddlms,
+    mimokwargs={},
+    mimoinitargs={}):
 
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+    x = xop.frame(x, taps, sps)
+    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+    state = scope.variable('af_state', 'mimoaf',
+                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+    truth_var = scope.variable('aux_inputs', 'truth',
+                               lambda *_: None, ())
+    truth = truth_var.value
+    if truth is not None:
+        truth = truth[t.start: truth.shape[0] + t.stop]
+    af_step, af_stats = state.value
+    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+    y = mimo_apply(af_weights, x)
+    state.value = (af_step, af_stats)
+    return Signal(y, t)
       
 # def fdbp(
 #     scope: Scope,
