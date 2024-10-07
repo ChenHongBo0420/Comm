@@ -611,14 +611,13 @@ def identity(scope, inputs):
 #             outputs.append(out)
 #         return outputs
 #     return _parallel
-def fanout(scope: Scope, inputs, num):
+
+def fanout(scope: Scope, inputs, *, num):
     return (inputs,) * num
 
-# 定义 fanin_sum 函数
 def fanin_sum(scope: Scope, inputs):
     return sum(inputs)
 
-# 定义 serial 函数
 def serial(*fs):
     def _serial(scope: Scope, inputs, **kwargs):
         for f in fs:
@@ -630,7 +629,6 @@ def serial(*fs):
         return inputs
     return _serial
 
-# 定义 parallel 函数
 def parallel(*fs):
     def _parallel(scope: Scope, inputs, **kwargs):
         outputs = []
@@ -643,4 +641,3 @@ def parallel(*fs):
             outputs.append(output)
         return outputs
     return _parallel
-
