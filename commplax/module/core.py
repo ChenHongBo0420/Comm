@@ -725,6 +725,13 @@ def fanin_mean(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
 
+def fanin_weighted_sum(scope, inputs):
+    num_inputs = len(inputs)
+    weights = scope.param('weights', nn.initializers.ones, (num_inputs,))
+    weights = jax.nn.softmax(weights)  # 归一化权重
+    val = sum(w * signal.val for w, signal in zip(weights, inputs))
+    t = inputs[0].t
+    return Signal(val, t)
 
 def serial(*fs):
     def _serial(scope: Scope, inputs, **kwargs):
