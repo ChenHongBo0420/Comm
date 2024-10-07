@@ -616,11 +616,8 @@ def identity(scope, inputs):
 def fanout(scope, inputs, num):
     return (inputs,) * num
 
-def fanin_sum(scope: Scope, inputs):
-    val = sum(signal.val for signal in inputs)
-    t = inputs[0].t  # 假设所有的 t 都相同
-    return Signal(val, t)
-
+def fanin_sum(scope, inputs):
+    return sum(inputs)
 
 def serial(*fs):
     def _serial(scope: Scope, inputs, **kwargs):
@@ -636,15 +633,13 @@ def serial(*fs):
 def parallel(*fs):
     def _parallel(scope: Scope, inputs, **kwargs):
         outputs = []
-        if not isinstance(inputs, (list, tuple)):
-            inputs = [inputs] * len(fs)
-        for f, inp in zip(fs, inputs):
-            if isinstance(f, tuple) or isinstance(f, list):
+        for f in fs:
+            if isinstance(f, tuple):
                 name, f = f
             else:
                 name = None
-            output = scope.child(f, name=name)(inp, **kwargs)
+            output = scope.child(f, name=name)(inputs, **kwargs)
             outputs.append(output)
-        return tuple(outputs)  # 返回元组
+        return outputs
     return _parallel
 
