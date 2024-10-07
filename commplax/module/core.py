@@ -50,10 +50,9 @@ class Signal(NamedTuple):
         return Signal(self.val * other, self.t)
 
     def __add__(self, other):
-        # Signal._check_type(other)
-        self._check_type(other)
-        # return Signal(self.val + other, self.t)
-        return Signal(self.val + other.val, self.t)
+        Signal._check_type(other)
+        return Signal(self.val + other, self.t)
+        
 
     def __sub__(self, other):
         Signal._check_type(other)
@@ -83,10 +82,8 @@ class Signal(NamedTuple):
         return self // other
 
     @classmethod
-    # def _check_type(cls, other):
-    #     assert not isinstance(other, cls), 'not implemented'
     def _check_type(cls, other):
-        assert isinstance(other, cls), 'Expected Signal instance'
+        assert not isinstance(other, cls), 'not implemented'
 
 
 def zeros(key, shape, dtype=jnp.float32): return jnp.zeros(shape, dtype)
