@@ -732,6 +732,12 @@ def fanin_weighted_sum(scope, inputs):
     val = sum(w * signal.val for w, signal in zip(weights, inputs))
     t = inputs[0].t
     return Signal(val, t)
+  
+def concatenate(scope, inputs):
+    vals = [signal.val for signal in inputs]
+    concatenated_val = jnp.concatenate(vals, axis=-1)
+    t = inputs[0].t
+    return Signal(concatenated_val, t)
 
 def serial(*fs):
     def _serial(scope: Scope, inputs, **kwargs):
