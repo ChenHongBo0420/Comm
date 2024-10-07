@@ -640,12 +640,15 @@ def serial(*fs):
 def parallel(*fs):
     def _parallel(scope: Scope, inputs, **kwargs):
         outputs = []
-        for f in fs:
+        if not isinstance(inputs, (list, tuple)):
+            inputs = [inputs] * len(fs)
+        for f, inp in zip(fs, inputs):
             if isinstance(f, tuple) or isinstance(f, list):
                 name, f = f
             else:
                 name = None
-            output = scope.child(f, name=name)(inputs, **kwargs)
+            output = scope.child(f, name=name)(inp, **kwargs)
             outputs.append(output)
-        return outputs
+        return tuple(outputs)  # 返回元组
     return _parallel
+
