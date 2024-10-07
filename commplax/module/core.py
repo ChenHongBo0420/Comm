@@ -719,6 +719,11 @@ def fanin_sum(scope, inputs):
     val = sum(signal.val for signal in inputs)
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
+  
+def fanin_mean(scope, inputs):
+    val = sum(signal.val for signal in inputs) / len(inputs)
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(val, t)
 
 
 def serial(*fs):
