@@ -37,28 +37,6 @@ class SigTime:
   stop: int = struct.field(pytree_node=False)
   sps: int = struct.field(pytree_node=False)
   
-# 在 core 模块中添加
-def fanin_sum(*args):
-    return sum(args)
-  
-# 在 core 模块中添加
-
-def parallel(*layers):
-    def init_fun(rng, x):
-        params = []
-        for layer in layers:
-            rng, layer_rng = random.split(rng)
-            params.append(layer.init(layer_rng, x))
-        return params
-
-    def apply_fun(params, x):
-        outputs = []
-        for param, layer in zip(params, layers):
-            outputs.append(layer.apply(param, x))
-        return outputs
-
-    return nn.Module(init_fun, apply_fun)
-
 
 class Signal(NamedTuple):
     val: Array
@@ -604,21 +582,21 @@ def identity(scope, inputs):
     return inputs
 
 
-def fanout(scope, inputs, num):
-    return (inputs,) * num
+# def fanout(scope, inputs, num):
+#     return (inputs,) * num
       
 # compositors
 
-def serial(*fs):
-    def _serial(scope, inputs, **kwargs):
-        for f in fs:
-            if isinstance(f, tuple) or isinstance(f, list):
-                name, f = f
-            else:
-                name = None
-            inputs = scope.child(f, name=name)(inputs, **kwargs)
-        return inputs
-    return _serial
+# def serial(*fs):
+#     def _serial(scope, inputs, **kwargs):
+#         for f in fs:
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             inputs = scope.child(f, name=name)(inputs, **kwargs)
+#         return inputs
+#     return _serial
 
 
 # def parallel(*fs):
@@ -633,5 +611,36 @@ def serial(*fs):
 #             outputs.append(out)
 #         return outputs
 #     return _parallel
+def fanout(scope: Scope, inputs, num):
+    return (inputs,) * num
 
+# 定义 fanin_sum 函数
+def fanin_sum(scope: Scope, inputs):
+    return sum(inputs)
+
+# 定义 serial 函数
+def serial(*fs):
+    def _serial(scope: Scope, inputs, **kwargs):
+        for f in fs:
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            inputs = scope.child(f, name=name)(inputs, **kwargs)
+        return inputs
+    return _serial
+
+# 定义 parallel 函数
+def parallel(*fs):
+    def _parallel(scope: Scope, inputs, **kwargs):
+        outputs = []
+        for f in fs:
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            output = scope.child(f, name=name)(inputs, **kwargs)
+            outputs.append(output)
+        return outputs
+    return _parallel
 
