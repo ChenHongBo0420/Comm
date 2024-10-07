@@ -124,11 +124,12 @@ def Parallel(*layers, name='parallel'):
     core_fun = core.parallel(*zip(names, core_funs))
     mutable = reduce(operator.add, list(mutables))
 
-    def init_fun(rng, *args, **kwargs):
-        return init(core_fun)(rng, *args, **kwargs)
+    def init_fun(rng, inputs, **kwargs):
+        return init(core_fun)(rng, inputs, **kwargs)
 
-    def apply_fun(params, *args, **kwargs):
-        return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+    def apply_fun(params, inputs, **kwargs):
+        return apply(core_fun, mutable=mutable)(params, inputs, **kwargs)
 
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
+
 
