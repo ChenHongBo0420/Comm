@@ -36,6 +36,10 @@ class SigTime:
   start: int = struct.field(pytree_node=False)
   stop: int = struct.field(pytree_node=False)
   sps: int = struct.field(pytree_node=False)
+  
+# 在 core 模块中添加
+def fanin_sum(*args):
+    return sum(args)
 
 
 class Signal(NamedTuple):
