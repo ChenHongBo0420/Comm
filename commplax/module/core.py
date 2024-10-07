@@ -624,7 +624,10 @@ def fanout(scope: Scope, inputs, *, num):
     return (inputs,) * num
 
 def fanin_sum(scope: Scope, inputs):
-    return sum(inputs)
+    val = sum(signal.val for signal in inputs)
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(val, t)
+
 
 def serial(*fs):
     def _serial(scope: Scope, inputs, **kwargs):
