@@ -58,7 +58,6 @@ def make_layer(f, mutable=()):
     return _layer
 
 
-
 def vmap(layer, **vmap_kwargs):
     return partial(layer, layer_transform=partial(core.vmap, **vmap_kwargs))
 
