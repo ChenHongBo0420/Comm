@@ -628,12 +628,11 @@ class TwoLayerRNN_SSM:
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
         hidden_state2 = complex_channel_attention(hidden_state2)  # 应用注意力机制
         
-        # 添加噪声项
-        if rng is not None:
-            noise1 = self.noise_std * random.normal(rng, hidden_state1.shape)
-            noise2 = self.noise_std * random.normal(rng, hidden_state2.shape)
-            hidden_state1 += noise1
-            hidden_state2 += noise2
+       
+        noise1 = self.noise_std * random.normal(rng, hidden_state1.shape)
+        noise2 = self.noise_std * random.normal(rng, hidden_state2.shape)
+        hidden_state1 += noise1
+        hidden_state2 += noise2
         
         # 观测方程
         output = jnp.dot(hidden_state2, self.C)
