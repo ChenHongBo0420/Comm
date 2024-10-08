@@ -597,7 +597,49 @@ class TwoLayerRNN:
         output = jnp.dot(hidden_state2, self.C)
         
         return output
+
+class TwoLayerRNN_SSM:
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, noise_std=1e-3):
+        self.hidden_size1 = hidden_size1
+        self.hidden_size2 = hidden_size2
+        self.noise_std = noise_std
+
+        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+        self.A1 = generate_hippo_matrix(hidden_size1)
+        self.A2 = generate_hippo_matrix(hidden_size2)
+        
+        # 输入矩阵 B
+        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+
+        # 观测矩阵 C
+        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
     
+    def __call__(self, x, hidden_state1=None, hidden_state2=None, rng=None):
+        if hidden_state1 is None:
+            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+        if hidden_state2 is None:
+            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+        # 使用 HIPPO 矩阵进行状态更新并应用注意力机制
+        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+        hidden_state1 = squeeze_excite_attention(hidden_state1)  # 应用注意力机制
+
+        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        hidden_state2 = complex_channel_attention(hidden_state2)  # 应用注意力机制
+        
+        # 添加噪声项
+        if rng is not None:
+            noise1 = self.noise_std * random.normal(rng, hidden_state1.shape)
+            noise2 = self.noise_std * random.normal(rng, hidden_state2.shape)
+            hidden_state1 += noise1
+            hidden_state2 += noise2
+        
+        # 观测方程
+        output = jnp.dot(hidden_state2, self.C)
+        
+        return output, hidden_state1, hidden_state2
+      
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
@@ -696,8 +738,8 @@ def fdbp2(
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    # x = rnn_layer(x_updated)
+    rnn_layer = TwoLayerRNN_SSM(input_dim, hidden_size, hidden_size, output_dim)
+    x = rnn_layer(x_updated)
     x = x_updated
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
