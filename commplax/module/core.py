@@ -597,12 +597,20 @@ class TwoLayerRNN:
         output = jnp.dot(hidden_state2, self.C)
         
         return output
-
+      
 class TwoLayerRNN_SSM:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, noise_std=1e-3):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+        """
+        初始化两层RNN
+
+        参数：
+        - input_dim: 输入特征的维度
+        - hidden_size1: 第一层隐藏状态的维度
+        - hidden_size2: 第二层隐藏状态的维度
+        - output_dim: 输出特征的维度
+        """
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
-        self.noise_std = noise_std
 
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
         self.A1 = generate_hippo_matrix(hidden_size1)
@@ -615,30 +623,44 @@ class TwoLayerRNN_SSM:
         # 观测矩阵 C
         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None, rng=None):
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+        """
+        前向传播
+
+        参数：
+        - x: 当前时间步的输入，形状为 (batch_size, input_dim)
+        - hidden_state1: 前一时间步的第一层隐藏状态，形状为 (batch_size, hidden_size1)
+        - hidden_state2: 前一时间步的第二层隐藏状态，形状为 (batch_size, hidden_size2)
+
+        返回：
+        - output: 当前时间步的输出，形状为 (batch_size, output_dim)
+        - hidden_state1: 更新后的第一层隐藏状态
+        - hidden_state2: 更新后的第二层隐藏状态
+        """
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        # 使用 HIPPO 矩阵进行状态更新并应用注意力机制
+        # 第一层状态更新
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        hidden_state1 = squeeze_excite_attention(hidden_state1)  # 应用注意力机制
+        # 应用非线性激活函数 tanh
+        hidden_state1 = tanh(hidden_state1)
+        # 应用注意力机制
+        hidden_state1 = squeeze_excite_attention(hidden_state1)
 
+        # 第二层状态更新
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        hidden_state2 = complex_channel_attention(hidden_state2)  # 应用注意力机制
-        
-       
-        noise1 = self.noise_std * random.normal(rng, hidden_state1.shape)
-        noise2 = self.noise_std * random.normal(rng, hidden_state2.shape)
-        hidden_state1 += noise1
-        hidden_state2 += noise2
+        # 应用非线性激活函数 tanh
+        hidden_state2 = tanh(hidden_state2)
+        # 应用复杂通道注意力机制
+        hidden_state2 = complex_channel_attention(hidden_state2)
         
         # 观测方程
         output = jnp.dot(hidden_state2, self.C)
         
         return output
-      
+
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
         self.W = orthogonal()(random.PRNGKey(0), (input_dim, output_dim))
