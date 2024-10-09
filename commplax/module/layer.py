@@ -88,32 +88,6 @@ FanInSum = make_layer(core.fanin_sum)
 FanInMean = make_layer(core.fanin_mean)
 FanInW = make_layer(core.fanin_weighted_sum)
 FanInAttention = make_layer(core.fanin_attention)
-# def Serial(*layers, name='serial'):
-#     names, _, _, core_funs, mutables = zip(*layers)
-#     core_fun = core.serial(*zip(names, core_funs))
-#     mutable = reduce(operator.add, list(mutables))
-
-#     def init_fun(rng, *args, **kwargs):
-#         return init(core_fun)(rng, *args, **kwargs)
-
-#     def apply_fun(params, *args, **kwargs):
-#         return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
-
-#     return Layer(name, init_fun, apply_fun, core_fun, mutable)
-
-
-# def Parallel(*layers, name='parallel'):
-#     names, _, _, core_funs, mutables = zip(*layers)
-#     core_fun = core.serial(*zip(names, core_funs))
-#     mutable = reduce(operator.add, list(mutables))
-
-#     def init_fun(rng, *args, **kwargs):
-#         return init(core_fun)(rng, *args, **kwargs)
-
-#     def apply_fun(params, *args, **kwargs):
-#         return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
-
-#     return Layer(name, init_fun, apply_fun, core_fun, mutable)
 def Serial(*layers, name='serial'):
     names, _, _, core_funs, mutables = zip(*layers)
     core_fun = core.serial(*zip(names, core_funs))
@@ -127,32 +101,58 @@ def Serial(*layers, name='serial'):
 
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
 
-def Parallel(*layers, name='parallel'):
-    layer_objs = []
-    for item in layers:
-        if isinstance(item, Layer):
-            # 如果是 Layer 对象，直接使用
-            layer_obj = item
-        elif isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], Layer):
-            # 如果是 (name, Layer) 形式
-            layer_name, layer_obj = item
-            # 覆盖 Layer 对象的 name 属性
-            layer_obj = layer_obj._replace(name=layer_name)
-        else:
-            raise ValueError(f"Invalid layer format in Parallel: {item}")
-        layer_objs.append(layer_obj)
 
-    names, inits, applies, core_funs, mutables = zip(*layer_objs)
-    core_fun = core.parallel(*zip(names, core_funs))
+def Parallel(*layers, name='parallel'):
+    names, _, _, core_funs, mutables = zip(*layers)
+    core_fun = core.serial(*zip(names, core_funs))
     mutable = reduce(operator.add, list(mutables))
 
-    def init_fun(rng, inputs, **kwargs):
-        return init(core_fun)(rng, inputs, **kwargs)
+    def init_fun(rng, *args, **kwargs):
+        return init(core_fun)(rng, *args, **kwargs)
 
-    def apply_fun(params, inputs, **kwargs):
-        return apply(core_fun, mutable=mutable)(params, inputs, **kwargs)
+    def apply_fun(params, *args, **kwargs):
+        return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
 
     return Layer(name, init_fun, apply_fun, core_fun, mutable)
+# def Serial(*layers, name='serial'):
+#     names, _, _, core_funs, mutables = zip(*layers)
+#     core_fun = core.serial(*zip(names, core_funs))
+#     mutable = reduce(operator.add, list(mutables))
+
+#     def init_fun(rng, *args, **kwargs):
+#         return init(core_fun)(rng, *args, **kwargs)
+
+#     def apply_fun(params, *args, **kwargs):
+#         return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+
+#     return Layer(name, init_fun, apply_fun, core_fun, mutable)
+
+# def Parallel(*layers, name='parallel'):
+#     layer_objs = []
+#     for item in layers:
+#         if isinstance(item, Layer):
+#             # 如果是 Layer 对象，直接使用
+#             layer_obj = item
+#         elif isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], Layer):
+#             # 如果是 (name, Layer) 形式
+#             layer_name, layer_obj = item
+#             # 覆盖 Layer 对象的 name 属性
+#             layer_obj = layer_obj._replace(name=layer_name)
+#         else:
+#             raise ValueError(f"Invalid layer format in Parallel: {item}")
+#         layer_objs.append(layer_obj)
+
+#     names, inits, applies, core_funs, mutables = zip(*layer_objs)
+#     core_fun = core.parallel(*zip(names, core_funs))
+#     mutable = reduce(operator.add, list(mutables))
+
+#     def init_fun(rng, inputs, **kwargs):
+#         return init(core_fun)(rng, inputs, **kwargs)
+
+#     def apply_fun(params, inputs, **kwargs):
+#         return apply(core_fun, mutable=mutable)(params, inputs, **kwargs)
+
+#     return Layer(name, init_fun, apply_fun, core_fun, mutable)
 
 
 
