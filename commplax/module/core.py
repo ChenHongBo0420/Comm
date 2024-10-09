@@ -623,8 +623,6 @@ class ThreeLayerRNN_SSM:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        if hidden_state3 is None:
-            hidden_state3 = jnp.zeros((x.shape[0], self.hidden_size2))
         
         # 第一层状态更新
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
