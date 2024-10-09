@@ -700,7 +700,7 @@ def fdbp1(
     d_init=delta,
     n_init=gauss):
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=261, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     input_dim = x.shape[1]
     hidden_size = 2 
     output_dim = x.shape[1]
@@ -710,10 +710,10 @@ def fdbp1(
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = ThreeLayerRNN_SSM(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
-    for i in range(steps):
+    for i in range(5):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=51,
+                                                            taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     
