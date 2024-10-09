@@ -598,67 +598,47 @@ class TwoLayerRNN:
         
         return output
       
-class TwoLayerRNN_SSM:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-        """
-        初始化两层RNN
-
-        参数：
-        - input_dim: 输入特征的维度
-        - hidden_size1: 第一层隐藏状态的维度
-        - hidden_size2: 第二层隐藏状态的维度
-        - output_dim: 输出特征的维度
-        """
+class ThreeLayerRNN_SSM:
+    def __init__(self, input_dim, hidden_size1, hidden_size2, hidden_size3, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
+        self.hidden_size3 = hidden_size3
 
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
         self.A1 = generate_hippo_matrix(hidden_size1)
         self.A2 = generate_hippo_matrix(hidden_size2)
+        self.A3 = generate_hippo_matrix(hidden_size3)
         
         # 输入矩阵 B
         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+        self.B3 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size3))
 
         # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
+        self.C = orthogonal()(random.PRNGKey(4), (hidden_size3, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
-        """
-        前向传播
-
-        参数：
-        - x: 当前时间步的输入，形状为 (batch_size, input_dim)
-        - hidden_state1: 前一时间步的第一层隐藏状态，形状为 (batch_size, hidden_size1)
-        - hidden_state2: 前一时间步的第二层隐藏状态，形状为 (batch_size, hidden_size2)
-
-        返回：
-        - output: 当前时间步的输出，形状为 (batch_size, output_dim)
-        - hidden_state1: 更新后的第一层隐藏状态
-        - hidden_state2: 更新后的第二层隐藏状态
-        """
+    def __call__(self, x, hidden_state1=None, hidden_state2=None, hidden_state3=None):
+      
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        if hidden_state3 is None:
+            hidden_state3 = jnp.zeros((x.shape[0], self.hidden_size3))
         
         # 第一层状态更新
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        # 应用非线性激活函数 tanh
-        hidden_state1 = jax.nn.softmax(hidden_state1)
-        # 应用注意力机制
-        hidden_state1 = squeeze_excite_attention(hidden_state1)
-
+        
         # 第二层状态更新
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        # 应用非线性激活函数 tanh
-        hidden_state2 = jax.nn.softmax(hidden_state2)
-        # 应用复杂通道注意力机制
-        hidden_state2 = complex_channel_attention(hidden_state2)
+        
+        # 第三层状态更新
+        hidden_state3 = jnp.dot(hidden_state3, self.A3) + jnp.dot(hidden_state2, self.B3)
         
         # 观测方程
-        output = jnp.dot(hidden_state2, self.C)
+        output = jnp.dot(hidden_state3, self.C)
         
+        # 返回输出和更新后的隐藏状态
         return output
 
 class LinearLayer:
