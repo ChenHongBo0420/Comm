@@ -710,7 +710,7 @@ def fdbp1(
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = TwoLayerRNN_SSM(input_dim, hidden_size, hidden_size, output_dim)
+    rnn_layer = ThreeLayerRNN_SSM(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
