@@ -645,14 +645,14 @@ class TwoLayerRNN_SSM:
         # 第一层状态更新
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
         # 应用非线性激活函数 tanh
-        hidden_state1 = jax.nn.relu(hidden_state1)
+        hidden_state1 = jax.nn.softmax(hidden_state1)
         # 应用注意力机制
         hidden_state1 = squeeze_excite_attention(hidden_state1)
 
         # 第二层状态更新
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
         # 应用非线性激活函数 tanh
-        hidden_state2 = jax.nn.relu(hidden_state2)
+        hidden_state2 = jax.nn.softmax(hidden_state2)
         # 应用复杂通道注意力机制
         hidden_state2 = complex_channel_attention(hidden_state2)
         
