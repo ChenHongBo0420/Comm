@@ -598,46 +598,42 @@ class TwoLayerRNN:
         
         return output
       
-class ThreeLayerRNN_SSM:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-        self.hidden_size1 = hidden_size1
-        self.hidden_size2 = hidden_size2
+# class ThreeLayerRNN_SSM:
+#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+#         self.hidden_size1 = hidden_size1
+#         self.hidden_size2 = hidden_size2
   
 
-        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-        self.A1 = generate_hippo_matrix(hidden_size1)
-        self.A2 = generate_hippo_matrix(hidden_size2)
-        self.A3 = generate_hippo_matrix(hidden_size2)
+#         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
+#         self.A1 = generate_hippo_matrix(hidden_size1)
+#         self.A2 = generate_hippo_matrix(hidden_size2)
+#         self.A3 = generate_hippo_matrix(hidden_size2)
         
-        # 输入矩阵 B
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-        self.B3 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
+#         # 输入矩阵 B
+#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
+#         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+#         self.B3 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
 
-        # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+#         # 观测矩阵 C
+#         self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
+#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
       
-        if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+#         if hidden_state1 is None:
+#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+#         if hidden_state2 is None:
+#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        # 第一层状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+#         # 第一层状态更新
+#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
         
-        # 第二层状态更新
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+
+#         hidden_state3 = jnp.dot(hidden_state2, self.A3) + jnp.dot(hidden_state2, self.B3)
         
-        # 第三层状态更新
-        hidden_state3 = jnp.dot(hidden_state2, self.A3) + jnp.dot(hidden_state2, self.B3)
-        
-        # 观测方程
-        output = jnp.dot(hidden_state2, self.C)
-        
-        # 返回输出和更新后的隐藏状态
-        return output
+#         output = jnp.dot(hidden_state2, self.C)
+  
+#         return output
 
 class LinearLayer:
     def __init__(self, input_dim, output_dim):
@@ -704,12 +700,12 @@ def fdbp1(
     input_dim = x.shape[1]
     hidden_size = 2 
     output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = ThreeLayerRNN_SSM(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = ThreeLayerRNN_SSM(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
