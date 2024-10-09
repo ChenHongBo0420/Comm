@@ -599,32 +599,32 @@ class TwoLayerRNN:
         return output
       
 class ThreeLayerRNN_SSM:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, hidden_size3, output_dim):
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
-        self.hidden_size3 = hidden_size3
+  
 
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
         self.A1 = generate_hippo_matrix(hidden_size1)
         self.A2 = generate_hippo_matrix(hidden_size2)
-        self.A3 = generate_hippo_matrix(hidden_size3)
+        self.A3 = generate_hippo_matrix(hidden_size2)
         
         # 输入矩阵 B
         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-        self.B3 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size3))
+        self.B3 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
 
         # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(4), (hidden_size3, output_dim))
+        self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
     
-    def __call__(self, x, hidden_state1=None, hidden_state2=None, hidden_state3=None):
+    def __call__(self, x, hidden_state1=None, hidden_state2=None):
       
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         if hidden_state3 is None:
-            hidden_state3 = jnp.zeros((x.shape[0], self.hidden_size3))
+            hidden_state3 = jnp.zeros((x.shape[0], self.hidden_size2))
         
         # 第一层状态更新
         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
@@ -633,10 +633,10 @@ class ThreeLayerRNN_SSM:
         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
         
         # 第三层状态更新
-        hidden_state3 = jnp.dot(hidden_state3, self.A3) + jnp.dot(hidden_state2, self.B3)
+        hidden_state3 = jnp.dot(hidden_state2, self.A3) + jnp.dot(hidden_state2, self.B3)
         
         # 观测方程
-        output = jnp.dot(hidden_state3, self.C)
+        output = jnp.dot(hidden_state2, self.C)
         
         # 返回输出和更新后的隐藏状态
         return output
