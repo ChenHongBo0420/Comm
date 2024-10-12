@@ -42,67 +42,67 @@ class AdaptiveFilter(NamedTuple):
     eval_fn: ApplyFn
 
 
-def adaptive_filter(af_maker: Callable, trainable=False):
-    @functools.wraps(af_maker)
-    def _af_maker(*args, **kwargs):
-        init, update, apply = af_maker(*args, **kwargs)
-
-        @functools.wraps(init)
-        def _init(*args, **kwargs):
-            x0 = init(*args, **kwargs)
-            return jax.device_put(x0)
-
-        @jax.jit
-        @functools.wraps(update)
-        def _update(i, af_state, af_inp):
-            if trainable:
-                af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
-                af_inp = (af_inp + (0.,))[:2]
-            else:
-                af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
-            af_inp = jax.device_put(af_inp)
-            af_state, af_out = stop_gradient(update(i, af_state, af_inp))
-            return af_state, af_out
-
-        @jax.jit
-        @functools.wraps(apply)
-        def _apply(af_ps, af_xs):
-            return apply(af_ps, af_xs)
-
-        _update.trainable = trainable
-
-        return AdaptiveFilter(_init, _update, _apply)
-
-    return _af_maker
-
-
-# def array(af_maker, replicas, axis=-1):
+# def adaptive_filter(af_maker: Callable, trainable=False):
 #     @functools.wraps(af_maker)
-#     def rep_af_maker(*args, **kwargs):
+#     def _af_maker(*args, **kwargs):
 #         init, update, apply = af_maker(*args, **kwargs)
 
 #         @functools.wraps(init)
-#         def rep_init(*args, **kwargs):
+#         def _init(*args, **kwargs):
 #             x0 = init(*args, **kwargs)
-#             x0_flat, x0_tree = tree_flatten(x0)
-#             x0_flat = tuple(map(lambda v: jnp.repeat(v[..., None], replicas, axis=axis), x0_flat))
-#             x0 = tree_unflatten(x0_tree, x0_flat)
-#             return x0
+#             return jax.device_put(x0)
 
 #         @jax.jit
 #         @functools.wraps(update)
-#         def rep_update(i, af_state, af_inp):
-#             af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
+#         def _update(i, af_state, af_inp):
+#             if trainable:
+#                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
+#                 af_inp = (af_inp + (0.,))[:2]
+#             else:
+#                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
+#             af_inp = jax.device_put(af_inp)
+#             af_state, af_out = stop_gradient(update(i, af_state, af_inp))
 #             return af_state, af_out
 
 #         @jax.jit
 #         @functools.wraps(apply)
-#         def rep_apply(af_ps, af_xs):
-#             return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
+#         def _apply(af_ps, af_xs):
+#             return apply(af_ps, af_xs)
 
-#         return AdaptiveFilter(rep_init, rep_update, rep_apply)
+#         _update.trainable = trainable
 
-#     return rep_af_maker
+#         return AdaptiveFilter(_init, _update, _apply)
+
+#     return _af_maker
+
+
+def array(af_maker, replicas, axis=-1):
+    @functools.wraps(af_maker)
+    def rep_af_maker(*args, **kwargs):
+        init, update, apply = af_maker(*args, **kwargs)
+
+        @functools.wraps(init)
+        def rep_init(*args, **kwargs):
+            x0 = init(*args, **kwargs)
+            x0_flat, x0_tree = tree_flatten(x0)
+            x0_flat = tuple(map(lambda v: jnp.repeat(v[..., None], replicas, axis=axis), x0_flat))
+            x0 = tree_unflatten(x0_tree, x0_flat)
+            return x0
+
+        @jax.jit
+        @functools.wraps(update)
+        def rep_update(i, af_state, af_inp):
+            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
+            return af_state, af_out
+
+        @jax.jit
+        @functools.wraps(apply)
+        def rep_apply(af_ps, af_xs):
+            return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
+
+        return AdaptiveFilter(rep_init, rep_update, rep_apply)
+
+    return rep_af_maker
 
 def print_shapes(obj, name):
     if isinstance(obj, tuple):
