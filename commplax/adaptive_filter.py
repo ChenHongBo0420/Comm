@@ -42,38 +42,38 @@ class AdaptiveFilter(NamedTuple):
     eval_fn: ApplyFn
 
 
-# def adaptive_filter(af_maker: Callable, trainable=False):
-#     @functools.wraps(af_maker)
-#     def _af_maker(*args, **kwargs):
-#         init, update, apply = af_maker(*args, **kwargs)
+def adaptive_filter(af_maker: Callable, trainable=False):
+    @functools.wraps(af_maker)
+    def _af_maker(*args, **kwargs):
+        init, update, apply = af_maker(*args, **kwargs)
 
-#         @functools.wraps(init)
-#         def _init(*args, **kwargs):
-#             x0 = init(*args, **kwargs)
-#             return jax.device_put(x0)
+        @functools.wraps(init)
+        def _init(*args, **kwargs):
+            x0 = init(*args, **kwargs)
+            return jax.device_put(x0)
 
-#         @jax.jit
-#         @functools.wraps(update)
-#         def _update(i, af_state, af_inp):
-#             if trainable:
-#                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
-#                 af_inp = (af_inp + (0.,))[:2]
-#             else:
-#                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
-#             af_inp = jax.device_put(af_inp)
-#             af_state, af_out = stop_gradient(update(i, af_state, af_inp))
-#             return af_state, af_out
+        @jax.jit
+        @functools.wraps(update)
+        def _update(i, af_state, af_inp):
+            if trainable:
+                af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
+                af_inp = (af_inp + (0.,))[:2]
+            else:
+                af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
+            af_inp = jax.device_put(af_inp)
+            af_state, af_out = stop_gradient(update(i, af_state, af_inp))
+            return af_state, af_out
 
-#         @jax.jit
-#         @functools.wraps(apply)
-#         def _apply(af_ps, af_xs):
-#             return apply(af_ps, af_xs)
+        @jax.jit
+        @functools.wraps(apply)
+        def _apply(af_ps, af_xs):
+            return apply(af_ps, af_xs)
 
-#         _update.trainable = trainable
+        _update.trainable = trainable
 
-#         return AdaptiveFilter(_init, _update, _apply)
+        return AdaptiveFilter(_init, _update, _apply)
 
-#     return _af_maker
+    return _af_maker
 
 
 def array(af_maker, replicas, axis=-1):
@@ -117,45 +117,45 @@ def print_shapes(obj, name):
         else:
             print(f"{name} is not a JAX array")
             
-def array(af_maker, replicas, axis=-1):
-    @functools.wraps(af_maker)
-    def rep_af_maker(*args, **kwargs):
-        init, update, apply = af_maker(*args, **kwargs)
+# def array(af_maker, replicas, axis=-1):
+#     @functools.wraps(af_maker)
+#     def rep_af_maker(*args, **kwargs):
+#         init, update, apply = af_maker(*args, **kwargs)
 
-        @functools.wraps(init)
-        def rep_init(*args, **kwargs):
-            x0 = init(*args, **kwargs)
-            x0_flat, x0_tree = tree_flatten(x0)
-            x0_flat = tuple(map(lambda v: jnp.repeat(v[..., None], replicas, axis=axis), x0_flat))
-            x0 = tree_unflatten(x0_tree, x0_flat)
-            return x0
+#         @functools.wraps(init)
+#         def rep_init(*args, **kwargs):
+#             x0 = init(*args, **kwargs)
+#             x0_flat, x0_tree = tree_flatten(x0)
+#             x0_flat = tuple(map(lambda v: jnp.repeat(v[..., None], replicas, axis=axis), x0_flat))
+#             x0 = tree_unflatten(x0_tree, x0_flat)
+#             return x0
 
-        @jax.jit
-        @functools.wraps(update)
-        def rep_update(i, af_state, af_inp):
-            af_state_fixed = []
-            af_inp_fixed = []
-            for s in af_state:
-                if len(s.shape) < 3: 
-                    af_state_fixed.append(jnp.expand_dims(s, axis=1))
-                else:
-                    af_state_fixed.append(s)
-            for inp in af_inp:
-                if len(inp.shape) < 2: 
-                    af_inp_fixed.append(jnp.broadcast_to(inp, (100, 2)))
-                else:
-                    af_inp_fixed.append(inp)
-            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, tuple(af_state_fixed), tuple(af_inp_fixed))
-            return af_state, af_out
+#         @jax.jit
+#         @functools.wraps(update)
+#         def rep_update(i, af_state, af_inp):
+#             af_state_fixed = []
+#             af_inp_fixed = []
+#             for s in af_state:
+#                 if len(s.shape) < 3: 
+#                     af_state_fixed.append(jnp.expand_dims(s, axis=1))
+#                 else:
+#                     af_state_fixed.append(s)
+#             for inp in af_inp:
+#                 if len(inp.shape) < 2: 
+#                     af_inp_fixed.append(jnp.broadcast_to(inp, (100, 2)))
+#                 else:
+#                     af_inp_fixed.append(inp)
+#             af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, tuple(af_state_fixed), tuple(af_inp_fixed))
+#             return af_state, af_out
 
-        @jax.jit
-        @functools.wraps(apply)
-        def rep_apply(af_ps, af_xs):
-            return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
+#         @jax.jit
+#         @functools.wraps(apply)
+#         def rep_apply(af_ps, af_xs):
+#             return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
 
-        return AdaptiveFilter(rep_init, rep_update, rep_apply)
+#         return AdaptiveFilter(rep_init, rep_update, rep_apply)
 
-    return rep_af_maker
+#     return rep_af_maker
     
 def frame(y, taps, sps, rtap=None):
     y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
