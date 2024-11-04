@@ -805,7 +805,7 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-# def fanin_diff(scope, inputs, λ=1.0):
+# def fanin_diff(scope, inputs, λ=0.1):
 #     num_inputs = len(inputs)
 #     if num_inputs % 2 != 0:
 #         raise ValueError("输入信号的数量必须为偶数。")
@@ -813,70 +813,77 @@ def parallel(*fs):
 #     inputs1 = inputs[:mid]
 #     inputs2 = inputs[mid:]
 
-#     # 假设每个 signal.val 的形状为 [batch_size, feature_dim]
-#     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)  # 形状：[mid * batch_size, feature_dim]
-#     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
+#     # 在特征维度上拼接
+#     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=-1)  # axis=-1
+#     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=-1)  # axis=-1
 
-#     # 计算 A1 和 A2
+#     # 添加 epsilon 防止除以零
+#     epsilon = 1e-8
+
+#     # 计算归一化因子 s
 #     s = 1 / jnp.sqrt(Q1.shape[-1])
-#     A1 = jnp.dot(Q1, Q1.T) * s  # 形状：[total_samples, total_samples]
-#     A2 = jnp.dot(Q2, Q2.T) * s
 
-#     # 计算加权差分
-#     diff = jax.nn.softmax(A1) - λ * jax.nn.softmax(A2)
+#     # 归一化
+#     Q1_normalized = Q1 * s
+#     Q2_normalized = Q2 * s
+
+#     # 计算相似度向量 sim
+#     sim = jnp.sum(Q1_normalized * Q2_normalized, axis=-1)  # 形状：[batch_size,]
+
+#     # 使用稳定的 softmax
+#     def stable_softmax(x):
+#         x_max = jnp.max(x, keepdims=True)
+#         exp_x = jnp.exp(x - x_max)
+#         sum_exp_x = jnp.sum(exp_x, axis=-1, keepdims=True)
+#         return exp_x / sum_exp_x
+
+#     softmax_sim = stable_softmax(sim)
+#     softmax_neg_sim = stable_softmax(-sim)
+
+#     # 计算 diff
+#     diff = (softmax_sim + epsilon) - λ * (softmax_neg_sim + epsilon)
+
+#     # 扩展 diff 的维度以匹配 Q1
+#     diff = diff[:, None]
 
 #     # 计算最终输出
-#     V = Q1  # 或者根据需要从 inputs 中计算 V
-#     output = jnp.dot(diff, V)
+#     output = diff * Q1  # 形状：[batch_size, feature_dim * num_pairs]
 
 #     t = inputs[0].t
 #     return Signal(output, t)
 
-def fanin_diff(scope, inputs, λ=0.1):
+
+def fanin_diff(scope, inputs, λ=1.0):
     num_inputs = len(inputs)
+    
     if num_inputs % 2 != 0:
         raise ValueError("输入信号的数量必须为偶数。")
+    
     mid = num_inputs // 2
     inputs1 = inputs[:mid]
     inputs2 = inputs[mid:]
-
-    # 在特征维度上拼接
-    Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=-1)  # axis=-1
-    Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=-1)  # axis=-1
-
-    # 添加 epsilon 防止除以零
-    epsilon = 1e-8
-
-    # 计算归一化因子 s
-    s = 1 / jnp.sqrt(Q1.shape[-1])
-
-    # 归一化
-    Q1_normalized = Q1 * s
-    Q2_normalized = Q2 * s
-
-    # 计算相似度向量 sim
-    sim = jnp.sum(Q1_normalized * Q2_normalized, axis=-1)  # 形状：[batch_size,]
-
-    # 使用稳定的 softmax
-    def stable_softmax(x):
-        x_max = jnp.max(x, keepdims=True)
-        exp_x = jnp.exp(x - x_max)
-        sum_exp_x = jnp.sum(exp_x, axis=-1, keepdims=True)
-        return exp_x / sum_exp_x
-
-    softmax_sim = stable_softmax(sim)
-    softmax_neg_sim = stable_softmax(-sim)
-
-    # 计算 diff
-    diff = (softmax_sim + epsilon) - λ * (softmax_neg_sim + epsilon)
-
-    # 扩展 diff 的维度以匹配 Q1
-    diff = diff[:, None]
-
-    # 计算最终输出
-    output = diff * Q1  # 形状：[batch_size, feature_dim * num_pairs]
-
+    
+    # 计算每对信号的差值
+    differences = jnp.stack([input1.val - input2.val for input1, input2 in zip(inputs1, inputs2)], axis=0)  # Shape: [mid, batch_size, feature_dim]
+    
+    # 获取每对信号的权重，并进行 softmax 归一化
+    weights = scope.param('weights', nn.initializers.ones, (mid,))
+    weights = jax.nn.softmax(weights)  # Shape: [mid]
+    
+    # 调整权重形状以便于广播
+    weights = weights[:, None, None]  # Shape: [mid, 1, 1]
+    
+    # 应用权重
+    weighted_diff = weights * differences  # Shape: [mid, batch_size, feature_dim]
+    
+    # 对所有差分求和，保持 [batch_size, feature_dim] 形状
+    output = jnp.sum(weighted_diff, axis=0)  # Shape: [batch_size, feature_dim]
+    
+    # 处理可能的 NaN 和 Inf
+    output = jnp.nan_to_num(output, nan=0.0, posinf=1e10, neginf=-1e10)
+    
+    # 可选：应用 λ 缩放（根据需要）
+    # output = output * λ
+    
     t = inputs[0].t
     return Signal(output, t)
-
-
