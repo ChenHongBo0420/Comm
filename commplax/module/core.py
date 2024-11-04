@@ -805,7 +805,7 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_differential(scope, inputs):
+def fanin_diff(scope, inputs):
     num_pairs = len(inputs) // 2
     weights = scope.param('weights', nn.initializers.ones, (num_pairs,))
     weights = jax.nn.softmax(weights)  # 归一化权重
