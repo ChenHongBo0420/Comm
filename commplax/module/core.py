@@ -816,18 +816,20 @@ def fanin_diff(scope, inputs, λ=1.0):
     d = int(jnp.prod(jnp.array(X_shape[1:])))
     X = X.reshape(n, d)  # 现在 X 的形状为 [n, d]
 
-    # 初始化状态空间模型的参数
-    # 状态矩阵 A，输入矩阵 B，输出矩阵 C
-    A = scope.param('A', nn.initializers.normal(stddev=0.02), (d, d))
-    B = scope.param('B', nn.initializers.normal(stddev=0.02), (d, d))
-    C = scope.param('C', nn.initializers.normal(stddev=0.02), (d,))
+    # 获取输入数据的 dtype
+    dtype = X.dtype
+
+    # 初始化状态空间模型的参数，设置 dtype 为输入数据类型
+    A = scope.param('A', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, d))
+    B = scope.param('B', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, d))
+    C = scope.param('C', nn.initializers.normal(stddev=0.02, dtype=dtype), (d,))
 
     # 差分注意力的权重矩阵
-    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02), (d, 2 * d))
-    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02), (d, 2 * d))
+    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, 2 * d))
+    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, 2 * d))
 
-    # 初始化隐藏状态 h
-    h = jnp.zeros((d,))
+    # 初始化隐藏状态 h，dtype 与输入数据一致
+    h = jnp.zeros((d,), dtype=dtype)
 
     # 定义状态更新函数
     def ssm_step(h, x):
@@ -840,13 +842,17 @@ def fanin_diff(scope, inputs, λ=1.0):
         Q1, Q2 = jnp.split(Q, 2, axis=-1)  # 形状: [d]
         K1, K2 = jnp.split(K, 2, axis=-1)
 
-        s = 1 / jnp.sqrt(d)
-        A1 = jnp.dot(Q1, K1) * s  # 标量
-        A2 = jnp.dot(Q2, K2) * s  # 标量
+        s_scale = 1 / jnp.sqrt(d)
+        A1 = jnp.dot(Q1, K1) * s_scale  # 标量（可能是复数）
+        A2 = jnp.dot(Q2, K2) * s_scale  # 标量
 
-        # 计算注意力权重
-        P1 = nn.softmax(jnp.array([A1]))[0]  # 标量
-        P2 = nn.softmax(jnp.array([A2]))[0]  # 标量
+        # 由于 softmax 不支持复数，我们使用实部或模长
+        A1_real = A1.real  # 或者使用 jnp.abs(A1)
+        A2_real = A2.real
+
+        # 计算注意力权重，使用 sigmoid 函数代替 softmax
+        P1 = jax.nn.sigmoid(A1_real)  # 标量，范围在 0 到 1
+        P2 = jax.nn.sigmoid(A2_real)  # 标量
 
         # 计算差分注意力
         attention = P1 - λ * P2  # 标量
@@ -867,4 +873,5 @@ def fanin_diff(scope, inputs, λ=1.0):
 
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
+
 
