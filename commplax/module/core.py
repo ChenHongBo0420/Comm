@@ -805,17 +805,19 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs):
+def fanin_differential(scope, inputs):
     num_pairs = len(inputs) // 2
     weights = scope.param('weights', nn.initializers.ones, (num_pairs,))
-    weights = jax.nn.softmax(weights)  # Normalize weights
-    val = 0
+    weights = jax.nn.softmax(weights)  # 归一化权重
+    # 初始化 val，与输入信号的形状一致
+    val = jnp.zeros_like(inputs[0].val)
     for i in range(num_pairs):
         positive_signal = inputs[2 * i]
         negative_signal = inputs[2 * i + 1]
-        # Compute the difference between the positive and negative signals
+        # 计算正负信号的差值
         difference = positive_signal.val - negative_signal.val
         val += weights[i] * difference
     t = inputs[0].t
     return Signal(val, t)
+
 
