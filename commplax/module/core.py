@@ -806,8 +806,52 @@ def parallel(*fs):
     return _parallel
   
 def fanin_diff(scope, inputs):
-    val1 = fanin_weighted_sum(scope, inputs, weight_name='weights1')
-    val2 = fanin_attention(scope, inputs, weight_name='weights2')
-    diff_val = val1.val - val2.val
-    t = val1.t
+    """
+    计算两个分支的加权和差分。
+
+    参数:
+        scope: 参数管理对象。
+        inputs: 包含两个子列表的列表，每个子列表包含一个分支的 Signal 对象。
+
+    返回:
+        Signal 对象，包含两个分支加权和的差分值和时间戳。
+    """
+    if not isinstance(inputs, list) or len(inputs) != 2:
+        raise ValueError("inputs 应该是一个包含两个子列表的列表，分别对应两个分支的输入。")
+
+    branch1_inputs, branch2_inputs = inputs
+
+    # 处理第一个分支
+    num_inputs1 = len(branch1_inputs)
+    print(f"[fanin_diff] Branch1 - Number of inputs: {num_inputs1}")  # 打印分支1的输入数量
+    if num_inputs1 > 0:
+        weights1 = scope.param('weights1', nn.initializers.ones, (num_inputs1,))
+        normalized_weights1 = jax.nn.softmax(weights1)  # 归一化权重
+        val1 = sum(w * signal.val for w, signal in zip(normalized_weights1, branch1_inputs))
+    else:
+        val1 = 0.0
+
+    # 处理第二个分支
+    num_inputs2 = len(branch2_inputs)
+    print(f"[fanin_diff] Branch2 - Number of inputs: {num_inputs2}")  # 打印分支2的输入数量
+    if num_inputs2 > 0:
+        weights2 = scope.param('weights2', nn.initializers.zeros, (num_inputs2,))
+        normalized_weights2 = jax.nn.softmax(weights2)  # 归一化权重
+        val2 = sum(w * signal.val for w, signal in zip(normalized_weights2, branch2_inputs))
+    else:
+        val2 = 0.0
+
+    # 计算差分
+    diff_val = val1 - val2
+    print(f"[fanin_diff] val1: {val1}, val2: {val2}, diff_val: {diff_val}")  # 打印计算过程
+
+    # 处理时间戳，假设两个分支的时间戳相同
+    if branch1_inputs:
+        t = branch1_inputs[0].t
+    elif branch2_inputs:
+        t = branch2_inputs[0].t
+    else:
+        t = 0  # 默认时间戳
+
     return Signal(diff_val, t)
+
