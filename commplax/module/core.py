@@ -28,7 +28,7 @@ from flax.core import Scope, init, apply
 from typing import Tuple
 from functools import partial
 Array = Any
-
+from jax import debug
 
 # related: https://github.com/google/jax/issues/6853
 @struct.dataclass
