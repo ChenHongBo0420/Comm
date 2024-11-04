@@ -838,3 +838,4 @@ def fanin_diff(scope, inputs, λ=1.0):
     return Signal(output, t)
 
 
+
