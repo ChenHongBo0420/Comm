@@ -805,6 +805,33 @@ def parallel(*fs):
         return outputs
     return _parallel
   
+# def fanin_diff(scope, inputs, λ=1.0):
+#     num_inputs = len(inputs)
+#     if num_inputs % 2 != 0:
+#         raise ValueError("输入信号的数量必须为偶数。")
+#     mid = num_inputs // 2
+#     inputs1 = inputs[:mid]
+#     inputs2 = inputs[mid:]
+
+#     # 假设每个 signal.val 的形状为 [batch_size, feature_dim]
+#     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)  # 形状：[mid * batch_size, feature_dim]
+#     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
+
+#     # 计算 A1 和 A2
+#     s = 1 / jnp.sqrt(Q1.shape[-1])
+#     A1 = jnp.dot(Q1, Q1.T) * s  # 形状：[total_samples, total_samples]
+#     A2 = jnp.dot(Q2, Q2.T) * s
+
+#     # 计算加权差分
+#     diff = jax.nn.softmax(A1) - λ * jax.nn.softmax(A2)
+
+#     # 计算最终输出
+#     V = Q1  # 或者根据需要从 inputs 中计算 V
+#     output = jnp.dot(diff, V)
+
+#     t = inputs[0].t
+#     return Signal(output, t)
+
 def fanin_diff(scope, inputs, λ=1.0):
     num_inputs = len(inputs)
     if num_inputs % 2 != 0:
@@ -814,23 +841,28 @@ def fanin_diff(scope, inputs, λ=1.0):
     inputs2 = inputs[mid:]
 
     # 假设每个 signal.val 的形状为 [batch_size, feature_dim]
+    # 将每个输入的 val 在 batch 维度上进行拼接
     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)  # 形状：[mid * batch_size, feature_dim]
     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
 
-    # 计算 A1 和 A2
+    # 计算每个样本的特征向量范数，用于归一化
     s = 1 / jnp.sqrt(Q1.shape[-1])
-    A1 = jnp.dot(Q1, Q1.T) * s  # 形状：[total_samples, total_samples]
-    A2 = jnp.dot(Q2, Q2.T) * s
 
-    # 计算加权差分
-    diff = jax.nn.softmax(A1) - λ * jax.nn.softmax(A2)
+    # 对 Q1 和 Q2 进行归一化
+    Q1_normalized = Q1 * s
+    Q2_normalized = Q2 * s
+
+    # 计算 Q1 和 Q2 之间的相似度向量（点积），避免计算大型矩阵
+    # 这里假设 Q1 和 Q2 的样本数量相同
+    sim = jnp.sum(Q1_normalized * Q2_normalized, axis=1)  # 形状：[total_samples,]
+
+    # 对相似度向量进行 softmax 计算
+    diff = jax.nn.softmax(sim) - λ * jax.nn.softmax(-sim)  # 使用 -sim 模拟 A2 的效果
 
     # 计算最终输出
-    V = Q1  # 或者根据需要从 inputs 中计算 V
-    output = jnp.dot(diff, V)
+    # 扩展 diff 的维度以便与 Q1 相乘
+    output = diff[:, None] * Q1
 
     t = inputs[0].t
     return Signal(output, t)
-
-
 
