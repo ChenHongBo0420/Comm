@@ -805,18 +805,32 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs):
-    num_pairs = len(inputs) // 2
-    weights = scope.param('weights', nn.initializers.ones, (num_pairs,))
-    weights = jax.nn.softmax(weights)  # 归一化权重
-    # 初始化 val，与输入信号的形状一致
-    val = jnp.zeros_like(inputs[0].val)
-    for i in range(num_pairs):
-        positive_signal = inputs[2 * i]
-        negative_signal = inputs[2 * i + 1]
-        # 计算正负信号的差值
-        difference = positive_signal.val - negative_signal.val
-        val += weights[i] * difference
+def fanin_diff(scope, inputs, λ):
+    num_inputs = len(inputs)
+    # 假设 inputs 可以被均分为两组
+    assert num_inputs % 2 == 0, "输入信号数量必须是偶数"
+    half = num_inputs // 2
+    inputs1 = inputs[:half]
+    inputs2 = inputs[half:]
+
+    # 计算第一组的注意力权重
+    weights1 = scope.param('weights1', nn.initializers.ones, (half,))
+    weights1 = jax.nn.softmax(weights1)
+
+    # 计算第二组的注意力权重
+    weights2 = scope.param('weights2', nn.initializers.ones, (half,))
+    weights2 = jax.nn.softmax(weights2)
+
+    # 计算差分注意力
+    diff_weights = weights1 - λ * weights2
+
+    # 合并所有输入的值
+    vals1 = jnp.stack([signal.val for signal in inputs1], axis=0)
+    vals2 = jnp.stack([signal.val for signal in inputs2], axis=0)
+
+    # 计算加权和
+    val = jnp.tensordot(diff_weights, jnp.concatenate([vals1, vals2], axis=0), axes=([0], [0]))
+
     t = inputs[0].t
     return Signal(val, t)
 
