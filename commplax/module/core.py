@@ -805,7 +805,7 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, λ):
+def fanin_diff(scope, inputs, λ=1.0):
     num_inputs = len(inputs)
     # 假设 inputs 可以被均分为两组
     assert num_inputs % 2 == 0, "输入信号数量必须是偶数"
