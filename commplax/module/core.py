@@ -805,7 +805,7 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, λ):
+def fanin_diff(scope, inputs, λ=1.0):
     num_inputs = len(inputs)
     if num_inputs % 2 != 0:
         raise ValueError("输入信号的数量必须为偶数。")
@@ -831,5 +831,6 @@ def fanin_diff(scope, inputs, λ):
 
     t = inputs[0].t
     return Signal(output, t)
+
 
 
