@@ -804,31 +804,53 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, λ=1.0):
+def fanin_diff(scope, inputs, λ=1.0, d_model=512):
     # 确保输入信号数量为两个
     if len(inputs) != 2:
         raise ValueError("输入信号数量必须为两个")
 
     # 获取两个分支的输入信号
     signal1, signal2 = inputs
-    x1 = signal1.val  # 形状: [d1, d2, ..., dn]
-    x2 = signal2.val  # 形状: [d1, d2, ..., dn]
+    x1 = signal1.val  # 原始形状: [d1, d2, ..., dn]
+    x2 = signal2.val  # 原始形状: [d1, d2, ..., dn]
 
-    # 初始化可训练的权重矩阵 W_q, W_k
+    # 将输入信号展平
+    x1_flat = x1.reshape(-1)
+    x2_flat = x2.reshape(-1)
+    
+    # 获取输入信号的长度
+    len_x1 = x1_flat.shape[0]
+    len_x2 = x2_flat.shape[0]
+    
+    # 取输入信号长度的最大值
+    max_len = max(len_x1, len_x2)
+    
+    # 如果最大长度小于 d_model，进行填充；否则裁剪到 d_model
+    def pad_or_truncate(x, target_len):
+        if x.shape[0] < target_len:
+            padding = [(0, target_len - x.shape[0])]
+            x_padded = jnp.pad(x, padding, mode='constant')
+            return x_padded
+        else:
+            return x[:target_len]
+
+    target_len = max(d_model, max_len)
+    x1_proj = pad_or_truncate(x1_flat, target_len)
+    x2_proj = pad_or_truncate(x2_flat, target_len)
+
+    # 初始化可训练的权重矩阵 W_q, W_k，形状固定为 (target_len,)
     dtype = x1.dtype
-    shape = x1.shape
-
-    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02, dtype=dtype), shape)
-    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02, dtype=dtype), shape)
+    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02, dtype=dtype), (target_len,))
+    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02, dtype=dtype), (target_len,))
 
     # 计算查询和键
-    Q1 = x1 * W_q
-    K1 = x1 * W_k
-    Q2 = x2 * W_q
-    K2 = x2 * W_k
+    Q1 = x1_proj * W_q
+    K1 = x1_proj * W_k
+    Q2 = x2_proj * W_q
+    K2 = x2_proj * W_k
 
     # 计算注意力得分
-    s = 1 / jnp.sqrt(jnp.prod(jnp.array(shape)))
+    s = 1 / jnp.sqrt(target_len)
     A1 = jnp.sum(Q1 * K1) * s  # 标量
     A2 = jnp.sum(Q2 * K2) * s  # 标量
 
@@ -841,7 +863,11 @@ def fanin_diff(scope, inputs, λ=1.0):
     attn_weight2 = attention_weights[1]
 
     # 计算输出
-    output = attn_weight1 * x1 - λ * attn_weight2 * x2
+    output_proj = attn_weight1 * x1_proj - λ * attn_weight2 * x2_proj
+
+    # 将输出恢复为原始形状
+    output_flat = output_proj[:len_x1]  # 截取到原始长度
+    output = output_flat.reshape(x1.shape)
 
     t = signal1.t  # 假设所有的 t 都相同
     return Signal(output, t)
