@@ -807,71 +807,22 @@ def parallel(*fs):
 def fanin_diff(scope, inputs, λ=1.0):
     # 获取输入信号的数量
     num_inputs = len(inputs)
-    # 将所有输入信号的 val 堆叠成一个张量 X
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, ...]
+    # 将所有输入信号的 val 堆叠成一个矩阵 X
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, d]
     # 获取 X 的形状
-    X_shape = X.shape
-    # 展平除第一个维度外的所有维度
-    n = X_shape[0]
-    d = int(jnp.prod(jnp.array(X_shape[1:])))
-    X = X.reshape(n, d)  # 现在 X 的形状为 [n, d]
+    n, d = X.shape
 
-    # 获取输入数据的 dtype
-    dtype = X.dtype
+    # 初始化可训练的标量权重 alpha 和 beta
+    alpha = scope.param('alpha', nn.initializers.ones, ())
+    beta = scope.param('beta', nn.initializers.zeros, ())
 
-    # 初始化状态空间模型的参数，设置 dtype 为输入数据类型
-    A = scope.param('A', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, d))
-    B = scope.param('B', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, d))
-    C = scope.param('C', nn.initializers.normal(stddev=0.02, dtype=dtype), (d,))
+    # 计算加权和
+    sum_X = jnp.sum(X, axis=0)        # 所有输入的和，形状: [d]
+    mean_X = jnp.mean(X, axis=0)      # 所有输入的均值，形状: [d]
 
-    # 差分注意力的权重矩阵
-    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, 2 * d))
-    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02, dtype=dtype), (d, 2 * d))
-
-    # 初始化隐藏状态 h，dtype 与输入数据一致
-    h = jnp.zeros((d,), dtype=dtype)
-
-    # 定义状态更新函数
-    def ssm_step(h, x):
-        # 状态更新
-        h_next = jnp.dot(A, h) + jnp.dot(B, x)
-
-        # 差分注意力机制
-        Q = jnp.dot(h_next, W_q)  # 形状: [2d]
-        K = jnp.dot(h_next, W_k)  # 形状: [2d]
-        Q1, Q2 = jnp.split(Q, 2, axis=-1)  # 形状: [d]
-        K1, K2 = jnp.split(K, 2, axis=-1)
-
-        s_scale = 1 / jnp.sqrt(d)
-        A1 = jnp.dot(Q1, K1) * s_scale  # 标量（可能是复数）
-        A2 = jnp.dot(Q2, K2) * s_scale  # 标量
-
-        # 由于 softmax 不支持复数，我们使用实部或模长
-        A1_real = A1.real  # 或者使用 jnp.abs(A1)
-        A2_real = A2.real
-
-        # 计算注意力权重，使用 sigmoid 函数代替 softmax
-        P1 = jax.nn.sigmoid(A1_real)  # 标量，范围在 0 到 1
-        P2 = jax.nn.sigmoid(A2_real)  # 标量
-
-        # 计算差分注意力
-        attention = P1 - λ * P2  # 标量
-
-        # 应用差分注意力
-        h_attn = attention * h_next
-
-        return h_attn, h_attn
-
-    # 使用 scan 函数遍历输入序列
-    h_final, _ = jax.lax.scan(ssm_step, h, X)
-
-    # 获取最后的隐藏状态
-    final_state = h_final
-
-    # 通过输出矩阵 C 计算输出
-    output = jnp.dot(final_state, C)  # 形状: 标量或 [d_out]
+    # 计算差分
+    output = alpha * sum_X - λ * beta * mean_X  # 形状: [d]
 
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
-
 
