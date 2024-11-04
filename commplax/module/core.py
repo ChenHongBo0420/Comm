@@ -805,12 +805,23 @@ def parallel(*fs):
     return _parallel
   
 def fanin_diff(scope, inputs, λ=1.0):
+    import numpy as np  # 确保导入 numpy
+
     # 获取输入信号的数量
     num_inputs = len(inputs)
-    # 将所有输入信号的 val 堆叠成一个矩阵 X
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, d]
+    # 将所有输入信号的 val 堆叠成一个张量 X
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, ...]
     # 获取 X 的形状
-    n, d = X.shape
+    X_shape = X.shape
+    n = X_shape[0]
+    # 计算剩余维度的乘积，作为特征维度 d
+    if len(X_shape) == 1:
+        # 如果 signal.val 是标量，X_shape = (n,)
+        d = 1
+        X = X.reshape(n, d)
+    else:
+        d = int(np.prod(X_shape[1:]))
+        X = X.reshape(n, d)  # 现在 X 的形状为 [n, d]
 
     # 初始化可训练的标量权重 alpha 和 beta
     alpha = scope.param('alpha', nn.initializers.ones, ())
@@ -825,4 +836,5 @@ def fanin_diff(scope, inputs, λ=1.0):
 
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
+
 
