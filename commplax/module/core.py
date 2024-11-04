@@ -804,11 +804,48 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, lambda_=1.0):
-    if len(inputs) != 2:
-        raise ValueError("fanin_diff expects exactly two input signals.")
-    
-    val = inputs[0].val - lambda_ * inputs[1].val
-    t = inputs[0].t  # 假设所有的 t 都相同
-    
-    return Signal(val, t)
+def fanin_diff(scope, inputs, λ):
+    num_inputs = len(inputs)
+    # Stack the input signals into X
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # Shape: [n, d]
+    X = X[None, :, :]  # Add batch dimension: [1, n, d]
+    batch_size, n, d = X.shape
+
+    # Initialize the weight matrices W_q, W_k, W_v
+    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02), (d, 2 * d))
+    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02), (d, 2 * d))
+    W_v = scope.param('W_v', nn.initializers.normal(stddev=0.02), (d, 2 * d))
+
+    # Compute Q, K, V
+    Q = jnp.einsum('bnd,df->bnf', X, W_q)  # Shape: [1, n, 2d]
+    K = jnp.einsum('bnd,df->bnf', X, W_k)  # Shape: [1, n, 2d]
+    V = jnp.einsum('bnd,df->bnf', X, W_v)  # Shape: [1, n, 2d]
+
+    # Split Q and K into Q1, Q2 and K1, K2
+    Q1, Q2 = jnp.split(Q, 2, axis=-1)  # Shapes: [1, n, d]
+    K1, K2 = jnp.split(K, 2, axis=-1)  # Shapes: [1, n, d]
+
+    # Compute attention scores A1 and A2
+    s = 1 / jnp.sqrt(d)
+    A1 = jnp.einsum('bnd,bmd->bnm', Q1, K1) * s  # Shape: [1, n, n]
+    A2 = jnp.einsum('bnd,bmd->bnm', Q2, K2) * s  # Shape: [1, n, n]
+
+    # Compute attention probabilities
+    P1 = nn.softmax(A1, axis=-1)
+    P2 = nn.softmax(A2, axis=-1)
+
+    # Compute differential attention
+    P_diff = P1 - λ * P2
+
+    # Compute output
+    output = jnp.einsum('bnm,bmd->bnd', P_diff, V)  # Shape: [1, n, 2d]
+    output = jnp.mean(output, axis=1)  # Aggregate over n: Shape: [1, 2d]
+    output = output[0]  # Remove batch dimension: Shape: [2d]
+
+    # Project back to dimension d
+    W_o = scope.param('W_o', nn.initializers.normal(stddev=0.02), (2 * d, d))
+    output = jnp.dot(output, W_o)  # Shape: [d]
+
+    t = inputs[0].t  # Assume all t are the same
+    return Signal(output, t)
+
