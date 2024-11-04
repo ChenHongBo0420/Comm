@@ -803,8 +803,12 @@ def parallel(*fs):
             outputs.append(output)
         return outputs
     return _parallel
-
-
-
-
-
+  
+def fanin_diff(scope, inputs, lambda_=1.0):
+    if len(inputs) != 2:
+        raise ValueError("fanin_diff expects exactly two input signals.")
+    
+    val = inputs[0].val - lambda_ * inputs[1].val
+    t = inputs[0].t  # 假设所有的 t 都相同
+    
+    return Signal(val, t)
