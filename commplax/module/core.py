@@ -805,47 +805,57 @@ def parallel(*fs):
     return _parallel
   
 def fanin_diff(scope, inputs, λ=1.0):
+    # 获取输入信号的数量
     num_inputs = len(inputs)
-    # Stack the input signals into X
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # Shape: [n, d]
-    X = X[None, :, :]  # Add batch dimension: [1, n, d]
-    batch_size, n, d = X.shape
-
-    # Initialize the weight matrices W_q, W_k, W_v
+    # 将所有输入信号的 val 堆叠成一个张量 X
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, ...]
+    # 添加批次维度
+    X = X[None, ...]  # X 的形状: [1, n, ...]
+    # 获取 X 的形状
+    X_shape = X.shape
+    # 检查 X 的维度数量
+    if len(X_shape) < 3:
+        raise ValueError("输入信号的 val 应该至少是二维的")
+    batch_size, n = X_shape[0], X_shape[1]
+    # 将剩余的维度合并为 d
+    d = int(np.prod(X_shape[2:]))
+    # 将 X reshape 为 [batch_size, n, d]
+    X = X.reshape(batch_size, n, d)
+    
+    # 初始化权重矩阵 W_q, W_k, W_v
     W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02), (d, 2 * d))
     W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02), (d, 2 * d))
     W_v = scope.param('W_v', nn.initializers.normal(stddev=0.02), (d, 2 * d))
-
-    # Compute Q, K, V
-    Q = jnp.einsum('bnd,df->bnf', X, W_q)  # Shape: [1, n, 2d]
-    K = jnp.einsum('bnd,df->bnf', X, W_k)  # Shape: [1, n, 2d]
-    V = jnp.einsum('bnd,df->bnf', X, W_v)  # Shape: [1, n, 2d]
-
-    # Split Q and K into Q1, Q2 and K1, K2
-    Q1, Q2 = jnp.split(Q, 2, axis=-1)  # Shapes: [1, n, d]
-    K1, K2 = jnp.split(K, 2, axis=-1)  # Shapes: [1, n, d]
-
-    # Compute attention scores A1 and A2
+    
+    # 计算 Q, K, V
+    Q = jnp.einsum('bnd,df->bnf', X, W_q)  # 形状: [batch_size, n, 2d]
+    K = jnp.einsum('bnd,df->bnf', X, W_k)
+    V = jnp.einsum('bnd,df->bnf', X, W_v)
+    
+    # 分割 Q 和 K
+    Q1, Q2 = jnp.split(Q, 2, axis=-1)  # 形状: [batch_size, n, d]
+    K1, K2 = jnp.split(K, 2, axis=-1)
+    
+    # 计算注意力得分 A1 和 A2
     s = 1 / jnp.sqrt(d)
-    A1 = jnp.einsum('bnd,bmd->bnm', Q1, K1) * s  # Shape: [1, n, n]
-    A2 = jnp.einsum('bnd,bmd->bnm', Q2, K2) * s  # Shape: [1, n, n]
-
-    # Compute attention probabilities
+    A1 = jnp.einsum('bnd,bmd->bnm', Q1, K1) * s  # 形状: [batch_size, n, n]
+    A2 = jnp.einsum('bnd,bmd->bnm', Q2, K2) * s
+    
+    # 计算注意力概率
     P1 = nn.softmax(A1, axis=-1)
     P2 = nn.softmax(A2, axis=-1)
-
-    # Compute differential attention
+    
+    # 计算差分注意力
     P_diff = P1 - λ * P2
-
-    # Compute output
-    output = jnp.einsum('bnm,bmd->bnd', P_diff, V)  # Shape: [1, n, 2d]
-    output = jnp.mean(output, axis=1)  # Aggregate over n: Shape: [1, 2d]
-    output = output[0]  # Remove batch dimension: Shape: [2d]
-
-    # Project back to dimension d
+    
+    # 计算输出
+    output = jnp.einsum('bnm,bmd->bnd', P_diff, V)  # 形状: [batch_size, n, 2d]
+    output = jnp.mean(output, axis=1)  # 对 n 维度求平均: [batch_size, 2d]
+    output = output[0]  # 去除批次维度: [2d]
+    
+    # 映射回原始维度 d
     W_o = scope.param('W_o', nn.initializers.normal(stddev=0.02), (2 * d, d))
-    output = jnp.dot(output, W_o)  # Shape: [d]
-
-    t = inputs[0].t  # Assume all t are the same
+    output = jnp.dot(output, W_o)  # 形状: [d]
+    
+    t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
-
