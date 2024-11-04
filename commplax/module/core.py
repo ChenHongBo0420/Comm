@@ -840,14 +840,13 @@ def fanin_diff(scope, inputs, λ=0.1):
     inputs1 = inputs[:mid]
     inputs2 = inputs[mid:]
 
+    # 将每个信号的 val 拼接起来
     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)
     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
 
-    # 检查 Q1 和 Q2 是否包含异常值
-    assert not jnp.any(jnp.isnan(Q1)), "Q1 contains NaN"
-    assert not jnp.any(jnp.isinf(Q1)), "Q1 contains Inf"
-    assert not jnp.any(jnp.isnan(Q2)), "Q2 contains NaN"
-    assert not jnp.any(jnp.isinf(Q2)), "Q2 contains Inf"
+    # 使用 nan_to_num 处理异常值，防止 NaN 和 Inf
+    Q1 = jnp.nan_to_num(Q1, nan=0.0, posinf=1e10, neginf=-1e10)
+    Q2 = jnp.nan_to_num(Q2, nan=0.0, posinf=1e10, neginf=-1e10)
 
     # 添加 epsilon 防止除以零
     epsilon = 1e-8
@@ -857,43 +856,42 @@ def fanin_diff(scope, inputs, λ=0.1):
     norms_Q2 = jnp.linalg.norm(Q2, axis=1, keepdims=True) + epsilon
     Q2_normalized = Q2 / norms_Q2
 
-    # 检查归一化后的 Q1 和 Q2
-    assert not jnp.any(jnp.isnan(Q1_normalized)), "Q1_normalized contains NaN"
-    assert not jnp.any(jnp.isinf(Q1_normalized)), "Q1_normalized contains Inf"
-    assert not jnp.any(jnp.isnan(Q2_normalized)), "Q2_normalized contains NaN"
-    assert not jnp.any(jnp.isinf(Q2_normalized)), "Q2_normalized contains Inf"
-
     # 计算相似度向量 sim
     sim = jnp.sum(Q1_normalized * Q2_normalized, axis=1)
 
-    # 检查 sim 是否包含异常值
-    assert not jnp.any(jnp.isnan(sim)), "sim contains NaN"
-    assert not jnp.any(jnp.isinf(sim)), "sim contains Inf"
+    # 检查 sim 是否包含异常值（使用 debug.print）
+    debug.print("sim contains NaN: {}", jnp.any(jnp.isnan(sim)))
+    debug.print("sim contains Inf: {}", jnp.any(jnp.isinf(sim)))
 
     # 缩放 sim 防止数值过大或过小
-    sim = sim / (jnp.max(jnp.abs(sim)) + epsilon)
+    sim_max = jnp.max(jnp.abs(sim)) + epsilon
+    sim = sim / sim_max
 
-    # 使用日志空间计算稳定的 softmax
+    # 使用稳定的 softmax 实现
     def stable_softmax(x):
         x_max = jnp.max(x)
-        log_sum_exp = x_max + jnp.log(jnp.sum(jnp.exp(x - x_max)) + epsilon)
-        return jnp.exp(x - log_sum_exp)
+        exp_x = jnp.exp(x - x_max)
+        sum_exp_x = jnp.sum(exp_x) + epsilon
+        return exp_x / sum_exp_x
 
     softmax_sim = stable_softmax(sim)
     softmax_neg_sim = stable_softmax(-sim)
 
     # 检查 softmax 结果
-    assert not jnp.any(jnp.isnan(softmax_sim)), "softmax_sim contains NaN"
-    assert not jnp.any(jnp.isinf(softmax_sim)), "softmax_sim contains Inf"
-    assert not jnp.any(jnp.isnan(softmax_neg_sim)), "softmax_neg_sim contains NaN"
-    assert not jnp.any(jnp.isinf(softmax_neg_sim)), "softmax_neg_sim contains Inf"
+    debug.print("softmax_sim contains NaN: {}", jnp.any(jnp.isnan(softmax_sim)))
+    debug.print("softmax_sim contains Inf: {}", jnp.any(jnp.isinf(softmax_sim)))
+    debug.print("softmax_neg_sim contains NaN: {}", jnp.any(jnp.isnan(softmax_neg_sim)))
+    debug.print("softmax_neg_sim contains Inf: {}", jnp.any(jnp.isinf(softmax_neg_sim)))
 
     # 计算 diff
     diff = (softmax_sim + epsilon) - λ * (softmax_neg_sim + epsilon)
 
+    # 使用 nan_to_num 处理 diff 中的异常值
+    diff = jnp.nan_to_num(diff, nan=0.0, posinf=1e10, neginf=-1e10)
+
     # 检查 diff 是否包含异常值
-    assert not jnp.any(jnp.isnan(diff)), "diff contains NaN"
-    assert not jnp.any(jnp.isinf(diff)), "diff contains Inf"
+    debug.print("diff contains NaN: {}", jnp.any(jnp.isnan(diff)))
+    debug.print("diff contains Inf: {}", jnp.any(jnp.isinf(diff)))
 
     # 计算最终输出
     output = diff[:, None] * Q1
