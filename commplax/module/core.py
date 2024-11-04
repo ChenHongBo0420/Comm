@@ -805,33 +805,31 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, λ=1.0):
+def fanin_diff(scope, inputs, λ):
     num_inputs = len(inputs)
-    # 假设 inputs 可以被均分为两组
-    assert num_inputs % 2 == 0, "输入信号数量必须是偶数"
-    half = num_inputs // 2
-    inputs1 = inputs[:half]
-    inputs2 = inputs[half:]
+    if num_inputs % 2 != 0:
+        raise ValueError("输入信号的数量必须为偶数。")
+    mid = num_inputs // 2
+    inputs1 = inputs[:mid]
+    inputs2 = inputs[mid:]
 
-    # 计算第一组的注意力权重
-    weights1 = scope.param('weights1', nn.initializers.ones, (half,))
-    weights1 = jax.nn.softmax(weights1)
+    # 假设每个 signal.val 的形状为 [batch_size, feature_dim]
+    Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)  # 形状：[mid * batch_size, feature_dim]
+    Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
 
-    # 计算第二组的注意力权重
-    weights2 = scope.param('weights2', nn.initializers.ones, (half,))
-    weights2 = jax.nn.softmax(weights2)
+    # 计算 A1 和 A2
+    s = 1 / jnp.sqrt(Q1.shape[-1])
+    A1 = jnp.dot(Q1, Q1.T) * s  # 形状：[total_samples, total_samples]
+    A2 = jnp.dot(Q2, Q2.T) * s
 
-    # 计算差分注意力
-    diff_weights = weights1 - λ * weights2
+    # 计算加权差分
+    diff = jax.nn.softmax(A1) - λ * jax.nn.softmax(A2)
 
-    # 合并所有输入的值
-    vals1 = jnp.stack([signal.val for signal in inputs1], axis=0)
-    vals2 = jnp.stack([signal.val for signal in inputs2], axis=0)
-
-    # 计算加权和
-    val = jnp.tensordot(diff_weights, jnp.concatenate([vals1, vals2], axis=0), axes=([0], [0]))
+    # 计算最终输出
+    V = Q1  # 或者根据需要从 inputs 中计算 V
+    output = jnp.dot(diff, V)
 
     t = inputs[0].t
-    return Signal(val, t)
+    return Signal(output, t)
 
 
