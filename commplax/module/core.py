@@ -805,24 +805,45 @@ def parallel(*fs):
     return _parallel
   
 def fanin_diff(scope, inputs, λ=1.0):
-    # 获取输入信号的数量
-    num_inputs = len(inputs)
-    # 将所有输入信号的 val 堆叠成一个张量 X
-    # 假设每个 signal.val 的形状为 [d1, d2, ..., dn]
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, d1, d2, ..., dn]
-    
-    # 初始化可训练的标量权重 alpha 和 beta
-    alpha = scope.param('alpha', nn.initializers.ones, ())
-    beta = scope.param('beta', nn.initializers.zeros, ())
-    
-    # 计算加权和
-    sum_X = jnp.sum(X, axis=0)        # 所有输入的和，形状: [d1, d2, ..., dn]
-    mean_X = jnp.mean(X, axis=0)      # 所有输入的均值，形状: [d1, d2, ..., dn]
-    
-    # 计算差分
-    output = alpha * sum_X - λ * beta * mean_X  # 形状: [d1, d2, ..., dn]
-    
-    t = inputs[0].t  # 假设所有的 t 都相同
+    # 确保输入信号数量为两个
+    if len(inputs) != 2:
+        raise ValueError("输入信号数量必须为两个")
+
+    # 获取两个分支的输入信号
+    signal1, signal2 = inputs
+    x1 = signal1.val  # 形状: [d1, d2, ..., dn]
+    x2 = signal2.val  # 形状: [d1, d2, ..., dn]
+
+    # 初始化可训练的权重矩阵 W_q, W_k
+    dtype = x1.dtype
+    shape = x1.shape
+
+    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02, dtype=dtype), shape)
+    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02, dtype=dtype), shape)
+
+    # 计算查询和键
+    Q1 = x1 * W_q
+    K1 = x1 * W_k
+    Q2 = x2 * W_q
+    K2 = x2 * W_k
+
+    # 计算注意力得分
+    s = 1 / jnp.sqrt(jnp.prod(jnp.array(shape)))
+    A1 = jnp.sum(Q1 * K1) * s  # 标量
+    A2 = jnp.sum(Q2 * K2) * s  # 标量
+
+    # 对注意力得分应用 softmax
+    scores = jnp.array([A1, A2])
+    attention_weights = nn.softmax(scores)  # 形状: [2]
+
+    # 分别获取两个分支的注意力权重
+    attn_weight1 = attention_weights[0]
+    attn_weight2 = attention_weights[1]
+
+    # 计算输出
+    output = attn_weight1 * x1 - λ * attn_weight2 * x2
+
+    t = signal1.t  # 假设所有的 t 都相同
     return Signal(output, t)
 
 
