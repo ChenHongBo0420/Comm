@@ -808,54 +808,53 @@ def fanin_diff(scope, inputs, λ=1.0):
     # 获取输入信号的数量
     num_inputs = len(inputs)
     # 将所有输入信号的 val 堆叠成一个张量 X
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, ...]
-    # 添加批次维度
-    X = X[None, ...]  # X 的形状: [1, n, ...]
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, d]
     # 获取 X 的形状
-    X_shape = X.shape
-    # 检查 X 的维度数量
-    if len(X_shape) < 3:
-        raise ValueError("输入信号的 val 应该至少是二维的")
-    batch_size, n = X_shape[0], X_shape[1]
-    # 将剩余的维度合并为 d
-    d = int(np.prod(X_shape[2:]))
-    # 将 X reshape 为 [batch_size, n, d]
-    X = X.reshape(batch_size, n, d)
-    
-    # 初始化权重矩阵 W_q, W_k, W_v
+    n, d = X.shape
+
+    # 初始化状态空间模型的参数
+    # 状态矩阵 A，输入矩阵 B，输出矩阵 C
+    A = scope.param('A', nn.initializers.normal(stddev=0.02), (d, d))
+    B = scope.param('B', nn.initializers.normal(stddev=0.02), (d, d))
+    C = scope.param('C', nn.initializers.normal(stddev=0.02), (d, d))
+    # 差分注意力的权重矩阵
     W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02), (d, 2 * d))
     W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02), (d, 2 * d))
-    W_v = scope.param('W_v', nn.initializers.normal(stddev=0.02), (d, 2 * d))
-    
-    # 计算 Q, K, V
-    Q = jnp.einsum('bnd,df->bnf', X, W_q)  # 形状: [batch_size, n, 2d]
-    K = jnp.einsum('bnd,df->bnf', X, W_k)
-    V = jnp.einsum('bnd,df->bnf', X, W_v)
-    
-    # 分割 Q 和 K
-    Q1, Q2 = jnp.split(Q, 2, axis=-1)  # 形状: [batch_size, n, d]
-    K1, K2 = jnp.split(K, 2, axis=-1)
-    
-    # 计算注意力得分 A1 和 A2
-    s = 1 / jnp.sqrt(d)
-    A1 = jnp.einsum('bnd,bmd->bnm', Q1, K1) * s  # 形状: [batch_size, n, n]
-    A2 = jnp.einsum('bnd,bmd->bnm', Q2, K2) * s
-    
-    # 计算注意力概率
-    P1 = nn.softmax(A1, axis=-1)
-    P2 = nn.softmax(A2, axis=-1)
-    
-    # 计算差分注意力
-    P_diff = P1 - λ * P2
-    
-    # 计算输出
-    output = jnp.einsum('bnm,bmd->bnd', P_diff, V)  # 形状: [batch_size, n, 2d]
-    output = jnp.mean(output, axis=1)  # 对 n 维度求平均: [batch_size, 2d]
-    output = output[0]  # 去除批次维度: [2d]
-    
-    # 映射回原始维度 d
-    W_o = scope.param('W_o', nn.initializers.normal(stddev=0.02), (2 * d, d))
-    output = jnp.dot(output, W_o)  # 形状: [d]
-    
+
+    # 初始化隐藏状态 h
+    h = jnp.zeros((d,))
+
+    # 定义状态更新函数
+    def ssm_step(h, x):
+        # 状态更新
+        h_next = jnp.dot(A, h) + jnp.dot(B, x)
+
+        # 差分注意力机制
+        Q = jnp.dot(h_next, W_q)  # 形状: [2d]
+        K = jnp.dot(h_next, W_k)  # 形状: [2d]
+        Q1, Q2 = jnp.split(Q, 2, axis=-1)  # 形状: [d]
+        K1, K2 = jnp.split(K, 2, axis=-1)
+
+        s = 1 / jnp.sqrt(d)
+        A1 = jnp.dot(Q1, K1.T) * s  # 标量
+        A2 = jnp.dot(Q2, K2.T) * s
+
+        P1 = nn.softmax(jnp.array([A1]))  # 标量的 softmax，结果为 1.0
+        P2 = nn.softmax(jnp.array([A2]))
+
+        # 差分注意力应用
+        attention = P1 - λ * P2  # 由于是标量，attention 也是标量
+
+        # 加权更新隐藏状态
+        h_attn = attention * h_next
+
+        return h_attn, h_attn
+
+    # 使用 scan 函数遍历输入序列
+    h_final, _ = jax.lax.scan(ssm_step, h, X)
+
+    # 输出层
+    output = jnp.dot(C, h_final)
+
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
