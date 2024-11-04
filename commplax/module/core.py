@@ -764,7 +764,7 @@ def fanin_mean(scope, inputs):
 
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
-    jax.debug.print("Number of inputs: {}", num_inputs)
+    print(num_inputs)
     weights = scope.param('weights', nn.initializers.ones, (num_inputs,))
     weights = jax.nn.softmax(weights)  # 归一化权重
     val = sum(w * signal.val for w, signal in zip(weights, inputs))
