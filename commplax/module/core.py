@@ -808,15 +808,20 @@ def fanin_diff(scope, inputs, λ=1.0):
     # 获取输入信号的数量
     num_inputs = len(inputs)
     # 将所有输入信号的 val 堆叠成一个张量 X
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, d]
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, ...]
     # 获取 X 的形状
-    n, d = X.shape
+    X_shape = X.shape
+    # 展平除第一个维度外的所有维度
+    n = X_shape[0]
+    d = int(jnp.prod(jnp.array(X_shape[1:])))
+    X = X.reshape(n, d)  # 现在 X 的形状为 [n, d]
 
     # 初始化状态空间模型的参数
     # 状态矩阵 A，输入矩阵 B，输出矩阵 C
     A = scope.param('A', nn.initializers.normal(stddev=0.02), (d, d))
     B = scope.param('B', nn.initializers.normal(stddev=0.02), (d, d))
-    C = scope.param('C', nn.initializers.normal(stddev=0.02), (d, d))
+    C = scope.param('C', nn.initializers.normal(stddev=0.02), (d,))
+
     # 差分注意力的权重矩阵
     W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02), (d, 2 * d))
     W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02), (d, 2 * d))
@@ -836,16 +841,17 @@ def fanin_diff(scope, inputs, λ=1.0):
         K1, K2 = jnp.split(K, 2, axis=-1)
 
         s = 1 / jnp.sqrt(d)
-        A1 = jnp.dot(Q1, K1.T) * s  # 标量
-        A2 = jnp.dot(Q2, K2.T) * s
+        A1 = jnp.dot(Q1, K1) * s  # 标量
+        A2 = jnp.dot(Q2, K2) * s  # 标量
 
-        P1 = nn.softmax(jnp.array([A1]))  # 标量的 softmax，结果为 1.0
-        P2 = nn.softmax(jnp.array([A2]))
+        # 计算注意力权重
+        P1 = nn.softmax(jnp.array([A1]))[0]  # 标量
+        P2 = nn.softmax(jnp.array([A2]))[0]  # 标量
 
-        # 差分注意力应用
-        attention = P1 - λ * P2  # 由于是标量，attention 也是标量
+        # 计算差分注意力
+        attention = P1 - λ * P2  # 标量
 
-        # 加权更新隐藏状态
+        # 应用差分注意力
         h_attn = attention * h_next
 
         return h_attn, h_attn
@@ -853,8 +859,12 @@ def fanin_diff(scope, inputs, λ=1.0):
     # 使用 scan 函数遍历输入序列
     h_final, _ = jax.lax.scan(ssm_step, h, X)
 
-    # 输出层
-    output = jnp.dot(C, h_final)
+    # 获取最后的隐藏状态
+    final_state = h_final
+
+    # 通过输出矩阵 C 计算输出
+    output = jnp.dot(final_state, C)  # 形状: 标量或 [d_out]
 
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
+
