@@ -805,35 +805,23 @@ def parallel(*fs):
     return _parallel
   
 def fanin_diff(scope, inputs, λ=1.0):
-    import numpy as np  # 确保导入 numpy
-
     # 获取输入信号的数量
     num_inputs = len(inputs)
     # 将所有输入信号的 val 堆叠成一个张量 X
-    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, ...]
-    # 获取 X 的形状
-    X_shape = X.shape
-    n = X_shape[0]
-    # 计算剩余维度的乘积，作为特征维度 d
-    if len(X_shape) == 1:
-        # 如果 signal.val 是标量，X_shape = (n,)
-        d = 1
-        X = X.reshape(n, d)
-    else:
-        d = int(np.prod(X_shape[1:]))
-        X = X.reshape(n, d)  # 现在 X 的形状为 [n, d]
-
+    # 假设每个 signal.val 的形状为 [d1, d2, ..., dn]
+    X = jnp.stack([signal.val for signal in inputs], axis=0)  # X 的形状: [n, d1, d2, ..., dn]
+    
     # 初始化可训练的标量权重 alpha 和 beta
     alpha = scope.param('alpha', nn.initializers.ones, ())
     beta = scope.param('beta', nn.initializers.zeros, ())
-
+    
     # 计算加权和
-    sum_X = jnp.sum(X, axis=0)        # 所有输入的和，形状: [d]
-    mean_X = jnp.mean(X, axis=0)      # 所有输入的均值，形状: [d]
-
+    sum_X = jnp.sum(X, axis=0)        # 所有输入的和，形状: [d1, d2, ..., dn]
+    mean_X = jnp.mean(X, axis=0)      # 所有输入的均值，形状: [d1, d2, ..., dn]
+    
     # 计算差分
-    output = alpha * sum_X - λ * beta * mean_X  # 形状: [d]
-
+    output = alpha * sum_X - λ * beta * mean_X  # 形状: [d1, d2, ..., dn]
+    
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(output, t)
 
