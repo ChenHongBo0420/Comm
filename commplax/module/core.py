@@ -805,47 +805,9 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, λ=1.0):
-    # 确保输入信号数量为两个
-    if len(inputs) != 2:
-        raise ValueError("输入信号数量必须为两个")
-
-    # 获取两个分支的输入信号
-    signal1, signal2 = inputs
-    x1 = signal1.val  # 原始形状: [d1, d2, ..., dn]
-    x2 = signal2.val  # 原始形状: [d1, d2, ..., dn]
-
-    # 确保 x1 和 x2 的形状一致
-    if x1.shape != x2.shape:
-        raise ValueError("两个输入信号的形状必须一致")
-
-    shape = x1.shape
-    dtype = x1.dtype
-
-    # 初始化可训练的权重参数，形状与输入信号一致
-    W_q = scope.param('W_q', nn.initializers.normal(stddev=0.02, dtype=dtype), shape)
-    W_k = scope.param('W_k', nn.initializers.normal(stddev=0.02, dtype=dtype), shape)
-
-    # 计算查询和键
-    Q1 = x1 * W_q
-    K1 = x1 * W_k
-    Q2 = x2 * W_q
-    K2 = x2 * W_k
-
-    # 计算注意力得分
-    s = 1 / jnp.sqrt(jnp.prod(jnp.array(shape)))
-    A1 = jnp.sum(Q1 * K1) * s  # 标量
-    A2 = jnp.sum(Q2 * K2) * s  # 标量
-
-    # 对注意力得分应用 softmax
-    scores = jnp.array([A1, A2])
-    attention_weights = nn.softmax(scores)  # 形状: [2]
-
-    # 分别获取两个分支的注意力权重
-    attn_weight1, attn_weight2 = attention_weights
-
-    # 计算输出
-    output = attn_weight1 * x1 - λ * attn_weight2 * x2  # 形状与 x1 相同
-
-    t = signal1.t  # 假设所有的 t 都相同
-    return Signal(output, t)
+def fanin_diff(scope, inputs):
+    val1 = fanin_weighted_sum(scope, inputs, weight_name='weights1')
+    val2 = fanin_attention(scope, inputs, weight_name='weights2')
+    diff_val = val1.val - val2.val
+    t = val1.t
+    return Signal(diff_val, t)
