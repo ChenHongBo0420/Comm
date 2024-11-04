@@ -832,7 +832,7 @@ def parallel(*fs):
 #     t = inputs[0].t
 #     return Signal(output, t)
 
-def fanin_diff(scope, inputs, λ=1.0):
+def fanin_diff_stable(scope, inputs, λ=0.1):
     num_inputs = len(inputs)
     if num_inputs % 2 != 0:
         raise ValueError("输入信号的数量必须为偶数。")
@@ -840,40 +840,64 @@ def fanin_diff(scope, inputs, λ=1.0):
     inputs1 = inputs[:mid]
     inputs2 = inputs[mid:]
 
-    # 假设每个 signal.val 的形状为 [batch_size, feature_dim]
     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)
     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
 
-    # 检查输入是否包含异常值
-    assert not jnp.any(jnp.isnan(Q1)) and not jnp.any(jnp.isinf(Q1)), "Q1 contains NaN or Inf"
-    assert not jnp.any(jnp.isnan(Q2)) and not jnp.any(jnp.isinf(Q2)), "Q2 contains NaN or Inf"
+    # 检查 Q1 和 Q2 是否包含异常值
+    assert not jnp.any(jnp.isnan(Q1)), "Q1 contains NaN"
+    assert not jnp.any(jnp.isinf(Q1)), "Q1 contains Inf"
+    assert not jnp.any(jnp.isnan(Q2)), "Q2 contains NaN"
+    assert not jnp.any(jnp.isinf(Q2)), "Q2 contains Inf"
 
-    # 计算归一化因子 s，避免过小
-    s = 1 / jnp.linalg.norm(Q1, axis=1, keepdims=True)
-    Q1_normalized = Q1 * s
-    Q2_normalized = Q2 * s
+    # 添加 epsilon 防止除以零
+    epsilon = 1e-8
+    norms_Q1 = jnp.linalg.norm(Q1, axis=1, keepdims=True) + epsilon
+    Q1_normalized = Q1 / norms_Q1
+
+    norms_Q2 = jnp.linalg.norm(Q2, axis=1, keepdims=True) + epsilon
+    Q2_normalized = Q2 / norms_Q2
+
+    # 检查归一化后的 Q1 和 Q2
+    assert not jnp.any(jnp.isnan(Q1_normalized)), "Q1_normalized contains NaN"
+    assert not jnp.any(jnp.isinf(Q1_normalized)), "Q1_normalized contains Inf"
+    assert not jnp.any(jnp.isnan(Q2_normalized)), "Q2_normalized contains NaN"
+    assert not jnp.any(jnp.isinf(Q2_normalized)), "Q2_normalized contains Inf"
 
     # 计算相似度向量 sim
     sim = jnp.sum(Q1_normalized * Q2_normalized, axis=1)
 
-    # 使用稳定的 softmax 实现
+    # 检查 sim 是否包含异常值
+    assert not jnp.any(jnp.isnan(sim)), "sim contains NaN"
+    assert not jnp.any(jnp.isinf(sim)), "sim contains Inf"
+
+    # 缩放 sim 防止数值过大或过小
+    sim = sim / (jnp.max(jnp.abs(sim)) + epsilon)
+
+    # 使用日志空间计算稳定的 softmax
     def stable_softmax(x):
         x_max = jnp.max(x)
-        exp_x = jnp.exp(x - x_max)
-        return exp_x / jnp.sum(exp_x)
+        log_sum_exp = x_max + jnp.log(jnp.sum(jnp.exp(x - x_max)) + epsilon)
+        return jnp.exp(x - log_sum_exp)
 
     softmax_sim = stable_softmax(sim)
     softmax_neg_sim = stable_softmax(-sim)
 
-    # 添加 epsilon 防止数值问题
-    epsilon = 1e-10
+    # 检查 softmax 结果
+    assert not jnp.any(jnp.isnan(softmax_sim)), "softmax_sim contains NaN"
+    assert not jnp.any(jnp.isinf(softmax_sim)), "softmax_sim contains Inf"
+    assert not jnp.any(jnp.isnan(softmax_neg_sim)), "softmax_neg_sim contains NaN"
+    assert not jnp.any(jnp.isinf(softmax_neg_sim)), "softmax_neg_sim contains Inf"
+
+    # 计算 diff
     diff = (softmax_sim + epsilon) - λ * (softmax_neg_sim + epsilon)
 
     # 检查 diff 是否包含异常值
-    assert not jnp.any(jnp.isnan(diff)) and not jnp.any(jnp.isinf(diff)), "diff contains NaN or Inf"
+    assert not jnp.any(jnp.isnan(diff)), "diff contains NaN"
+    assert not jnp.any(jnp.isinf(diff)), "diff contains Inf"
 
     # 计算最终输出
     output = diff[:, None] * Q1
 
     t = inputs[0].t
     return Signal(output, t)
+
