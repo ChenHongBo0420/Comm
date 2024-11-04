@@ -804,7 +804,7 @@ def parallel(*fs):
         return outputs
     return _parallel
   
-def fanin_diff(scope, inputs, λ):
+def fanin_diff(scope, inputs, λ=1.0):
     num_inputs = len(inputs)
     # Stack the input signals into X
     X = jnp.stack([signal.val for signal in inputs], axis=0)  # Shape: [n, d]
