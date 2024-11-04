@@ -841,28 +841,39 @@ def fanin_diff(scope, inputs, λ=1.0):
     inputs2 = inputs[mid:]
 
     # 假设每个 signal.val 的形状为 [batch_size, feature_dim]
-    # 将每个输入的 val 在 batch 维度上进行拼接
-    Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)  # 形状：[mid * batch_size, feature_dim]
+    Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=0)
     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=0)
 
-    # 计算每个样本的特征向量范数，用于归一化
-    s = 1 / jnp.sqrt(Q1.shape[-1])
+    # 检查输入是否包含异常值
+    assert not jnp.any(jnp.isnan(Q1)) and not jnp.any(jnp.isinf(Q1)), "Q1 contains NaN or Inf"
+    assert not jnp.any(jnp.isnan(Q2)) and not jnp.any(jnp.isinf(Q2)), "Q2 contains NaN or Inf"
 
-    # 对 Q1 和 Q2 进行归一化
+    # 计算归一化因子 s，避免过小
+    s = 1 / jnp.linalg.norm(Q1, axis=1, keepdims=True)
     Q1_normalized = Q1 * s
     Q2_normalized = Q2 * s
 
-    # 计算 Q1 和 Q2 之间的相似度向量（点积），避免计算大型矩阵
-    # 这里假设 Q1 和 Q2 的样本数量相同
-    sim = jnp.sum(Q1_normalized * Q2_normalized, axis=1)  # 形状：[total_samples,]
+    # 计算相似度向量 sim
+    sim = jnp.sum(Q1_normalized * Q2_normalized, axis=1)
 
-    # 对相似度向量进行 softmax 计算
-    diff = jax.nn.softmax(sim) - λ * jax.nn.softmax(-sim)  # 使用 -sim 模拟 A2 的效果
+    # 使用稳定的 softmax 实现
+    def stable_softmax(x):
+        x_max = jnp.max(x)
+        exp_x = jnp.exp(x - x_max)
+        return exp_x / jnp.sum(exp_x)
+
+    softmax_sim = stable_softmax(sim)
+    softmax_neg_sim = stable_softmax(-sim)
+
+    # 添加 epsilon 防止数值问题
+    epsilon = 1e-10
+    diff = (softmax_sim + epsilon) - λ * (softmax_neg_sim + epsilon)
+
+    # 检查 diff 是否包含异常值
+    assert not jnp.any(jnp.isnan(diff)) and not jnp.any(jnp.isinf(diff)), "diff contains NaN or Inf"
 
     # 计算最终输出
-    # 扩展 diff 的维度以便与 Q1 相乘
     output = diff[:, None] * Q1
 
     t = inputs[0].t
     return Signal(output, t)
-
