@@ -657,7 +657,7 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
   
-class TwoLayerRNNN:
+class TwoLayerRNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, alpha=0.5):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
@@ -685,18 +685,17 @@ class TwoLayerRNNN:
         delta_h1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
         delta_h1 = squeeze_excite_attention(delta_h1)  # 应用注意力机制
         
-        # 计算差分权重
-        # 这里我们计算输入与当前隐藏状态的差异
-        diff1 = x - hidden_state1  # 假设 input_dim 和 hidden_size1 匹配
-        # 如果维度不匹配，可以通过线性变换调整
+        # 计算差分
+        diff1 = x - jnp.dot(hidden_state1, self.B1.T)  # 假设 B1 是从 input 到 hidden1
+        # 通过一个线性变换调整维度（如果需要）
         if diff1.shape[-1] != self.hidden_size1:
             diff1 = jnp.dot(diff1, orthogonal()(random.PRNGKey(4), (diff1.shape[-1], self.hidden_size1)))
         
-        # 应用 softmax 以获得权重
-        weights1 = jax.nn.softmax(diff1, axis=-1)
+        # 应用非线性激活函数（如 ReLU 或 Tanh）
+        diff1 = jnp.tanh(diff1)
         
         # 执行相减操作
-        delta_h1 = delta_h1 * weights1  # 或者根据需求调整操作方式
+        delta_h1 = delta_h1 - diff1  # 或根据需求调整操作方式
         
         # 差分更新隐藏状态
         hidden_state1 = hidden_state1 + self.alpha * delta_h1
@@ -706,17 +705,17 @@ class TwoLayerRNNN:
         delta_h2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
         delta_h2 = complex_channel_attention(delta_h2)  # 应用注意力机制
         
-        # 计算差分权重
-        diff2 = hidden_state1 - hidden_state2
-        # 如果维度不匹配，可以通过线性变换调整
+        # 计算差分
+        diff2 = hidden_state1 - jnp.dot(hidden_state2, self.B2.T)  # 假设 B2 是从 hidden1 到 hidden2
+        # 通过一个线性变换调整维度（如果需要）
         if diff2.shape[-1] != self.hidden_size2:
             diff2 = jnp.dot(diff2, orthogonal()(random.PRNGKey(5), (diff2.shape[-1], self.hidden_size2)))
         
-        # 应用 softmax 以获得权重
-        weights2 = jax.nn.softmax(diff2, axis=-1)
+        # 应用非线性激活函数
+        diff2 = jnp.tanh(diff2)
         
         # 执行相减操作
-        delta_h2 = delta_h2 * weights2  # 或者根据需求调整操作方式
+        delta_h2 = delta_h2 - diff2  # 或根据需求调整操作方式
         
         # 差分更新隐藏状态
         hidden_state2 = hidden_state2 + self.alpha * delta_h2
@@ -725,6 +724,7 @@ class TwoLayerRNNN:
         output = jnp.dot(hidden_state2, self.C)
         
         return output
+      
 def fdbp(
     scope: Scope,
     signal,
