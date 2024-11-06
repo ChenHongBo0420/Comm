@@ -693,42 +693,32 @@ def fdbp(
     steps=3,
     dtaps=261,
     ntaps=41,
-    num_heads=4,  # 新增参数：头的数量
+    num_heads=4,
     sps=2,
     d_init=delta,
     n_init=gauss):
     x, t = signal
     
-    # 初始化每个头的传输卷积
-    dconv_heads = [vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init)) for _ in range(num_heads)]
-    
-    # 初始化每个头的非线性卷积
+    dconv_heads = [vmap(partial(conv1d, taps=dtaps, kernel_init=d_init)) for _ in range(num_heads)]
     mimoconv_heads = [scope.child(mimoconv1d, name=f'NConv_head_{h}') for h in range(num_heads)]
     
     for i in range(steps):
         x_heads = []
         for h in range(num_heads):
-            # 传输卷积补偿
             x_h, td = scope.child(dconv_heads[h], name=f'DConv_head_{h}_step_{i}')(Signal(x, t))
-            
-            # 非线性补偿
             c_h, t = mimoconv_heads[h](
                 Signal(jnp.abs(x_h)**2, td),
                 taps=ntaps,
                 kernel_init=n_init
             )
-            
-            # 相位补偿
-            x_compensated_h = jnp.exp(1j * c_h) * x_h[t.start - td.start : t.stop - td.stop + x_h.shape[0]]
-            
+            x_compensated_h = jnp.exp(1j * c_h) * x_h
             x_heads.append(x_compensated_h)
         
-        # 合并所有头的输出（例如，取平均）
-        # 确保所有头的输出形状一致
-        min_length = min([x_h.shape[0] for x_h in x_heads])
-        x_combined = jnp.mean(jnp.stack([x_h[:min_length] for x_h in x_heads]), axis=0)
+        # 检查每个头的输出形状
+        for h, x_h in enumerate(x_heads):
+            print(f"Step {i}, Head {h}, Shape: {x_h.shape}")
         
-        # 更新信号
+        x_combined = jnp.mean(jnp.stack(x_heads, axis=0), axis=0)
         x = x_combined
     
     return Signal(x, t)
