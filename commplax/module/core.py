@@ -724,30 +724,30 @@ def identity(scope, inputs):
       
 # # compositors
 
-# def serial(*fs):
-#     def _serial(scope, inputs, **kwargs):
-#         for f in fs:
-#             if isinstance(f, tuple) or isinstance(f, list):
-#                 name, f = f
-#             else:
-#                 name = None
-#             inputs = scope.child(f, name=name)(inputs, **kwargs)
-#         return inputs
-#     return _serial
+def serial(*fs):
+    def _serial(scope, inputs, **kwargs):
+        for f in fs:
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            inputs = scope.child(f, name=name)(inputs, **kwargs)
+        return inputs
+    return _serial
 
 
-# def parallel(*fs):
-#     def _parallel(scope, inputs, **kwargs):
-#         outputs = []
-#         for f, inp in zip(fs, inputs):
-#             if isinstance(f, tuple) or isinstance(f, list):
-#                 name, f = f
-#             else:
-#                 name = None
-#             out = scope.child(f, name=name)(inp, **kwargs)
-#             outputs.append(out)
-#         return outputs
-#     return _parallel
+def parallel(*fs):
+    def _parallel(scope, inputs, **kwargs):
+        outputs = []
+        for f, inp in zip(fs, inputs):
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            out = scope.child(f, name=name)(inp, **kwargs)
+            outputs.append(out)
+        return outputs
+    return _parallel
 
 def fanout(scope, inputs, num):
     return (inputs,) * num
@@ -783,74 +783,27 @@ def fanin_attention(scope, inputs):
     return Signal(val, t)
 
 
-def serial(*fs):
-    def _serial(scope: Scope, inputs, **kwargs):
-        for f in fs:
-            if isinstance(f, tuple) or isinstance(f, list):
-                name, f = f
-            else:
-                name = None
-            inputs = scope.child(f, name=name)(inputs, **kwargs)
-        return inputs
-    return _serial
+# def serial(*fs):
+#     def _serial(scope: Scope, inputs, **kwargs):
+#         for f in fs:
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             inputs = scope.child(f, name=name)(inputs, **kwargs)
+#         return inputs
+#     return _serial
 
-def parallel(*fs):
-    def _parallel(scope: Scope, inputs, **kwargs):
-        outputs = []
-        if not isinstance(inputs, (list, tuple)):
-            inputs = [inputs] * len(fs)
-        for (name, f), inp in zip(fs, inputs):
-            output = scope.child(f, name=name)(inp, **kwargs)
-            outputs.append(output)
-        return outputs
-    return _parallel
-  
-# def fanin_diff(scope, inputs, λ=0.1):
-#     num_inputs = len(inputs)
-#     if num_inputs % 2 != 0:
-#         raise ValueError("输入信号的数量必须为偶数。")
-#     mid = num_inputs // 2
-#     inputs1 = inputs[:mid]
-#     inputs2 = inputs[mid:]
-
-#     # 在特征维度上拼接
-#     Q1 = jnp.concatenate([signal.val for signal in inputs1], axis=-1)  # axis=-1
-#     Q2 = jnp.concatenate([signal.val for signal in inputs2], axis=-1)  # axis=-1
-
-#     # 添加 epsilon 防止除以零
-#     epsilon = 1e-8
-
-#     # 计算归一化因子 s
-#     s = 1 / jnp.sqrt(Q1.shape[-1])
-
-#     # 归一化
-#     Q1_normalized = Q1 * s
-#     Q2_normalized = Q2 * s
-
-#     # 计算相似度向量 sim
-#     sim = jnp.sum(Q1_normalized * Q2_normalized, axis=-1)  # 形状：[batch_size,]
-
-#     # 使用稳定的 softmax
-#     def stable_softmax(x):
-#         x_max = jnp.max(x, keepdims=True)
-#         exp_x = jnp.exp(x - x_max)
-#         sum_exp_x = jnp.sum(exp_x, axis=-1, keepdims=True)
-#         return exp_x / sum_exp_x
-
-#     softmax_sim = stable_softmax(sim)
-#     softmax_neg_sim = stable_softmax(-sim)
-
-#     # 计算 diff
-#     diff = (softmax_sim + epsilon) - λ * (softmax_neg_sim + epsilon)
-
-#     # 扩展 diff 的维度以匹配 Q1
-#     diff = diff[:, None]
-
-#     # 计算最终输出
-#     output = diff * Q1  # 形状：[batch_size, feature_dim * num_pairs]
-
-#     t = inputs[0].t
-#     return Signal(output, t)
+# def parallel(*fs):
+#     def _parallel(scope: Scope, inputs, **kwargs):
+#         outputs = []
+#         if not isinstance(inputs, (list, tuple)):
+#             inputs = [inputs] * len(fs)
+#         for (name, f), inp in zip(fs, inputs):
+#             output = scope.child(f, name=name)(inp, **kwargs)
+#             outputs.append(output)
+#         return outputs
+#     return _parallel
 
 
 def fanin_diff(scope, inputs, λ=1.0):
