@@ -658,20 +658,10 @@ def weighted_interaction(x1, x2):
     return x1_updated, x2_updated
   
 class TwoLayerRNNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, hidden_dim_attention=2):
-        """
-        初始化 TwoLayerRNN 模型，包括 RNN 权重和门控注意力机制的权重。
-        
-        参数：
-        - input_dim: 输入特征维度
-        - hidden_size1: 第一层隐藏层维度
-        - hidden_size2: 第二层隐藏层维度
-        - output_dim: 输出特征维度
-        - hidden_dim_attention: 注意力机制的隐藏层维度
-        """
+    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, alpha=0.5):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
-        self.hidden_dim_attention = hidden_dim_attention
+        self.alpha = alpha  # 差分步长
 
         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
         self.A1 = generate_hippo_matrix(hidden_size1)
@@ -683,107 +673,58 @@ class TwoLayerRNNN:
 
         # 观测矩阵 C
         self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
-        
-        # 初始化门控注意力机制的权重矩阵
-        # Wq, Wk, Wv 用于计算查询、键、值
-        self.Wq = orthogonal()(random.PRNGKey(4), (hidden_size2, hidden_dim_attention))
-        self.Wk = orthogonal()(random.PRNGKey(5), (hidden_size2, hidden_dim_attention))
-        self.Wv = orthogonal()(random.PRNGKey(6), (hidden_size2, hidden_dim_attention))
-        # Wg 用于门控机制
-        self.Wg = orthogonal()(random.PRNGKey(7), (hidden_dim_attention, hidden_size2))
-        # 投影矩阵，将注意力输出映射回 feature_dim
-        self.W_proj = orthogonal()(random.PRNGKey(8), (hidden_dim_attention, hidden_size2))
-
-    def gated_attention(self, x1, x2):
-        """
-        集成在类中的门控注意力机制，用于更新 x1 和 x2。
-
-        参数：
-        - x1: 第一个输入信号，形状为 (batch_size, hidden_size2)
-        - x2: 第二个输入信号，形状为 (batch_size, hidden_size2)
-
-        返回：
-        - x1_updated: 更新后的第一个信号，形状为 (batch_size, hidden_size2)
-        - x2_updated: 更新后的第二个信号，形状为 (batch_size, hidden_size2)
-        """
-        batch_size, feature_dim = x1.shape
-
-        # 归一化输入信号
-        x1_norm = (x1 - jnp.mean(x1, axis=1, keepdims=True)) / (jnp.std(x1, axis=1, keepdims=True) + 1e-6)
-        x2_norm = (x2 - jnp.mean(x2, axis=1, keepdims=True)) / (jnp.std(x2, axis=1, keepdims=True) + 1e-6)
-
-        # 计算查询（Q）、键（K）、值（V）
-        Q1 = jnp.dot(x1_norm, self.Wq)  # (batch_size, hidden_dim_attention)
-        K2 = jnp.dot(x2_norm, self.Wk)  # (batch_size, hidden_dim_attention)
-        V2 = jnp.dot(x2_norm, self.Wv)  # (batch_size, hidden_dim_attention)
-
-        Q2 = jnp.dot(x2_norm, self.Wq)  # (batch_size, hidden_dim_attention)
-        K1 = jnp.dot(x1_norm, self.Wk)  # (batch_size, hidden_dim_attention)
-        V1 = jnp.dot(x1_norm, self.Wv)  # (batch_size, hidden_dim_attention)
-
-        # 计算注意力得分
-        attn_scores_1 = jnp.sum(Q1 * K2, axis=1, keepdims=True)  # (batch_size, 1)
-        attn_scores_2 = jnp.sum(Q2 * K1, axis=1, keepdims=True)  # (batch_size, 1)
-
-        # 计算注意力权重
-        attn_weights_1 = jnp.exp(attn_scores_1)  # (batch_size, 1)
-        attn_weights_2 = jnp.exp(attn_scores_2)  # (batch_size, 1)
-
-        # 归一化注意力权重
-        attn_weights_sum = attn_weights_1 + attn_weights_2 + 1e-6
-        attn_weights_1 /= attn_weights_sum
-        attn_weights_2 /= attn_weights_sum
-
-        # 计算注意力输出
-        attn_output_1 = attn_weights_1 * V2  # (batch_size, hidden_dim_attention)
-        attn_output_2 = attn_weights_2 * V1  # (batch_size, hidden_dim_attention)
-
-        # 门控机制
-        G1 = sigmoid(jnp.dot(attn_output_1, self.Wg))  # (batch_size, hidden_size2)
-        G2 = sigmoid(jnp.dot(attn_output_2, self.Wg))  # (batch_size, hidden_size2)
-
-        # 将门控后的注意力输出映射回 hidden_size2
-        attn_output_1_proj = jnp.dot(G1 * attn_output_1, self.W_proj)  # (batch_size, hidden_size2)
-        attn_output_2_proj = jnp.dot(G2 * attn_output_2, self.W_proj)  # (batch_size, hidden_size2)
-
-        # 更新信号
-        x1_updated = x1 + attn_output_1_proj  # (batch_size, hidden_size2)
-        x2_updated = x2 + attn_output_2_proj  # (batch_size, hidden_size2)
-
-        return x1_updated, x2_updated
-
+    
     def __call__(self, x, hidden_state1=None, hidden_state2=None):
-        """
-        前向传播函数。
-        
-        参数：
-        - x: 输入信号，形状为 (batch_size, input_dim)
-        - hidden_state1: 第一层隐藏状态，形状为 (batch_size, hidden_size1) 或 None
-        - hidden_state2: 第二层隐藏状态，形状为 (batch_size, hidden_size2) 或 None
-        
-        返回：
-        - output: 模型输出，形状为 (batch_size, output_dim)
-        - hidden_state1: 更新后的第一层隐藏状态，形状为 (batch_size, hidden_size1)
-        - hidden_state2: 更新后的第二层隐藏状态，形状为 (batch_size, hidden_size2)
-        """
         if hidden_state1 is None:
             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
         if hidden_state2 is None:
             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
         
-        # 第一层状态更新
-        hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)  # (batch_size, hidden_size1)
-        hidden_state1 = self.gated_attention(hidden_state1, hidden_state2)[0]  # 应用注意力机制并获取更新后的 hidden_state1
+        # --- 第一层 RNN ---
+        # 计算状态变化量
+        delta_h1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
+        delta_h1 = squeeze_excite_attention(delta_h1)  # 应用注意力机制
         
-        # 第二层状态更新
-        hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)  # (batch_size, hidden_size2)
-        hidden_state2 = self.gated_attention(hidden_state2, hidden_state1)[0]  # 应用注意力机制并获取更新后的 hidden_state2
+        # 计算差分权重
+        # 这里我们计算输入与当前隐藏状态的差异
+        diff1 = x - hidden_state1  # 假设 input_dim 和 hidden_size1 匹配
+        # 如果维度不匹配，可以通过线性变换调整
+        if diff1.shape[-1] != self.hidden_size1:
+            diff1 = jnp.dot(diff1, orthogonal()(random.PRNGKey(4), (diff1.shape[-1], self.hidden_size1)))
+        
+        # 应用 softmax 以获得权重
+        weights1 = jax.nn.softmax(diff1, axis=-1)
+        
+        # 执行相减操作
+        delta_h1 = delta_h1 * weights1  # 或者根据需求调整操作方式
+        
+        # 差分更新隐藏状态
+        hidden_state1 = hidden_state1 + self.alpha * delta_h1
+        
+        # --- 第二层 RNN ---
+        # 计算状态变化量
+        delta_h2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
+        delta_h2 = complex_channel_attention(delta_h2)  # 应用注意力机制
+        
+        # 计算差分权重
+        diff2 = hidden_state1 - hidden_state2
+        # 如果维度不匹配，可以通过线性变换调整
+        if diff2.shape[-1] != self.hidden_size2:
+            diff2 = jnp.dot(diff2, orthogonal()(random.PRNGKey(5), (diff2.shape[-1], self.hidden_size2)))
+        
+        # 应用 softmax 以获得权重
+        weights2 = jax.nn.softmax(diff2, axis=-1)
+        
+        # 执行相减操作
+        delta_h2 = delta_h2 * weights2  # 或者根据需求调整操作方式
+        
+        # 差分更新隐藏状态
+        hidden_state2 = hidden_state2 + self.alpha * delta_h2
         
         # 观测方程
-        output = jnp.dot(hidden_state2, self.C)  # (batch_size, output_dim)
+        output = jnp.dot(hidden_state2, self.C)
         
-        return output, hidden_state1, hidden_state2
-  
+        return output
 def fdbp(
     scope: Scope,
     signal,
