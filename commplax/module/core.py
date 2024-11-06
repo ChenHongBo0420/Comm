@@ -673,10 +673,10 @@ def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0),
         mask = jnp.broadcast_to(mask, x.shape)
         x = x * mask
 
-    if np.random.rand() < p_noise:
-        sigma = np.random.uniform(noise_range[0], noise_range[1])
-        noise = np.random.normal(0, sigma, x.shape)
-        x = x + noise
+    # if np.random.rand() < p_noise:
+    #     sigma = np.random.uniform(noise_range[0], noise_range[1])
+    #     noise = np.random.normal(0, sigma, x.shape)
+    #     x = x + noise
 
     if np.random.rand() < p:
         t_shift = np.random.randint(shift_range1[0], shift_range1[1])
