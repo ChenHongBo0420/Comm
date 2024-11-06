@@ -29,7 +29,7 @@ from typing import Tuple
 from functools import partial
 Array = Any
 from jax import debug
-
+from jax.nn import sigmoid
 # related: https://github.com/google/jax/issues/6853
 @struct.dataclass
 class SigTime:
