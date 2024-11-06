@@ -657,22 +657,80 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
   
-def differential_interaction(x1, x2):
-    # 对输入信号进行归一化
-    x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
-    x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
-    
-    # 计算归一化信号的差分
-    difference = x1_normalized - x2_normalized
-    
-    # 计算差分的平均值作为增益
-    gain = jnp.mean(difference)
-    
-    # 更新原始信号，基于差分和增益
-    x1_updated = x1 + gain * difference
-    x2_updated = x2 - gain * difference
-    
-    return x1_updated, x2_updated
+def create_gated_attention_interaction(input_dim, hidden_dim=64):
+    """
+    创建一个带有内部权重参数的门控注意力交互函数。
+
+    参数：
+    - input_dim: 输入特征维度
+    - hidden_dim: 隐藏层维度，用于线性变换 (默认: 64)
+
+    返回：
+    - 一个函数，接受 x1 和 x2 并返回更新后的 x1 和 x2
+    """
+    # 初始化随机密钥（使用固定种子确保可重复性）
+    key = random.PRNGKey(0)
+    keys = random.split(key, 4)  # 分割出4个子密钥用于初始化4个权重矩阵
+
+    # 初始化权重矩阵（使用正交初始化）
+    Wq = orthogonal()(keys[0], (input_dim, hidden_dim))
+    Wk = orthogonal()(keys[1], (input_dim, hidden_dim))
+    Wv = orthogonal()(keys[2], (input_dim, hidden_dim))
+    Wg = orthogonal()(keys[3], (hidden_dim, input_dim))
+
+    def gated_attention(x1, x2):
+        """
+        基于门控注意力机制的加权交互函数。
+
+        参数：
+        - x1: 第一个输入信号，形状为 (batch_size, feature_dim)
+        - x2: 第二个输入信号，形状为 (batch_size, feature_dim)
+
+        返回：
+        - x1_updated: 更新后的第一个信号，形状为 (batch_size, feature_dim)
+        - x2_updated: 更新后的第二个信号，形状为 (batch_size, feature_dim)
+        """
+        # 归一化输入信号
+        x1_norm = (x1 - jnp.mean(x1, axis=1, keepdims=True)) / (jnp.std(x1, axis=1, keepdims=True) + 1e-6)
+        x2_norm = (x2 - jnp.mean(x2, axis=1, keepdims=True)) / (jnp.std(x2, axis=1, keepdims=True) + 1e-6)
+
+        # 计算查询（Q）、键（K）、值（V）
+        Q1 = jnp.dot(x1_norm, Wq)  # (batch_size, hidden_dim)
+        K2 = jnp.dot(x2_norm, Wk)  # (batch_size, hidden_dim)
+        V2 = jnp.dot(x2_norm, Wv)  # (batch_size, hidden_dim)
+
+        Q2 = jnp.dot(x2_norm, Wq)  # (batch_size, hidden_dim)
+        K1 = jnp.dot(x1_norm, Wk)  # (batch_size, hidden_dim)
+        V1 = jnp.dot(x1_norm, Wv)  # (batch_size, hidden_dim)
+
+        # 计算注意力得分
+        attn_scores_1 = jnp.sum(Q1 * K2, axis=1, keepdims=True)  # (batch_size, 1)
+        attn_scores_2 = jnp.sum(Q2 * K1, axis=1, keepdims=True)  # (batch_size, 1)
+
+        # 计算注意力权重
+        attn_weights_1 = jnp.exp(attn_scores_1)  # (batch_size, 1)
+        attn_weights_2 = jnp.exp(attn_scores_2)  # (batch_size, 1)
+
+        # 归一化注意力权重
+        attn_weights_sum = attn_weights_1 + attn_weights_2 + 1e-6
+        attn_weights_1 /= attn_weights_sum
+        attn_weights_2 /= attn_weights_sum
+
+        # 计算注意力输出
+        attn_output_1 = attn_weights_1 * V2  # (batch_size, hidden_dim)
+        attn_output_2 = attn_weights_2 * V1  # (batch_size, hidden_dim)
+
+        # 门控机制
+        G1 = sigmoid(jnp.dot(attn_output_1, Wg))  # (batch_size, feature_dim)
+        G2 = sigmoid(jnp.dot(attn_output_2, Wg))  # (batch_size, feature_dim)
+
+        # 更新信号
+        x1_updated = x1 + G1 * attn_output_1
+        x2_updated = x2 + G2 * attn_output_2
+
+        return x1_updated, x2_updated
+
+    return gated_attention
   
 def fdbp(
     scope: Scope,
