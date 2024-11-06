@@ -656,74 +656,6 @@ def weighted_interaction(x1, x2):
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
-  
-class TwoLayerRNNN:
-    def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, alpha=0.5):
-        self.hidden_size1 = hidden_size1
-        self.hidden_size2 = hidden_size2
-        self.alpha = alpha  # 差分步长
-
-        # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-        self.A1 = generate_hippo_matrix(hidden_size1)
-        self.A2 = generate_hippo_matrix(hidden_size2)
-        
-        # 输入矩阵 B
-        self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-        self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-
-        # 观测矩阵 C
-        self.C = orthogonal()(random.PRNGKey(3), (hidden_size2, output_dim))
-    
-    def __call__(self, x, hidden_state1=None, hidden_state2=None):
-        if hidden_state1 is None:
-            hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-        if hidden_state2 is None:
-            hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
-        # --- 第一层 RNN ---
-        # 计算状态变化量
-        delta_h1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        delta_h1 = squeeze_excite_attention(delta_h1)  # 应用注意力机制
-        
-        # 计算差分
-        diff1 = x - jnp.dot(hidden_state1, self.B1.T)  # 假设 B1 是从 input 到 hidden1
-        # 通过一个线性变换调整维度（如果需要）
-        if diff1.shape[-1] != self.hidden_size1:
-            diff1 = jnp.dot(diff1, orthogonal()(random.PRNGKey(4), (diff1.shape[-1], self.hidden_size1)))
-        
-        # 应用非线性激活函数（如 ReLU 或 Tanh）
-        diff1 = jnp.tanh(diff1)
-        
-        # 执行相减操作
-        delta_h1 = delta_h1 - diff1  # 或根据需求调整操作方式
-        
-        # 差分更新隐藏状态
-        hidden_state1 = hidden_state1 + self.alpha * delta_h1
-        
-        # --- 第二层 RNN ---
-        # 计算状态变化量
-        delta_h2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        delta_h2 = complex_channel_attention(delta_h2)  # 应用注意力机制
-        
-        # 计算差分
-        diff2 = hidden_state1 - jnp.dot(hidden_state2, self.B2.T)  # 假设 B2 是从 hidden1 到 hidden2
-        # 通过一个线性变换调整维度（如果需要）
-        if diff2.shape[-1] != self.hidden_size2:
-            diff2 = jnp.dot(diff2, orthogonal()(random.PRNGKey(5), (diff2.shape[-1], self.hidden_size2)))
-        
-        # 应用非线性激活函数
-        diff2 = jnp.tanh(diff2)
-        
-        # 执行相减操作
-        delta_h2 = delta_h2 - diff2  # 或根据需求调整操作方式
-        
-        # 差分更新隐藏状态
-        hidden_state2 = hidden_state2 + self.alpha * delta_h2
-        
-        # 观测方程
-        output = jnp.dot(hidden_state2, self.C)
-        
-        return output
       
 def fdbp(
     scope: Scope,
@@ -736,15 +668,15 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = TwoLayerRNNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -755,7 +687,32 @@ def fdbp(
     return Signal(x, t)
 
 
-     
+def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0), shift_range1=(-100, 100), mask_range=(0, 30), noise_range=(0.0, 0.2), p_scale=0.5, p_shift=0.5, p_mask=0.5, p_noise=0.5, p=0.5):
+    if np.random.rand() < p_scale:
+        scale = np.random.uniform(scale_range[0], scale_range[1])
+        x = x * scale
+
+    if np.random.rand() < p_shift:
+        shift = np.random.uniform(shift_range[0], shift_range[1])
+        x = x + shift
+
+    if np.random.rand() < p_mask:
+        total_length = x.shape[0]
+        mask = np.random.choice([0, 1], size=total_length, p=[1-p_mask, p_mask])
+        mask = jnp.array(mask)[:, None]
+        mask = jnp.broadcast_to(mask, x.shape)
+        x = x * mask
+
+    if np.random.rand() < p_noise:
+        sigma = np.random.uniform(noise_range[0], noise_range[1])
+        noise = np.random.normal(0, sigma, x.shape)
+        x = x + noise
+
+    if np.random.rand() < p:
+        t_shift = np.random.randint(shift_range1[0], shift_range1[1])
+        x = jnp.roll(x, shift=t_shift)
+    return x
+  
 def fdbp1(
     scope: Scope,
     signal,
@@ -767,15 +724,7 @@ def fdbp1(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    # x1 = x[:, 0]
-    # x2 = x[:, 1]
-    # x1_updated, x2_updated = weighted_interaction(x1, x2)
-    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    # x = rnn_layer(x_updated)
+    x = apply_combined_transform(x)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -794,30 +743,30 @@ def identity(scope, inputs):
       
 # # compositors
 
-def serial(*fs):
-    def _serial(scope, inputs, **kwargs):
-        for f in fs:
-            if isinstance(f, tuple) or isinstance(f, list):
-                name, f = f
-            else:
-                name = None
-            inputs = scope.child(f, name=name)(inputs, **kwargs)
-        return inputs
-    return _serial
+# def serial(*fs):
+#     def _serial(scope, inputs, **kwargs):
+#         for f in fs:
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             inputs = scope.child(f, name=name)(inputs, **kwargs)
+#         return inputs
+#     return _serial
 
 
-def parallel(*fs):
-    def _parallel(scope, inputs, **kwargs):
-        outputs = []
-        for f, inp in zip(fs, inputs):
-            if isinstance(f, tuple) or isinstance(f, list):
-                name, f = f
-            else:
-                name = None
-            out = scope.child(f, name=name)(inp, **kwargs)
-            outputs.append(out)
-        return outputs
-    return _parallel
+# def parallel(*fs):
+#     def _parallel(scope, inputs, **kwargs):
+#         outputs = []
+#         for f, inp in zip(fs, inputs):
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             out = scope.child(f, name=name)(inp, **kwargs)
+#             outputs.append(out)
+#         return outputs
+#     return _parallel
 
 def fanout(scope, inputs, num):
     return (inputs,) * num
@@ -853,60 +802,24 @@ def fanin_attention(scope, inputs):
     return Signal(val, t)
 
 
-# def serial(*fs):
-#     def _serial(scope: Scope, inputs, **kwargs):
-#         for f in fs:
-#             if isinstance(f, tuple) or isinstance(f, list):
-#                 name, f = f
-#             else:
-#                 name = None
-#             inputs = scope.child(f, name=name)(inputs, **kwargs)
-#         return inputs
-#     return _serial
+def serial(*fs):
+    def _serial(scope: Scope, inputs, **kwargs):
+        for f in fs:
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            inputs = scope.child(f, name=name)(inputs, **kwargs)
+        return inputs
+    return _serial
 
-# def parallel(*fs):
-#     def _parallel(scope: Scope, inputs, **kwargs):
-#         outputs = []
-#         if not isinstance(inputs, (list, tuple)):
-#             inputs = [inputs] * len(fs)
-#         for (name, f), inp in zip(fs, inputs):
-#             output = scope.child(f, name=name)(inp, **kwargs)
-#             outputs.append(output)
-#         return outputs
-#     return _parallel
-
-
-def fanin_diff(scope, inputs, λ=1.0):
-    num_inputs = len(inputs)
-    
-    if num_inputs % 2 != 0:
-        raise ValueError("输入信号的数量必须为偶数。")
-    
-    mid = num_inputs // 2
-    inputs1 = inputs[:mid]
-    inputs2 = inputs[mid:]
-    
-    # 计算每对信号的差值
-    differences = jnp.stack([input1.val - input2.val for input1, input2 in zip(inputs1, inputs2)], axis=0)  # Shape: [mid, batch_size, feature_dim]
-    
-    # 获取每对信号的权重，并进行 softmax 归一化
-    weights = scope.param('weights', nn.initializers.ones, (mid,))
-    weights = jax.nn.softmax(weights)  # Shape: [mid]
-    
-    # 调整权重形状以便于广播
-    weights = weights[:, None, None]  # Shape: [mid, 1, 1]
-    
-    # 应用权重
-    weighted_diff = weights * differences  # Shape: [mid, batch_size, feature_dim]
-    
-    # 对所有差分求和，保持 [batch_size, feature_dim] 形状
-    output = jnp.sum(weighted_diff, axis=0)  # Shape: [batch_size, feature_dim]
-    
-    # 处理可能的 NaN 和 Inf
-    output = jnp.nan_to_num(output, nan=0.0, posinf=1e10, neginf=-1e10)
-    
-    # 可选：应用 λ 缩放（根据需要）
-    # output = output * λ
-    
-    t = inputs[0].t
-    return Signal(output, t)
+def parallel(*fs):
+    def _parallel(scope: Scope, inputs, **kwargs):
+        outputs = []
+        if not isinstance(inputs, (list, tuple)):
+            inputs = [inputs] * len(fs)
+        for (name, f), inp in zip(fs, inputs):
+            output = scope.child(f, name=name)(inp, **kwargs)
+            outputs.append(output)
+        return outputs
+    return _parallel
