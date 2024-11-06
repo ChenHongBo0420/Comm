@@ -662,9 +662,9 @@ def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0),
         scale = np.random.uniform(scale_range[0], scale_range[1])
         x = x * scale
 
-    if np.random.rand() < p_shift:
-        shift = np.random.uniform(shift_range[0], shift_range[1])
-        x = x + shift
+    # if np.random.rand() < p_shift:
+    #     shift = np.random.uniform(shift_range[0], shift_range[1])
+    #     x = x + shift
 
     # if np.random.rand() < p_mask:
     #     total_length = x.shape[0]
