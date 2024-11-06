@@ -686,44 +686,50 @@ def weighted_interaction(x1, x2):
     
 #     return Signal(x, t)
 
+
 def fdbp(
     scope: Scope,
     signal,
     steps=3,
     dtaps=261,
     ntaps=41,
+    num_heads=4,  # 新增参数：头的数量
     sps=2,
     d_init=delta,
     n_init=gauss):
     x, t = signal
-    x_initial = x  # 记录初始输入信号
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    # 初始化每个头的传输卷积
+    dconv_heads = [vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init)) for _ in range(num_heads)]
+    
+    # 初始化每个头的非线性卷积
+    mimoconv_heads = [scope.child(mimoconv1d, name=f'NConv_head_{h}') for h in range(num_heads)]
     
     for i in range(steps):
-        # 记录当前步的输入信号用于残差连接
-        x_input = x
+        x_heads = []
+        for h in range(num_heads):
+            # 传输卷积补偿
+            x_h, td = scope.child(dconv_heads[h], name=f'DConv_head_{h}_step_{i}')(Signal(x, t))
+            
+            # 非线性补偿
+            c_h, t = mimoconv_heads[h](
+                Signal(jnp.abs(x_h)**2, td),
+                taps=ntaps,
+                kernel_init=n_init
+            )
+            
+            # 相位补偿
+            x_compensated_h = jnp.exp(1j * c_h) * x_h[t.start - td.start : t.stop - td.stop + x_h.shape[0]]
+            
+            x_heads.append(x_compensated_h)
         
-        # 传输卷积补偿
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        # 合并所有头的输出（例如，取平均）
+        # 确保所有头的输出形状一致
+        min_length = min([x_h.shape[0] for x_h in x_heads])
+        x_combined = jnp.mean(jnp.stack([x_h[:min_length] for x_h in x_heads]), axis=0)
         
-        # 非线性补偿
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        
-        # 相位补偿
-        x_compensated = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        
-        # 添加逐步残差连接
-        # 确保形状一致，必要时进行裁剪或填充
-        min_length = min(x_input.shape[0], x_compensated.shape[0])
-        x = x_input[:min_length] + x_compensated[:min_length]
-    
-    # 可选：添加全局残差连接
-    min_length = min(x_initial.shape[0], x.shape[0])
-    x = x_initial[:min_length] + x[:min_length]
+        # 更新信号
+        x = x_combined
     
     return Signal(x, t)
 
