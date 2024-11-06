@@ -696,6 +696,7 @@ def fdbp(
     d_init=delta,
     n_init=gauss):
     x, t = signal
+    x_initial = x  # 记录初始输入信号
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     for i in range(steps):
@@ -715,12 +716,17 @@ def fdbp(
         # 相位补偿
         x_compensated = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
-        # 添加残差连接
+        # 添加逐步残差连接
         # 确保形状一致，必要时进行裁剪或填充
-        # min_length = min(x_input.shape[0], x_compensated.shape[0])
-        # x = x_input[:min_length] + x_compensated[:min_length]
-        x = x_input + x_compensated
+        min_length = min(x_input.shape[0], x_compensated.shape[0])
+        x = x_input[:min_length] + x_compensated[:min_length]
+    
+    # 可选：添加全局残差连接
+    min_length = min(x_initial.shape[0], x.shape[0])
+    x = x_initial[:min_length] + x[:min_length]
+    
     return Signal(x, t)
+
      
 def fdbp1(
     scope: Scope,
