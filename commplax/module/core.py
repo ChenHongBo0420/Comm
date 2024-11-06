@@ -718,8 +718,8 @@ def fdbp(
         # 添加残差连接
         # 确保形状一致，必要时进行裁剪或填充
         # min_length = min(x_input.shape[0], x_compensated.shape[0])
-        x = x_input[:min_length] + x_compensated[:min_length]
-    
+        # x = x_input[:min_length] + x_compensated[:min_length]
+        x = x_input + x_compensated
     return Signal(x, t)
      
 def fdbp1(
