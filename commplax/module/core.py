@@ -656,80 +656,53 @@ def weighted_interaction(x1, x2):
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
-
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     # input_dim = x.shape[1]
-#     # hidden_size = 2 
-#     # output_dim = x.shape[1]
-#     # x1 = x[:, 0]
-#     # x2 = x[:, 1]
-#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
-#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-#     # x = rnn_layer(x_updated)
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+  
+def differential_interaction(x1, x2):
+    # 对输入信号进行归一化
+    x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
+    x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
     
-#     return Signal(x, t)
-
-
+    # 计算归一化信号的差分
+    difference = x1_normalized - x2_normalized
+    
+    # 计算差分的平均值作为增益
+    gain = jnp.mean(difference)
+    
+    # 更新原始信号，基于差分和增益
+    x1_updated = x1 + gain * difference
+    x2_updated = x2 - gain * difference
+    
+    return x1_updated, x2_updated
+  
 def fdbp(
     scope: Scope,
     signal,
     steps=3,
     dtaps=261,
     ntaps=41,
-    num_heads=4,   # 多头数量
     sps=2,
-    d_init=delta,  # 假设 delta 是预定义的初始化函数
-    n_init=gauss):  # 假设 gauss 是预定义的初始化函数
+    d_init=delta,
+    n_init=gauss):
     x, t = signal
-    dconv_heads = [
-        vmap(create_named_conv1d_fn(h, dtaps, d_init), in_axes=(0, 0))
-        for h in range(num_heads)
-    ]
-
-    # 为每个头创建独立的 mimoconv1d 层
-    mimoconv_heads = [
-        scope.child(mimoconv1d, name=f'NConv_head_{h}') 
-        for h in range(num_heads)
-    ]
-
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    x1 = x[:, 0]
+    x2 = x[:, 1]
+    x1_updated, x2_updated = differential_interaction(x1, x2)
+    x = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
-        x_heads = []
-        for h in range(num_heads):
-            # 传输卷积补偿
-            signal_h = Signal(x, t)
-            x_h, td = dconv_heads[h](signal_h.x, signal_h.t)
-            
-            # 非线性补偿
-            c_h, t = mimoconv_heads[h](Signal(jnp.abs(x_h)**2, td))
-            
-            # 相位补偿，确保信号形状一致
-            # 使用 'SAME' 填充确保输出长度与输入一致
-            x_compensated_h = jnp.exp(1j * c_h) * x_h
-            
-            x_heads.append(x_compensated_h)
-        
-        # 合并所有头的输出（取平均）
-        x_combined = jnp.mean(jnp.stack(x_heads, axis=0), axis=0)
-        x = x_combined  # 更新信号
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     
     return Signal(x, t)
+
 
      
 def fdbp1(
