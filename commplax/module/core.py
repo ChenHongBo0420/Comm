@@ -666,12 +666,12 @@ def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0),
         shift = np.random.uniform(shift_range[0], shift_range[1])
         x = x + shift
 
-    if np.random.rand() < p_mask:
-        total_length = x.shape[0]
-        mask = np.random.choice([0, 1], size=total_length, p=[1-p_mask, p_mask])
-        mask = jnp.array(mask)[:, None]
-        mask = jnp.broadcast_to(mask, x.shape)
-        x = x * mask
+    # if np.random.rand() < p_mask:
+    #     total_length = x.shape[0]
+    #     mask = np.random.choice([0, 1], size=total_length, p=[1-p_mask, p_mask])
+    #     mask = jnp.array(mask)[:, None]
+    #     mask = jnp.broadcast_to(mask, x.shape)
+    #     x = x * mask
 
     # if np.random.rand() < p_noise:
     #     sigma = np.random.uniform(noise_range[0], noise_range[1])
