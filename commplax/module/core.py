@@ -657,7 +657,7 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
   
-class TwoLayerRNN:
+class TwoLayerRNNN:
     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim, alpha=0.5):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
