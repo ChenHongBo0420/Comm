@@ -678,9 +678,9 @@ def apply_combined_transform(x, scale_range=(0.5, 2.0), shift_range=(-5.0, 5.0),
     #     noise = np.random.normal(0, sigma, x.shape)
     #     x = x + noise
 
-    if np.random.rand() < p:
-        t_shift = np.random.randint(shift_range1[0], shift_range1[1])
-        x = jnp.roll(x, shift=t_shift)
+    # if np.random.rand() < p:
+    #     t_shift = np.random.randint(shift_range1[0], shift_range1[1])
+    #     x = jnp.roll(x, shift=t_shift)
     return x      
   
 def fdbp(
