@@ -658,6 +658,10 @@ def weighted_interaction(x1, x2):
     return x1_updated, x2_updated
   
 def gated_attention_inner(x1, x2, hidden_dim=2):
+    if x1.ndim == 1:
+        x1 = jnp.expand_dims(x1, axis=0)
+    if x2.ndim == 1:
+        x2 = jnp.expand_dims(x2, axis=0)
       # 归一化输入信号
     key = random.PRNGKey(0)
     keys = random.split(key, 4)  # 分割出4个子密钥用于初始化4个权重矩阵
