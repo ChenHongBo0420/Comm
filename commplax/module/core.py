@@ -657,6 +657,35 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated
 
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     # input_dim = x.shape[1]
+#     # hidden_size = 2 
+#     # output_dim = x.shape[1]
+#     # x1 = x[:, 0]
+#     # x2 = x[:, 1]
+#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
+#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+#     # x = rnn_layer(x_updated)
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    
+#     return Signal(x, t)
+
 def fdbp(
     scope: Scope,
     signal,
@@ -668,24 +697,31 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    # input_dim = x.shape[1]
-    # hidden_size = 2 
-    # output_dim = x.shape[1]
-    # x1 = x[:, 0]
-    # x2 = x[:, 1]
-    # x1_updated, x2_updated = weighted_interaction(x1, x2)
-    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    # x = rnn_layer(x_updated)
+    
     for i in range(steps):
+        # 记录当前步的输入信号用于残差连接
+        x_input = x
+        
+        # 传输卷积补偿
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+        # 非线性补偿
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        
+        # 相位补偿
+        x_compensated = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+        # 添加残差连接
+        # 确保形状一致，必要时进行裁剪或填充
+        min_length = min(x_input.shape[0], x_compensated.shape[0])
+        x = x_input[:min_length] + x_compensated[:min_length]
     
     return Signal(x, t)
-      
+     
 def fdbp1(
     scope: Scope,
     signal,
