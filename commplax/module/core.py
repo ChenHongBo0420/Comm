@@ -693,33 +693,41 @@ def fdbp(
     steps=3,
     dtaps=261,
     ntaps=41,
-    num_heads=4,
+    num_heads=4,   # 多头数量
     sps=2,
-    d_init=delta,
-    n_init=gauss):
+    d_init=delta,  # 假设 delta 是预定义的初始化函数
+    n_init=gauss):  # 假设 gauss 是预定义的初始化函数
     x, t = signal
-    
-    dconv_heads = [vmap(partial(conv1d, taps=dtaps, kernel_init=d_init)) for _ in range(num_heads)]
-    mimoconv_heads = [scope.child(mimoconv1d, name=f'NConv_head_{h}') for h in range(num_heads)]
-    
+    dconv_heads = [
+        vmap(create_named_conv1d_fn(h, dtaps, d_init), in_axes=(0, 0))
+        for h in range(num_heads)
+    ]
+
+    # 为每个头创建独立的 mimoconv1d 层
+    mimoconv_heads = [
+        scope.child(mimoconv1d, name=f'NConv_head_{h}') 
+        for h in range(num_heads)
+    ]
+
     for i in range(steps):
         x_heads = []
         for h in range(num_heads):
-            x_h, td = scope.child(dconv_heads[h], name=f'DConv_head_{h}_step_{i}')(Signal(x, t))
-            c_h, t = mimoconv_heads[h](
-                Signal(jnp.abs(x_h)**2, td),
-                taps=ntaps,
-                kernel_init=n_init
-            )
+            # 传输卷积补偿
+            signal_h = Signal(x, t)
+            x_h, td = dconv_heads[h](signal_h.x, signal_h.t)
+            
+            # 非线性补偿
+            c_h, t = mimoconv_heads[h](Signal(jnp.abs(x_h)**2, td))
+            
+            # 相位补偿，确保信号形状一致
+            # 使用 'SAME' 填充确保输出长度与输入一致
             x_compensated_h = jnp.exp(1j * c_h) * x_h
+            
             x_heads.append(x_compensated_h)
         
-        # 检查每个头的输出形状
-        for h, x_h in enumerate(x_heads):
-            print(f"Step {i}, Head {h}, Shape: {x_h.shape}")
-        
+        # 合并所有头的输出（取平均）
         x_combined = jnp.mean(jnp.stack(x_heads, axis=0), axis=0)
-        x = x_combined
+        x = x_combined  # 更新信号
     
     return Signal(x, t)
 
