@@ -753,7 +753,7 @@ def fdbp1(
         
         # 计算非线性步骤，包括SPM和IXPM效应
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
-                                                            taps=1,
+                                                            taps=ntaps,
                                                             kernel_init=n_init)
         
         # 应用相位调制，包含IXPM效应
