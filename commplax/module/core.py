@@ -741,7 +741,23 @@ def fdbp1(
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
     x = rnn_layer(x_updated)
-    
+    for i in range(steps):
+        # 线性色散补偿步骤
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
+        # 增加对邻近符号的功率采样，用于IXPM计算
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        
+        # 计算非线性步骤，包括SPM和IXPM效应
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+                                                            taps=1,
+                                                            kernel_init=n_init)
+        
+        # 应用相位调制，包含IXPM效应
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
 def identity(scope, inputs):
