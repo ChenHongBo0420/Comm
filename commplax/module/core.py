@@ -32,15 +32,10 @@ from jax import debug
 from jax.nn import sigmoid
 # related: https://github.com/google/jax/issues/6853
 @struct.dataclass
-# class SigTime:
-#   start: int = struct.field(pytree_node=False)
-#   stop: int = struct.field(pytree_node=False)
-#   sps: int = struct.field(pytree_node=False)
-
 class SigTime:
-    start: float
-    stop: float
-    sps: int = field(default=2, repr=False, compare=False)
+  start: int = struct.field(pytree_node=False)
+  stop: int = struct.field(pytree_node=False)
+  sps: int = struct.field(pytree_node=False)
 
 # class Signal(NamedTuple):
 #     val: Array
