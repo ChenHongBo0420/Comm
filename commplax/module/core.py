@@ -655,33 +655,7 @@ def weighted_interaction(x1, x2):
     weight = jnp.mean(x1_normalized * x2_normalized)
     x1_updated = x1 + weight * x2
     x2_updated = x2 + weight * x1
-    return x1_updated, x2_updated
-  
-def apply_combined_transform(x, scale_range=(0.8, 1.2), shift_range=(-5.0, 5.0), shift_range1=(-100, 100), mask_range=(0, 30), noise_range=(0.0, 0.2), p_scale=0.5, p_shift=0.5, p_mask=0.5, p_noise=0.5, p=0.5):
-    if np.random.rand() < p_scale:
-        scale = np.random.uniform(scale_range[0], scale_range[1])
-        x = x * scale
-
-    # if np.random.rand() < p_shift:
-    #     shift = np.random.uniform(shift_range[0], shift_range[1])
-    #     x = x + shift
-
-    # if np.random.rand() < p_mask:
-    #     total_length = x.shape[0]
-    #     mask = np.random.choice([0, 1], size=total_length, p=[1-p_mask, p_mask])
-    #     mask = jnp.array(mask)[:, None]
-    #     mask = jnp.broadcast_to(mask, x.shape)
-    #     x = x * mask
-
-    # if np.random.rand() < p_noise:
-    #     sigma = np.random.uniform(noise_range[0], noise_range[1])
-    #     noise = np.random.normal(0, sigma, x.shape)
-    #     x = x + noise
-
-    # if np.random.rand() < p:
-    #     t_shift = np.random.randint(shift_range1[0], shift_range1[1])
-    #     x = jnp.roll(x, shift=t_shift)
-    return x      
+    return x1_updated, x2_updated    
   
 def fdbp(
     scope: Scope,
@@ -694,15 +668,15 @@ def fdbp(
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -713,6 +687,26 @@ def fdbp(
     return Signal(x, t)
 
   
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    
+#     return Signal(x, t)
+
 def fdbp1(
     scope: Scope,
     signal,
@@ -720,15 +714,29 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
+    ixpm_window=3,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
+    
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
     for i in range(steps):
+        # 线性色散补偿步骤
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+        
+        # 增加对邻近符号的功率采样，用于IXPM计算
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        
+        # 计算非线性步骤，包括SPM和IXPM效应
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
+        
+        # 应用相位调制，包含IXPM效应
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     
     return Signal(x, t)
