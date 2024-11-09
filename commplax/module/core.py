@@ -657,37 +657,7 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    # input_dim = x.shape[1]
-    # hidden_size = 2 
-    # output_dim = x.shape[1]
-    # x1 = x[:, 0]
-    # x2 = x[:, 1]
-    # x1_updated, x2_updated = weighted_interaction(x1, x2)
-    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    # x = rnn_layer(x_updated)
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    
-    return Signal(x, t)
-
-  
-# def fdbp1(
+# def fdbp(
 #     scope: Scope,
 #     signal,
 #     steps=3,
@@ -698,6 +668,15 @@ def fdbp(
 #     n_init=gauss):
 #     x, t = signal
 #     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     # input_dim = x.shape[1]
+#     # hidden_size = 2 
+#     # output_dim = x.shape[1]
+#     # x1 = x[:, 0]
+#     # x2 = x[:, 1]
+#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
+#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+#     # x = rnn_layer(x_updated)
 #     for i in range(steps):
 #         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
 #         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -707,6 +686,40 @@ def fdbp(
     
 #     return Signal(x, t)
 
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    ixpm_window=5,  # 新增参数，设置IXPM的窗口大小
+    d_init=delta,
+    n_init=gauss):
+    
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    for i in range(steps):
+        # 线性色散补偿步骤
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
+        # 增加对邻近符号的功率采样，用于IXPM计算
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        
+        # 计算非线性步骤，包括SPM和IXPM效应
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        
+        # 应用相位调制，包含IXPM效应
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    
+    return Signal(x, t)
+      
 def fdbp1(
     scope: Scope,
     signal,
