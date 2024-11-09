@@ -32,18 +32,73 @@ from jax import debug
 from jax.nn import sigmoid
 # related: https://github.com/google/jax/issues/6853
 @struct.dataclass
+# class SigTime:
+#   start: int = struct.field(pytree_node=False)
+#   stop: int = struct.field(pytree_node=False)
+#   sps: int = struct.field(pytree_node=False)
+
 class SigTime:
-  start: int = struct.field(pytree_node=False)
-  stop: int = struct.field(pytree_node=False)
-  sps: int = struct.field(pytree_node=False)
-  
+    start: float
+    stop: float
+    sps: int = field(default=2, repr=False, compare=False)
+
+# class Signal(NamedTuple):
+#     val: Array
+#     t: Any = SigTime(0, 0, 2)
+
+#     def taxis(self):
+#         return self.t[0].shape[0], -self.t[0].shape[1]
+
+#     def __mul__(self, other):
+#         Signal._check_type(other)
+#         return Signal(self.val * other, self.t)
+
+#     def __add__(self, other):
+#         Signal._check_type(other)
+#         return Signal(self.val + other, self.t)
+        
+
+#     def __sub__(self, other):
+#         Signal._check_type(other)
+#         return Signal(self.val - other, self.t)
+
+#     def __truediv__(self, other):
+#         Signal._check_type(other)
+#         return Signal(self.val / other, self.t)
+
+#     def __floordiv__(self, other):
+#         Signal._check_type(other)
+#         return Signal(self.val // other, self.t)
+
+#     def __imul__(self, other):
+#         return self * other
+
+#     def __iadd__(self, other):
+#         return self + other
+
+#     def __isub__(self, other):
+#         return self - other
+
+#     def __itruediv__(self, other):
+#         return self / other
+
+#     def __ifloordiv__(self, other):
+#         return self // other
+
+#     @classmethod
+#     def _check_type(cls, other):
+#         assert not isinstance(other, cls), 'not implemented'
 
 class Signal(NamedTuple):
-    val: Array
-    t: Any = SigTime(0, 0, 2)
+    val: jnp.ndarray
+    t: SigTime = SigTime(start=0.0, stop=0.0, sps=2)
 
     def taxis(self):
-        return self.t[0].shape[0], -self.t[0].shape[1]
+        """
+        返回信号的长度和采样率的负值。
+        """
+        length = self.val.shape[0]
+        return (length, -self.t.sps)
 
     def __mul__(self, other):
         Signal._check_type(other)
@@ -52,7 +107,6 @@ class Signal(NamedTuple):
     def __add__(self, other):
         Signal._check_type(other)
         return Signal(self.val + other, self.t)
-        
 
     def __sub__(self, other):
         Signal._check_type(other)
@@ -84,7 +138,7 @@ class Signal(NamedTuple):
     @classmethod
     def _check_type(cls, other):
         assert not isinstance(other, cls), 'not implemented'
-
+      
 
 def zeros(key, shape, dtype=jnp.float32): return jnp.zeros(shape, dtype)
 def ones(key, shape, dtype=jnp.float32): return jnp.ones(shape, dtype)
