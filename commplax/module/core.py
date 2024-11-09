@@ -792,11 +792,23 @@ def fanin_sum(scope, inputs):
 #     return Signal(val, t)
 
 def fanin_mean(scope, inputs):
+    # 找到所有输入信号中的最小长度
     min_length = min(signal.val.shape[0] for signal in inputs)
+    
+    # 裁剪每个信号到最小长度
     cropped_vals = [signal.val[:min_length, :] for signal in inputs]
+    
+    # 计算平均值
     val = sum(cropped_vals) / len(cropped_vals)
-    t = inputs[0].t[:min_length]  
-    return Signal(val, t)
+    
+    # 处理时间轴
+    # 假设 SigTime 有 start, stop 和 step 属性
+    original_t = inputs[0].t
+    dt = original_t.step  # 时间步长
+    new_stop = original_t.start + dt * min_length
+    new_t = SigTime(start=original_t.start, stop=new_stop, step=dt)
+    
+    return Signal(val, new_t)
   
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
