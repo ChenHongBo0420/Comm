@@ -808,7 +808,13 @@ def fanin_mean(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
 
-
+def fanin_concat(scope, inputs, axis=-1):
+    # 假设 inputs 是一个包含多个 Signal 对象的列表
+    # 我们需要将每个 Signal 的 val 属性在指定轴上进行拼接
+    vals = [signal.val for signal in inputs]
+    concatenated_val = jnp.concatenate(vals, axis=axis)
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(concatenated_val, t)
   
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
