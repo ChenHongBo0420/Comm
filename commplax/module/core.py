@@ -693,7 +693,7 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=5,  # 新增参数，设置IXPM的窗口大小
+    ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
     
@@ -727,7 +727,7 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=5,  # 新增参数，设置IXPM的窗口大小
+    ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
     
