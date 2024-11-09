@@ -786,11 +786,18 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
-def fanin_mean(scope, inputs):
-    val = sum(signal.val for signal in inputs) / len(inputs)
-    t = inputs[0].t  # 假设所有的 t 都相同
-    return Signal(val, t)
+# def fanin_mean(scope, inputs):
+#     val = sum(signal.val for signal in inputs) / len(inputs)
+#     t = inputs[0].t  # 假设所有的 t 都相同
+#     return Signal(val, t)
 
+def fanin_mean(scope, inputs):
+    min_length = min(signal.val.shape[0] for signal in inputs)
+    cropped_vals = [signal.val[:min_length, :] for signal in inputs]
+    val = sum(cropped_vals) / len(cropped_vals)
+    t = inputs[0].t[:min_length]  
+    return Signal(val, t)
+  
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
     print(num_inputs)
