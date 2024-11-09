@@ -686,7 +686,7 @@ def weighted_interaction(x1, x2):
     
 #     return Signal(x, t)
 
-def fdbp1(
+def fdbp(
     scope: Scope,
     signal,
     steps=3,
