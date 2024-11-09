@@ -87,7 +87,7 @@ FanInSum = make_layer(core.fanin_sum)
 FanInMean = make_layer(core.fanin_mean)
 FanInW = make_layer(core.fanin_weighted_sum)
 FanInAttention = make_layer(core.fanin_attention)
-
+FanInConcat = make_layer(core.fanin_concat)
 # def Serial(*layers, name='serial'):
 #     names, _, _, core_funs, mutables = zip(*layers)
 #     core_fun = core.serial(*zip(names, core_funs))
