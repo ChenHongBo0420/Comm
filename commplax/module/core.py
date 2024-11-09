@@ -37,63 +37,12 @@ class SigTime:
   stop: int = struct.field(pytree_node=False)
   sps: int = struct.field(pytree_node=False)
 
-# class Signal(NamedTuple):
-#     val: Array
-#     t: Any = SigTime(0, 0, 2)
-
-#     def taxis(self):
-#         return self.t[0].shape[0], -self.t[0].shape[1]
-
-#     def __mul__(self, other):
-#         Signal._check_type(other)
-#         return Signal(self.val * other, self.t)
-
-#     def __add__(self, other):
-#         Signal._check_type(other)
-#         return Signal(self.val + other, self.t)
-        
-
-#     def __sub__(self, other):
-#         Signal._check_type(other)
-#         return Signal(self.val - other, self.t)
-
-#     def __truediv__(self, other):
-#         Signal._check_type(other)
-#         return Signal(self.val / other, self.t)
-
-#     def __floordiv__(self, other):
-#         Signal._check_type(other)
-#         return Signal(self.val // other, self.t)
-
-#     def __imul__(self, other):
-#         return self * other
-
-#     def __iadd__(self, other):
-#         return self + other
-
-#     def __isub__(self, other):
-#         return self - other
-
-#     def __itruediv__(self, other):
-#         return self / other
-
-#     def __ifloordiv__(self, other):
-#         return self // other
-
-#     @classmethod
-#     def _check_type(cls, other):
-#         assert not isinstance(other, cls), 'not implemented'
-
 class Signal(NamedTuple):
-    val: jnp.ndarray
-    t: SigTime = SigTime(start=0.0, stop=0.0, sps=2)
+    val: Array
+    t: Any = SigTime(0, 0, 2)
 
     def taxis(self):
-        """
-        返回信号的长度和采样率的负值。
-        """
-        length = self.val.shape[0]
-        return (length, -self.t.sps)
+        return self.t[0].shape[0], -self.t[0].shape[1]
 
     def __mul__(self, other):
         Signal._check_type(other)
@@ -102,6 +51,7 @@ class Signal(NamedTuple):
     def __add__(self, other):
         Signal._check_type(other)
         return Signal(self.val + other, self.t)
+        
 
     def __sub__(self, other):
         Signal._check_type(other)
@@ -835,45 +785,11 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
-# def fanin_mean(scope, inputs):
-#     val = sum(signal.val for signal in inputs) / len(inputs)
-#     t = inputs[0].t  # 假设所有的 t 都相同
-#     return Signal(val, t)
-
 def fanin_mean(scope, inputs):
-    if not inputs:
-        raise ValueError("输入列表为空")
+    val = sum(signal.val for signal in inputs) / len(inputs)
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(val, t)
 
-    # 确保所有输入信号的 sps 一致
-    sps_set = set(signal.t.sps for signal in inputs)
-    if len(sps_set) != 1:
-        raise ValueError("所有输入信号的 sps 必须一致")
-    sps = sps_set.pop()
-
-    # 找到所有输入信号中的最小长度
-    min_length = min(signal.val.shape[0] for signal in inputs)
-
-    # 裁剪每个信号到最小长度
-    cropped_vals = [signal.val[:min_length, :] for signal in inputs]
-
-    # 计算平均值
-    val = sum(cropped_vals) / len(cropped_vals)
-
-    # 处理时间轴
-    original_t = inputs[0].t
-    # 计算时间步长 (dt)
-    dt = 1.0 / original_t.sps  # 每个采样点的时间长度
-    # 计算新的 stop，确保它是一个浮点数且大于或等于 start
-    new_stop = original_t.start + dt * min_length
-    print(f"fanin_mean: start={original_t.start}, new_stop={new_stop}, sps={original_t.sps}, min_length={min_length}")
-
-    if new_stop < original_t.start:
-        raise ValueError(f"Computed new_stop ({new_stop}) is less than start ({original_t.start})")
-
-    # 创建新的 SigTime 对象
-    new_t = SigTime(start=original_t.start, stop=new_stop, sps=original_t.sps)
-
-    return Signal(val, new_t)
 
   
 def fanin_weighted_sum(scope, inputs):
