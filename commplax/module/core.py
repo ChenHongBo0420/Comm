@@ -795,6 +795,12 @@ def fanin_mean(scope, inputs):
     if not inputs:
         raise ValueError("输入列表为空")
 
+    # 确保所有输入信号的 sps 一致
+    sps_set = set(signal.t.sps for signal in inputs)
+    if len(sps_set) != 1:
+        raise ValueError("所有输入信号的 sps 必须一致")
+    sps = sps_set.pop()
+
     # 找到所有输入信号中的最小长度
     min_length = min(signal.val.shape[0] for signal in inputs)
 
@@ -806,12 +812,20 @@ def fanin_mean(scope, inputs):
 
     # 处理时间轴
     original_t = inputs[0].t
-    # 假设 sps 是每秒采样点数
-    dt = 1.0 / original_t.sps  # 计算时间步长
+    # 计算时间步长 (dt)
+    dt = 1.0 / original_t.sps  # 每个采样点的时间长度
+    # 计算新的 stop，确保它是一个浮点数且大于或等于 start
     new_stop = original_t.start + dt * min_length
+    print(f"fanin_mean: start={original_t.start}, new_stop={new_stop}, sps={original_t.sps}, min_length={min_length}")
+
+    if new_stop < original_t.start:
+        raise ValueError(f"Computed new_stop ({new_stop}) is less than start ({original_t.start})")
+
+    # 创建新的 SigTime 对象
     new_t = SigTime(start=original_t.start, stop=new_stop, sps=original_t.sps)
 
     return Signal(val, new_t)
+
   
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
