@@ -745,13 +745,6 @@ def fdbp1(
         # 线性色散补偿步骤
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
-        # 增加对邻近符号的功率采样，用于IXPM计算
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-        
-        # 计算非线性步骤，包括SPM和IXPM效应
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
