@@ -693,7 +693,7 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=9,  # 新增参数，设置IXPM的窗口大小
+    ixpm_windows=[3, 5, 7],  # 多尺度IXPM窗口列表
     d_init=delta,
     n_init=gauss):
     
@@ -704,18 +704,26 @@ def fdbp(
         # 线性色散补偿步骤
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
-        # 增加对邻近符号的功率采样，用于IXPM计算
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        # 多尺度 IXPM 功率计算
+        ixpm_power_combined = jnp.zeros_like(jnp.abs(x)**2)  # 初始化功率组合
         
-        # 计算非线性步骤，包括SPM和IXPM效应
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+        for window_size in ixpm_windows:
+            # 对每个窗口大小计算IXPM功率
+            ixpm_samples = [
+                jnp.roll(jnp.abs(x)**2, shift) for shift in range(-window_size, window_size + 1)
+            ]
+            # 将每个窗口的功率均值加入组合中
+            ixpm_power_combined += sum(ixpm_samples) / (2 * window_size + 1)
+        
+        # 平均多尺度结果
+        ixpm_power_combined /= len(ixpm_windows)
+        
+        # 计算非线性步骤，包括多尺度IXPM和SPM效应
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power_combined, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         
-        # 应用相位调制，包含IXPM效应
+        # 应用相位调制，包含多尺度IXPM效应
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     
     return Signal(x, t)
@@ -727,7 +735,7 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=9,  # 新增参数，设置IXPM的窗口大小
+    ixpm_window=3,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
     
