@@ -760,30 +760,30 @@ def identity(scope, inputs):
       
 # # compositors
 
-# def serial(*fs):
-#     def _serial(scope, inputs, **kwargs):
-#         for f in fs:
-#             if isinstance(f, tuple) or isinstance(f, list):
-#                 name, f = f
-#             else:
-#                 name = None
-#             inputs = scope.child(f, name=name)(inputs, **kwargs)
-#         return inputs
-#     return _serial
+def serial(*fs):
+    def _serial(scope, inputs, **kwargs):
+        for f in fs:
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            inputs = scope.child(f, name=name)(inputs, **kwargs)
+        return inputs
+    return _serial
 
 
-# def parallel(*fs):
-#     def _parallel(scope, inputs, **kwargs):
-#         outputs = []
-#         for f, inp in zip(fs, inputs):
-#             if isinstance(f, tuple) or isinstance(f, list):
-#                 name, f = f
-#             else:
-#                 name = None
-#             out = scope.child(f, name=name)(inp, **kwargs)
-#             outputs.append(out)
-#         return outputs
-#     return _parallel
+def parallel(*fs):
+    def _parallel(scope, inputs, **kwargs):
+        outputs = []
+        for f, inp in zip(fs, inputs):
+            if isinstance(f, tuple) or isinstance(f, list):
+                name, f = f
+            else:
+                name = None
+            out = scope.child(f, name=name)(inp, **kwargs)
+            outputs.append(out)
+        return outputs
+    return _parallel
 
 def fanout(scope, inputs, num):
     return (inputs,) * num
@@ -827,24 +827,24 @@ def fanin_attention(scope, inputs):
     return Signal(val, t)
 
 
-def serial(*fs):
-    def _serial(scope: Scope, inputs, **kwargs):
-        for f in fs:
-            if isinstance(f, tuple) or isinstance(f, list):
-                name, f = f
-            else:
-                name = None
-            inputs = scope.child(f, name=name)(inputs, **kwargs)
-        return inputs
-    return _serial
+# def serial(*fs):
+#     def _serial(scope: Scope, inputs, **kwargs):
+#         for f in fs:
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             inputs = scope.child(f, name=name)(inputs, **kwargs)
+#         return inputs
+#     return _serial
 
-def parallel(*fs):
-    def _parallel(scope: Scope, inputs, **kwargs):
-        outputs = []
-        if not isinstance(inputs, (list, tuple)):
-            inputs = [inputs] * len(fs)
-        for (name, f), inp in zip(fs, inputs):
-            output = scope.child(f, name=name)(inp, **kwargs)
-            outputs.append(output)
-        return outputs
-    return _parallel
+# def parallel(*fs):
+#     def _parallel(scope: Scope, inputs, **kwargs):
+#         outputs = []
+#         if not isinstance(inputs, (list, tuple)):
+#             inputs = [inputs] * len(fs)
+#         for (name, f), inp in zip(fs, inputs):
+#             output = scope.child(f, name=name)(inp, **kwargs)
+#             outputs.append(output)
+#         return outputs
+#     return _parallel
