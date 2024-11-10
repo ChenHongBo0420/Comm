@@ -806,12 +806,24 @@ def fanin_mean(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(concatenated_val, t)
 
-def fanin_concat(scope, inputs, axis=0):
-    # 假设 axis=0 是时间维度
+def fanin_concat(scope, inputs, axis=-1):
+    # 提取所有的 val
     vals = [signal.val for signal in inputs]
-    concatenated_val = jnp.concatenate(vals, axis=axis)
     
-    # 合并时间范围
+    # 找到最大长度
+    max_length = max(val.shape[0] for val in vals)
+    
+    # 对每个 val 进行填充
+    padded_vals = []
+    for val in vals:
+        pad_length = max_length - val.shape[0]
+        padded_val = jnp.pad(val, ((0, pad_length), (0, 0)), mode='constant', constant_values=0)
+        padded_vals.append(padded_val)
+    
+    # 在指定轴上拼接
+    concatenated_val = jnp.concatenate(padded_vals, axis=axis)
+    
+    # 时间范围取所有信号的最小 start 和最大 stop
     t_starts = [signal.t.start for signal in inputs]
     t_stops = [signal.t.stop for signal in inputs]
     t_start = min(t_starts)
@@ -819,6 +831,7 @@ def fanin_concat(scope, inputs, axis=0):
     t = slice(t_start, t_stop)
     
     return Signal(concatenated_val, t)
+
 
  
 def fanin_weighted_sum(scope, inputs):
