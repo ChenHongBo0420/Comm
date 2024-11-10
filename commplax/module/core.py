@@ -798,14 +798,61 @@ def fanin_mean(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
 
+# def fanin_concat(scope, inputs, axis=-1):
+#     # 假设 inputs 是一个包含多个 Signal 对象的列表
+#     # 我们需要将每个 Signal 的 val 属性在指定轴上进行拼接
+#     vals = [signal.val for signal in inputs]
+#     concatenated_val = jnp.concatenate(vals, axis=axis)
+#     t = inputs[0].t  # 假设所有的 t 都相同
+#     return Signal(concatenated_val, t)
+
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
-    # 我们需要将每个 Signal 的 val 属性在指定轴上进行拼接
+    # 首先，提取所有的 t 和 val
+    ts = [signal.t for signal in inputs]
     vals = [signal.val for signal in inputs]
-    concatenated_val = jnp.concatenate(vals, axis=axis)
-    t = inputs[0].t  # 假设所有的 t 都相同
-    return Signal(concatenated_val, t)
-  
+    
+    # 找到所有 t 的公共区间
+    t_starts = [t.start for t in ts]
+    t_stops = [t.stop for t in ts]
+    
+    # 公共时间范围
+    t_start_common = max(t_starts)
+    t_stop_common = min(t_stops)
+    
+    # 检查是否有重叠区域
+    if t_stop_common <= t_start_common:
+        raise ValueError("No overlapping time range among signals")
+    
+    # 计算公共区间的长度
+    common_length = t_stop_common - t_start_common
+    
+    # 对每个 val 进行裁剪或填充，使其在时间维度上长度一致
+    aligned_vals = []
+    for signal in inputs:
+        t = signal.t
+        val = signal.val
+        
+        # 计算相对索引
+        start_idx = t_start_common - t.start
+        end_idx = start_idx + common_length
+        
+        # 裁剪 val
+        aligned_val = val[start_idx:end_idx]
+        
+        # 检查裁剪后长度是否匹配
+        if aligned_val.shape[0] != common_length:
+            raise ValueError(f"Signal with t={t} cannot be aligned properly.")
+        
+        aligned_vals.append(aligned_val)
+    
+    # 在指定轴上拼接对齐后的 val
+    concatenated_val = jnp.concatenate(aligned_vals, axis=axis)
+    
+    # 返回新的 Signal 对象，时间范围为公共区间
+    t_common = slice(t_start_common, t_stop_common)
+    return Signal(concatenated_val, t_common)
+ 
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
     print(num_inputs)
