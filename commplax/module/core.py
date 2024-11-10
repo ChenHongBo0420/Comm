@@ -746,7 +746,7 @@ def fdbp1(
         ]
         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
-                                                            taps=ntaps,
+                                                            taps=1,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
