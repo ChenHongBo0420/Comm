@@ -814,13 +814,12 @@ def fdbp1(
     ixpm_window=7,
     d_init=delta,
     n_init=gauss,
-    hidden_size=16
+    hidden_size=2
 ):
     """
     在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
     """
     x, t = signal
-    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
     # 1) 色散滤波器 => vmap
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
@@ -849,6 +848,7 @@ def fdbp1(
 
     # 3) "黑盒" MLP 残差修正
     #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
+    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
     x = x + res
 
     return Signal(x, t)
