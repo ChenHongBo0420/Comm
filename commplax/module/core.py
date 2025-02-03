@@ -700,7 +700,7 @@ def fdbp(
     sps: int = 2,
     d_init=delta,
     n_init=gauss,
-    poly_order: int = 2
+    poly_order: int = 3
 ):
     """
     类似 fdbp，但将非线性相位从 exp(1j * c) 扩展为多项式相位:
