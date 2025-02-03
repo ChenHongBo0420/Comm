@@ -826,7 +826,7 @@ def fdbp1(
     x1 = x[:, 0]
     x2 = x[:, 1]
     x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    x = jnp.stack([x1_updated, x2_updated], axis=1)
   
     # 1) 色散滤波器 => vmap
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
