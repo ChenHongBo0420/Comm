@@ -768,60 +768,90 @@ def fdbp(
 
 #     return Signal(x, t)
 
-def fdbp1(
+def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
+    """
+    一个简单的 MLP，用来对 FDBP 输出做残差修正。
+    x: shape (N, 2) 的复数信号 (N 表示样本数, 2 表示偏振)
+       - 这里只是示意: 需要先拆成实部/虚部, 再做 MLP.
+    hidden_size: 隐藏层大小 (可调)
+    
+    输出: shape (N, 2) 的复数修正量.
+    """
+    # 1) 拆分实部、虚部 => shape (N,4) 实数
+    #   x[:,0]是X偏振, x[:,1]是Y偏振, 但每个偏振都是复数 => real+imag
+    xr = jnp.real(x)
+    xi = jnp.imag(x)
+    # 拼起来 => (N,4)
+    x_in = jnp.concatenate([xr, xi], axis=-1)  # shape (N,4)
+
+    # 2) 全连接层 1: (4 -> hidden_size), ReLU
+    #   声明可训练权重
+    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (4, hidden_size))
+    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32), (hidden_size,))
+    h = jnp.dot(x_in, w1) + b1
+    h = jnp.maximum(h, 0)  # ReLU
+
+    # 3) 全连接层 2: (hidden_size -> 4), 无激活
+    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (hidden_size, 4))
+    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32), (4,))
+    out = jnp.dot(h, w2) + b2  # shape (N,4)
+
+    # 4) 还原成 (N,2) 复数
+    #   out[:,:2] -> real,  out[:,2:] -> imag
+    out_real = out[:, :2]
+    out_imag = out[:, 2:]
+    res = out_real + 1j * out_imag  # shape (N,2)
+    return res
+def fdbp1_with_resnet(
     scope: Scope,
     signal,
-    steps: int = 3,
-    dtaps: int = 261,
-    ntaps: int = 41,
-    sps: int = 2,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    ixpm_window=7,
     d_init=delta,
-    n_init=gauss
+    n_init=gauss,
+    hidden_size=16
 ):
     """
-    在每个step最后插入一个 2×2 PDL 矩阵(可学习), 以模拟更多物理效应。
-    x.shape = (N,2), 复数
+    在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
     """
     x, t = signal
+
+    # 1) 色散滤波器 => vmap
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
+    # 2) 主要的 FDBP 循环 (与 fdbp1 基本相同)
     for i in range(steps):
-        # 1) 色散
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 2.1) DConv
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
 
-        # 2) 非线性(简单)
-        c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td),
+        # 2.2) IXPM power
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+
+        # 2.3) NConv => c
+        c, t_new = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(ixpm_power, td),
             taps=ntaps,
             kernel_init=n_init
         )
+
+        # 2.4) 非线性相位: x = e^{j c} * x_slice
         x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
         x = jnp.exp(1j * c) * x_slice
         t = t_new
 
-        # 3) PDL: x => x @ M
-        #    声明 M as (2,2) complex param (or real if you prefer)
-        #    这里演示 complex, 用 zeros/init or random?
-        M = scope.param('pdl_matrix_%d'%i,
-                        lambda rng, shape: jax.random.normal(rng, shape, dtype=jnp.float32)*0.001,
-                        (2,2))  # or shape(2,2,2) if complex splitted
-        # 为了让M是复数 => 我们可分real, imag, reshape => (2,2) + j*(2,2)
-        # 简单示例: 先假设 M 是 real 2×2
-        # x: (N,2) complex => x.dot(M) shape (N,2) real? => mismatch
-        # 你可以把 M 做成 real => 只影响 幅度,  也可 cplx => 见下:
-        # 这里先给个简单: "PDL as real attenuation" => x real@ => 需要把 x->(N,2) as real/imag parted
-        # 实际中, 可能需要 2×2 复数, 需(2,2) for real + (2,2) for imag
-        # 下面是简写:
-
-        # 先把 x 视为 shape(N,2) complex,  transform => shape(N,2) complex
-        # simplest approach: interpret M as real diag? 
-        # Let's do a direct multiply, ignoring rigorous cplx approach
-        # e.g. x[:,0] = x[:,0]*M[0,0] + x[:,1]*M[1,0], etc.
-        # We'll cast M to complex for broadcasting:
-        M_cplx = jnp.asarray(M, dtype=jnp.complex64)
-        x = x @ M_cplx  # shape (N,2)
+    # 3) "黑盒" MLP 残差修正
+    #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
+    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
+    x = x + res
 
     return Signal(x, t)
+
 
      
 def identity(scope, inputs):
