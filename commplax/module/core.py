@@ -784,8 +784,17 @@ def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     # 拼起来 => (N,4)
     x_in = jnp.concatenate([xr, xi], axis=-1)  # shape (N,4)
 
-    rnn_layer = TwoLayerRNN(4, 4, 4, 4)
-    out = rnn_layer(x_in)
+    # 2) 全连接层 1: (4 -> hidden_size), ReLU
+    #   声明可训练权重
+    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (4, hidden_size))
+    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32), (hidden_size,))
+    h = jnp.dot(x_in, w1) + b1
+    h = jnp.maximum(h, 0)  # ReLU
+
+    # 3) 全连接层 2: (hidden_size -> 4), 无激活
+    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (hidden_size, 4))
+    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32), (4,))
+    out = jnp.dot(h, w2) + b2  # shape (N,4)
 
     # 4) 还原成 (N,2) 复数
     #   out[:,:2] -> real,  out[:,2:] -> imag
@@ -793,6 +802,7 @@ def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     out_imag = out[:, 2:]
     res = out_real + 1j * out_imag  # shape (N,2)
     return res
+
   
 def fdbp1(
     scope: Scope,
@@ -810,7 +820,7 @@ def fdbp1(
     在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
     """
     x, t = signal
-
+    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
     # 1) 色散滤波器 => vmap
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
@@ -839,7 +849,6 @@ def fdbp1(
 
     # 3) "黑盒" MLP 残差修正
     #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
-    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
     x = x + res
 
     return Signal(x, t)
