@@ -655,25 +655,6 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
 def fdbp(
     scope: Scope,
     signal,
@@ -681,47 +662,18 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,
     d_init=delta,
-    n_init=gauss,
-    hidden_size=2
-):
-    """
-    在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
-    """
+    n_init=gauss):
     x, t = signal
-    # 1) 色散滤波器 => vmap
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-    # 2) 主要的 FDBP 循环 (与 fdbp1 基本相同)
     for i in range(steps):
-        # 2.1) DConv
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-
-        # 2.2) IXPM power
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-
-        # 2.3) NConv => c
-        c, t_new = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(ixpm_power, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-
-        # 2.4) 非线性相位: x = e^{j c} * x_slice
-        x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
-        x = jnp.exp(1j * c) * x_slice
-        t = t_new
-
-    # 3) "黑盒" MLP 残差修正
-    #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
-    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
-    x = x + res
-
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
+
       
 # def fdbp1(
 #     scope: Scope,
@@ -867,6 +819,15 @@ def fdbp1(
     在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
     """
     x, t = signal
+  
+    input_dim = x.shape[1]
+    hidden_size = 2 
+    output_dim = x.shape[1]
+    x1 = x[:, 0]
+    x2 = x[:, 1]
+    x1_updated, x2_updated = weighted_interaction(x1, x2)
+    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+  
     # 1) 色散滤波器 => vmap
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
