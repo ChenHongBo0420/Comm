@@ -802,7 +802,8 @@ def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     out_imag = out[:, 2:]
     res = out_real + 1j * out_imag  # shape (N,2)
     return res
-def fdbp1_with_resnet(
+  
+def fdbp1(
     scope: Scope,
     signal,
     steps=3,
