@@ -655,128 +655,118 @@ def weighted_interaction(x1, x2):
     x2_updated = x2 + weight * x1
     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
-def poly_phase(scope: Scope, c: jnp.ndarray, max_order: int = 2) -> jnp.ndarray:
-    """
-    计算多项式相位:
-      phase = α0 + α1 * c + α2 * (c^2) + ... + α_{max_order} * (c^{max_order})
-    c: (samples,...) 输入, 这里假设为标量或小批次的一维分布
-    max_order: 多项式阶数
-    返回 (samples,...) 相同形状的相位
-    """
-    # 声明可训练的多项式系数 alpha, 形状: (max_order+1,)
-    alpha = scope.param('alpha', zeros, (max_order + 1,), jnp.float32)
-
-    # 累加多项式
-    p = jnp.zeros_like(c, dtype=jnp.float32)
-    for k in range(max_order + 1):
-        p = p + alpha[k] * jnp.power(c, k)
-    return p
-  
 def fdbp(
-    scope: Scope,
-    signal,
-    steps: int = 3,
-    dtaps: int = 261,
-    ntaps: int = 41,
-    sps: int = 2,
-    d_init=delta,
-    n_init=gauss,
-    poly_order: int = 3
-):
-    """
-    类似 fdbp，但将非线性相位从 exp(1j * c) 扩展为多项式相位:
-      x = exp(1j * poly_phase(c)) * x
-    poly_phase(c) 会学到 α0, α1, α2,... 以拟合更灵活的非线性。
-    """
-    # x, t 是当前信号的幅值与时间信息
-    x, t = signal
-
-    # 这里和你原始代码一样：一个“Dconv”用于色散补偿
-    # vmap(...) 表示对每个偏振(或列)单独做 conv
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-    for i in range(steps):
-        # --- 步骤1: 线性色散滤波 ---
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-
-        # --- 步骤2: 计算 c，表示非线性项 ---
-        # mimoconv1d 对 |x|^2 做一维卷积 (ntaps), kernel_init = n_init
-        c, t2 = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-
-        # --- 步骤3: 用多项式相位代替简单相位 ---
-        # 调用 poly_phase, 学到 α0..α_{poly_order}, 得到 p = poly_phase(c)
-        p = scope.child(poly_phase, name='poly_phase_%d' % i, max_order=poly_order)(c)
-
-        # x = e^{j * p} * x, 同时注意对齐 index slice:
-        # t2, td 可能有start/stop 差异，需要和你的切片保持一致
-        x_slice = x[t2.start - td.start : t2.stop - td.stop + x.shape[0]]
-        x = jnp.exp(1j * p) * x_slice
-
-        # 更新 time t
-        t = t2  # 保持一致
-
-    return Signal(x, t)
-
-
-      
-def fdbp1(
     scope: Scope,
     signal,
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
-    
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # input_dim = x.shape[1]
-    # hidden_size = 2 
-    # output_dim = x.shape[1]
-    # x1 = x[:, 0]
-    # x2 = x[:, 1]
-    # x1_updated, x2_updated = weighted_interaction(x1, x2)
-    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
+
+      
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # input_dim = x.shape[1]
+#     # hidden_size = 2 
+#     # output_dim = x.shape[1]
+#     # x1 = x[:, 0]
+#     # x2 = x[:, 1]
+#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
+#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+#     # x = rnn_layer(x_updated)
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         ixpm_samples = [
+#             jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+#         ]
+#         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
+def fdbp1_learned_ixpm(
+    scope: Scope,
+    signal,
+    steps: int = 3,
+    dtaps: int = 261,
+    ntaps: int = 41,
+    sps: int = 2,
+    max_ixpm_window: int = 7,  # 允许网络在 [-max_ixpm_window, +max_ixpm_window] 内学习
+    d_init = delta,
+    n_init = gauss
+):
+    """
+    与原fdbp1相似，但IXPM窗口在 [-max_ixpm_window, +max_ixpm_window]范围内
+    引入一个可学习的softmax权重(2*max_ixpm_window+1个参数)，
+    让网络决定每个shift的重要度，而不是均匀平均。
+    """
+    x, t = signal
+
+    # --- 1) 定义色散滤波 dconv (和你原先一样) ---
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    # --- 2) 声明一个可学习向量 alpha，用 softmax 得到 weight ---
+    #    alpha.shape = (2*max_ixpm_window + 1,)
+    alpha = scope.param(
+        'ixpm_alpha',
+        lambda rng, shape: jnp.zeros(shape, dtype=jnp.float32),  # init 0 or normal
+        (2 * max_ixpm_window + 1,)
+    )
+    # 计算 softmax, 保证非负且 sum=1
+    alpha_stable = alpha - jnp.max(alpha)  # 防止溢出
+    w = jnp.exp(alpha_stable)
+    w = w / jnp.sum(w)
+
+    # 主循环 steps
+    for i in range(steps):
+        # 2.1) 线性色散
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+
+        # 2.2) 计算 IXPM: sum over shifts(roll), 并由 w 加权
+        x_abs2 = jnp.abs(x)**2
+        ixpm_power = jnp.zeros_like(x_abs2)  # same shape as x_abs2
+        # 对 shift in [-max_ixpm_window, ..., +max_ixpm_window] 做 roll
+        for idx, shift in enumerate(range(-max_ixpm_window, max_ixpm_window + 1)):
+            ixpm_power += w[idx] * jnp.roll(x_abs2, shift, axis=0)
+
+        # 2.3) 做 mimoconv1d => c
+        c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(ixpm_power, td),
+                                                              taps=ntaps,
+                                                              kernel_init=n_init)
+        # 2.4) 相位补偿
+        #    这里与原版相同: x = exp(1j * c) * x[对齐切片]
+        x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
+        x = jnp.exp(1j * c) * x_slice
+        t = t_new  # 更新时间戳
+
+    return Signal(x, t)
       
 def identity(scope, inputs):
     return inputs
