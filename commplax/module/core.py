@@ -775,61 +775,54 @@ def fdbp1(
     dtaps: int = 261,
     ntaps: int = 41,
     sps: int = 2,
-    max_ixpm_window: int = 7,  # 在 [-max_ixpm_window .. +max_ixpm_window] 范围
     d_init=delta,
-    n_init=gauss,
+    n_init=gauss
 ):
     """
-    在双偏振场景下，对 IXPM 窗口内每个 shift 的贡献度在 X、Y 偏振上分别可学习。
-    x.shape = (samples, 2).
+    在每个step最后插入一个 2×2 PDL 矩阵(可学习), 以模拟更多物理效应。
+    x.shape = (N,2), 复数
     """
-    x, t = signal  # x: (N,2)
-
-    # 跟原fdbp1一样，用 vmap(...conv1d...) 处理色散
+    x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # 声明可学习参数 alpha，形状(2, 2*max_ixpm_window+1) => 分偏振
-    alpha = scope.param(
-        'ixpm_alpha',
-        lambda rng, shape: jnp.zeros(shape, dtype=jnp.float32),
-        (2, 2 * max_ixpm_window + 1)
-    )
-    # 对每个偏振做 softmax => w[pol, shift_idx]
-    alpha_stable = alpha - jnp.max(alpha, axis=-1, keepdims=True)
-    w_exp = jnp.exp(alpha_stable)
-    w_sum = jnp.sum(w_exp, axis=-1, keepdims=True)  # shape (2,1)
-    w = w_exp / w_sum  # (2, 2W+1), 每行softmax
-
     for i in range(steps):
-        # 1) 线性色散
+        # 1) 色散
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
 
-        # 2) IXPM 加权：分别对 x_abs2[:,0] (X偏振) 和 x_abs2[:,1] (Y偏振)
-        x_abs2 = jnp.abs(x)**2  # shape (N,2)
-        N = x.shape[0]
-        ixpm_power = jnp.zeros_like(x_abs2)  # shape (N,2)
-
-        for shift_idx, shift_val in enumerate(range(-max_ixpm_window, max_ixpm_window+1)):
-            # 对X偏振
-            rolled_x = jnp.roll(x_abs2[:,0], shift_val, axis=0)
-            # 对Y偏振
-            rolled_y = jnp.roll(x_abs2[:,1], shift_val, axis=0)
-
-            # 累加
-            ixpm_power = ixpm_power.at[:,0].add(w[0, shift_idx] * rolled_x)
-            ixpm_power = ixpm_power.at[:,1].add(w[1, shift_idx] * rolled_y)
-
-        # 3) mimoconv1d => c
-        c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(ixpm_power, td),
-                                                              taps=ntaps,
-                                                              kernel_init=n_init)
-
-        # 4) 相位补偿
+        # 2) 非线性(简单)
+        c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
         x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
         x = jnp.exp(1j * c) * x_slice
         t = t_new
 
+        # 3) PDL: x => x @ M
+        #    声明 M as (2,2) complex param (or real if you prefer)
+        #    这里演示 complex, 用 zeros/init or random?
+        M = scope.param('pdl_matrix_%d'%i,
+                        lambda rng, shape: jax.random.normal(rng, shape, dtype=jnp.float32)*0.001,
+                        (2,2))  # or shape(2,2,2) if complex splitted
+        # 为了让M是复数 => 我们可分real, imag, reshape => (2,2) + j*(2,2)
+        # 简单示例: 先假设 M 是 real 2×2
+        # x: (N,2) complex => x.dot(M) shape (N,2) real? => mismatch
+        # 你可以把 M 做成 real => 只影响 幅度,  也可 cplx => 见下:
+        # 这里先给个简单: "PDL as real attenuation" => x real@ => 需要把 x->(N,2) as real/imag parted
+        # 实际中, 可能需要 2×2 复数, 需(2,2) for real + (2,2) for imag
+        # 下面是简写:
+
+        # 先把 x 视为 shape(N,2) complex,  transform => shape(N,2) complex
+        # simplest approach: interpret M as real diag? 
+        # Let's do a direct multiply, ignoring rigorous cplx approach
+        # e.g. x[:,0] = x[:,0]*M[0,0] + x[:,1]*M[1,0], etc.
+        # We'll cast M to complex for broadcasting:
+        M_cplx = jnp.asarray(M, dtype=jnp.complex64)
+        x = x @ M_cplx  # shape (N,2)
+
     return Signal(x, t)
+
      
 def identity(scope, inputs):
     return inputs
