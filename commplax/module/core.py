@@ -785,7 +785,7 @@ def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     x_in = jnp.concatenate([xr, xi], axis=-1)  # shape (N,4)
 
     rnn_layer = TwoLayerRNN(4, 4, 4, 4)
-    x = rnn_layer(x_in)
+    out = rnn_layer(x_in)
 
     # 4) 还原成 (N,2) 复数
     #   out[:,:2] -> real,  out[:,2:] -> imag
