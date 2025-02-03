@@ -718,7 +718,7 @@ def fdbp1(
     dtaps: int = 261,
     ntaps: int = 41,
     sps: int = 2,
-    max_ixpm_window: int = 9,  # 允许网络在 [-max_ixpm_window, +max_ixpm_window] 内学习
+    max_ixpm_window: int = 19,  # 允许网络在 [-max_ixpm_window, +max_ixpm_window] 内学习
     d_init = delta,
     n_init = gauss
 ):
