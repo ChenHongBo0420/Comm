@@ -767,7 +767,11 @@ def fdbp(
 
 #     return Signal(x, t)
 
-ef ssm_res_correction(scope: Scope,
+import jax
+import jax.numpy as jnp
+from flax.core import Scope
+
+def ssm_res_correction(scope: Scope,
                        x: jnp.ndarray,
                        hidden_size1: int = 16,
                        hidden_size2: int = 16):
@@ -840,6 +844,7 @@ ef ssm_res_correction(scope: Scope,
     out_imag = outputs[:, 2:]
     res = out_real + 1j * out_imag  # (N,2)
     return res
+
 
 def fdbp1(
     scope: Scope,
