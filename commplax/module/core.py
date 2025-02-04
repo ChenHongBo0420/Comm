@@ -891,9 +891,9 @@ def fdbp1(
 
     # 3) "黑盒" MLP 残差修正
     #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
-    res = scope.child(ssm_res_correction, name='res_correction',
-                  hidden_size1=4, hidden_size2=4)(x)
+    res = scope.child(ssm_res_correction_scan, name='res_correction', hidden_size1=4, hidden_size2=4)(x)
     x = x + res
+
 
     return Signal(x, t)
 
