@@ -770,31 +770,42 @@ def fdbp(
 def rnn_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     """
     用 RNN/LSTM 来对 (N,2) 复数信号做序列残差修正。
+    若 x 其实是一维(2,), 我们自动 expand 到 (1,2) 避免 "Too many indices" 错误.
+    
     x.shape = (N,2) 复数 => 我们在时序维度 N 上做 RNN。
     输出: shape (N,2) 复数
     """
 
-    # 1) 拆分实部/虚部 => (N,4)
-    xr = jnp.real(x)
-    xi = jnp.imag(x)
+    # ------ (A) 确保 x 有维度 (N,2) ------
+    x = jnp.atleast_2d(x)    # 如果 x 原本是一维(2,), 变成(1,2)
+    # 也可再检查 if x.shape[1] != 2: raise ValueError("Expect shape(N,2) ...")
+
+    N = x.shape[0]
+
+    # ------ (B) 拆分实部/虚部 => (N,4) ------
+    xr = jnp.real(x)  # (N,2)
+    xi = jnp.imag(x)  # (N,2)
     seq_in = jnp.concatenate([xr, xi], axis=-1)  # (N,4)
 
-    # 2) RNN/LSTM 初始化
-    #   这里演示一个最简单的 LSTM
+    # ------ (C) LSTM 初始化 ------
+    #   gates dimension: input(4)+hidden_size => 4*hidden_size
     w_lstm = scope.param('w_lstm',
                          lambda rng, shape: 0.01*jax.random.normal(rng, shape),
-                         (4+hidden_size, 4*hidden_size))  # i,f,o,g gates
+                         (4 + hidden_size, 4 * hidden_size))  # i,f,o,g gates
     b_lstm = scope.param('b_lstm',
                          lambda rng, shape: jnp.zeros(shape, jnp.float32),
-                         (4*hidden_size,))
+                         (4 * hidden_size,))
+
     def lstm_cell(carry, x_t):
-        # carry: (h, c)
-        h, c_ = carry
-        # 拼接 input & hidden
+        """
+        carry: (h, c), each shape=(hidden_size,)
+        x_t: shape=(4,), the input at this time step
+        """
+        (h, c_) = carry
+        # 拼接 [x_t, h] => shape(4 + hidden_size)
         z = jnp.concatenate([x_t, h], axis=-1)
-        # linear
-        gates = jnp.dot(z, w_lstm) + b_lstm
-        # slice gates
+
+        gates = jnp.dot(z, w_lstm) + b_lstm  # shape(4*hidden_size,)
         i, f, o, g = jnp.split(gates, 4, axis=-1)
         i = jax.nn.sigmoid(i)
         f = jax.nn.sigmoid(f)
@@ -805,20 +816,18 @@ def rnn_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
         h_new = o * jnp.tanh(c_new)
         return (h_new, c_new), h_new
 
-    # 3) 逐步扫描RNN
-    batch_init = jnp.zeros((hidden_size,))  # h
-    batch_init_c = jnp.zeros((hidden_size,))# c
-    init_carry = (batch_init, batch_init_c)
+    # 初始化 hidden state & cell state
+    h0 = jnp.zeros((hidden_size,), dtype=jnp.float32)
+    c0 = jnp.zeros((hidden_size,), dtype=jnp.float32)
+    init_carry = (h0, c0)
 
-    # lax.scan 处理 (N,) 序列 => shape (N, hidden_size)
+    # ------ (D) 遍历序列，得到所有时刻 hidden ------
     def scan_fn(carry, x_t):
-        # x_t: shape(4,)
         return lstm_cell(carry, x_t)
     (final_carry, all_h), all_y = jax.lax.scan(scan_fn, init_carry, seq_in)
-    # all_h: (N, hidden_size)
+    # all_h shape=(N, hidden_size)
 
-    # 4) 把 hidden 转回 (N,4) => (N,2) 复数
-    #   全连接: hidden_size -> 4
+    # ------ (E) 将 hidden -> (N,4) -> (N,2) complex  ------
     w_out = scope.param('w_out',
                         lambda rng, shape: 0.01*jax.random.normal(rng, shape),
                         (hidden_size, 4))
@@ -832,6 +841,7 @@ def rnn_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     res = out_real + 1j * out_imag  # (N,2) 复数
 
     return res
+
 
 def fdbp1(
     scope: Scope,
