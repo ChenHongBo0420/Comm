@@ -767,81 +767,79 @@ def fdbp(
 
 #     return Signal(x, t)
 
-def rnn_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
+ef ssm_res_correction(scope: Scope,
+                       x: jnp.ndarray,
+                       hidden_size1: int = 16,
+                       hidden_size2: int = 16):
     """
-    用 RNN/LSTM 来对 (N,2) 复数信号做序列残差修正。
-    若 x 其实是一维(2,), 我们自动 expand 到 (1,2) 避免 "Too many indices" 错误.
+    用状态空间模型(SSM)对 (N,2) 复数信号做残差修正。
+    - 两层状态: h1, h2
+    - x(t+1) = x(t)*A + ...
+    - 输出 y(t) = h2(t) * C
+    返回 shape (N,2) 复数 => 残差, 可与 x 相加 or 相乘
     
-    x.shape = (N,2) 复数 => 我们在时序维度 N 上做 RNN。
-    输出: shape (N,2) 复数
+    x.shape = (N,2) 复数, 若是一维(2,),自动补 (1,2).
     """
-
-    # ------ (A) 确保 x 有维度 (N,2) ------
-    x = jnp.atleast_2d(x)    # 如果 x 原本是一维(2,), 变成(1,2)
-    # 也可再检查 if x.shape[1] != 2: raise ValueError("Expect shape(N,2) ...")
-
+    # (A) 确保 x 是 (N,2)
+    x = jnp.atleast_2d(x)
     N = x.shape[0]
 
-    # ------ (B) 拆分实部/虚部 => (N,4) ------
-    xr = jnp.real(x)  # (N,2)
-    xi = jnp.imag(x)  # (N,2)
+    # (B) 拆分实部/虚部 => (N,4)
+    xr = jnp.real(x)   # (N,2)
+    xi = jnp.imag(x)   # (N,2)
     seq_in = jnp.concatenate([xr, xi], axis=-1)  # (N,4)
+    input_dim = 4
+    output_dim = 4   # 最后我们要映射回 4维(对应 (N,2) 复数)
 
-    # ------ (C) LSTM 初始化 ------
-    #   gates dimension: input(4)+hidden_size => 4*hidden_size
-    w_lstm = scope.param('w_lstm',
-                         lambda rng, shape: 0.01*jax.random.normal(rng, shape),
-                         (4 + hidden_size, 4 * hidden_size))  # i,f,o,g gates
-    b_lstm = scope.param('b_lstm',
-                         lambda rng, shape: jnp.zeros(shape, jnp.float32),
-                         (4 * hidden_size,))
+    # (C) 声明可训练参数:
+    #     A1: (hidden_size1, hidden_size1)
+    #     B1: (input_dim,   hidden_size1)
+    #     A2: (hidden_size2,hidden_size2)
+    #     B2: (hidden_size1,hidden_size2)
+    #     C : (hidden_size2, output_dim)
+    # 你可以改成正交/随机初始化
+    def ortho_init(rng, shape):
+        # 简单正交init; 只针对2D
+        mat = jax.random.normal(rng, shape)
+        # 做QR分解(只适用于 shape[0]>=shape[1] 时)
+        q, r = jnp.linalg.qr(mat)
+        return q[:shape[0], :shape[1]]
 
-    def lstm_cell(carry, x_t):
-        """
-        carry: (h, c), each shape=(hidden_size,)
-        x_t: shape=(4,), the input at this time step
-        """
-        (h, c_) = carry
-        # 拼接 [x_t, h] => shape(4 + hidden_size)
-        z = jnp.concatenate([x_t, h], axis=-1)
+    A1 = scope.param('A1', ortho_init, (hidden_size1, hidden_size1))
+    B1 = scope.param('B1', ortho_init, (input_dim, hidden_size1))
+    A2 = scope.param('A2', ortho_init, (hidden_size2, hidden_size2))
+    B2 = scope.param('B2', ortho_init, (hidden_size1, hidden_size2))
+    C  = scope.param('C' , ortho_init, (hidden_size2, output_dim))
 
-        gates = jnp.dot(z, w_lstm) + b_lstm  # shape(4*hidden_size,)
-        i, f, o, g = jnp.split(gates, 4, axis=-1)
-        i = jax.nn.sigmoid(i)
-        f = jax.nn.sigmoid(f)
-        o = jax.nn.sigmoid(o)
-        g = jnp.tanh(g)
+    # (D) 初始化 h1, h2
+    h1 = jnp.zeros((hidden_size1,), dtype=jnp.float32)
+    h2 = jnp.zeros((hidden_size2,), dtype=jnp.float32)
 
-        c_new = f * c_ + i * g
-        h_new = o * jnp.tanh(c_new)
-        return (h_new, c_new), h_new
+    outputs = []
 
-    # 初始化 hidden state & cell state
-    h0 = jnp.zeros((hidden_size,), dtype=jnp.float32)
-    c0 = jnp.zeros((hidden_size,), dtype=jnp.float32)
-    init_carry = (h0, c0)
+    # (E) 逐时刻迭代:
+    for t_idx in range(N):
+        # x_in(t_idx): shape(4,)
+        x_t = seq_in[t_idx]
 
-    # ------ (D) 遍历序列，得到所有时刻 hidden ------
-    def scan_fn(carry, x_t):
-        return lstm_cell(carry, x_t)
-    (final_carry, all_h), all_y = jax.lax.scan(scan_fn, init_carry, seq_in)
-    # all_h shape=(N, hidden_size)
+        # 更新 h1, h2
+        # h1 = h1 * A1 + x_t * B1
+        # 其实是 (h1, )@(A1) + (x_t,)@(B1)
+        h1 = jnp.dot(h1, A1) + jnp.dot(x_t, B1)
+        h2 = jnp.dot(h2, A2) + jnp.dot(h1, B2)
 
-    # ------ (E) 将 hidden -> (N,4) -> (N,2) complex  ------
-    w_out = scope.param('w_out',
-                        lambda rng, shape: 0.01*jax.random.normal(rng, shape),
-                        (hidden_size, 4))
-    b_out = scope.param('b_out',
-                        lambda rng, shape: jnp.zeros(shape, jnp.float32),
-                        (4,))
-    out_4 = jnp.dot(all_h, w_out) + b_out  # (N,4)
+        # 输出 y_t = h2 * C => shape( output_dim )
+        y_t = jnp.dot(h2, C)
+        outputs.append(y_t)
 
-    out_real = out_4[:, :2]
-    out_imag = out_4[:, 2:]
-    res = out_real + 1j * out_imag  # (N,2) 复数
+    # (F) stack => shape (N, output_dim)
+    outputs = jnp.stack(outputs, axis=0)
 
+    # (G) 把 outputs: (N,4) => (N,2) 复数
+    out_real = outputs[:, :2]
+    out_imag = outputs[:, 2:]
+    res = out_real + 1j * out_imag  # (N,2)
     return res
-
 
 def fdbp1(
     scope: Scope,
@@ -888,7 +886,8 @@ def fdbp1(
 
     # 3) "黑盒" MLP 残差修正
     #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
-    res = scope.child(rnn_res_correction, name='res_correction', hidden_size=32)(x)
+    res = scope.child(ssm_res_correction, name='res_correction',
+                  hidden_size1=16, hidden_size2=16)(x)
     x = x + res
 
     return Signal(x, t)
