@@ -771,42 +771,37 @@ import jax
 import jax.numpy as jnp
 from flax.core import Scope
 
-def ssm_res_correction(scope: Scope,
-                       x: jnp.ndarray,
-                       hidden_size1: int = 4,
-                       hidden_size2: int = 4):
+def ssm_res_correction_scan(
+    scope: Scope,
+    x: jnp.ndarray,
+    hidden_size1: int = 4,
+    hidden_size2: int = 4
+):
     """
-    用状态空间模型(SSM)对 (N,2) 复数信号做残差修正。
-    - 两层状态: h1, h2
-    - x(t+1) = x(t)*A + ...
-    - 输出 y(t) = h2(t) * C
-    返回 shape (N,2) 复数 => 残差, 可与 x 相加 or 相乘
-    
-    x.shape = (N,2) 复数, 若是一维(2,),自动补 (1,2).
+    用状态空间模型(SSM)对 (N,2) 复数信号做残差修正, 使用 jax.lax.scan
+    避免逐时刻 Python for‐loop, 以减少内存占用.
+
+    x.shape = (N,2) 复数, 若是一维(2,)则自动扩展成 (1,2).
+    返回: (N,2) 复数 => 残差
     """
-    # (A) 确保 x 是 (N,2)
+
+    # (A) 确保 x=(N,2)
     x = jnp.atleast_2d(x)
     N = x.shape[0]
 
     # (B) 拆分实部/虚部 => (N,4)
-    xr = jnp.real(x)   # (N,2)
-    xi = jnp.imag(x)   # (N,2)
+    xr = jnp.real(x)
+    xi = jnp.imag(x)
     seq_in = jnp.concatenate([xr, xi], axis=-1)  # (N,4)
-    input_dim = 4
-    output_dim = 4   # 最后我们要映射回 4维(对应 (N,2) 复数)
 
-    # (C) 声明可训练参数:
-    #     A1: (hidden_size1, hidden_size1)
-    #     B1: (input_dim,   hidden_size1)
-    #     A2: (hidden_size2,hidden_size2)
-    #     B2: (hidden_size1,hidden_size2)
-    #     C : (hidden_size2, output_dim)
-    # 你可以改成正交/随机初始化
+    input_dim = 4
+    output_dim = 4
+
+    # ============= 声明可训练参数 ==============
     def ortho_init(rng, shape):
-        # 简单正交init; 只针对2D
         mat = jax.random.normal(rng, shape)
-        # 做QR分解(只适用于 shape[0]>=shape[1] 时)
         q, r = jnp.linalg.qr(mat)
+        # 若 shape[0]<shape[1], 还需额外处理; 这里演示
         return q[:shape[0], :shape[1]]
 
     A1 = scope.param('A1', ortho_init, (hidden_size1, hidden_size1))
@@ -815,35 +810,40 @@ def ssm_res_correction(scope: Scope,
     B2 = scope.param('B2', ortho_init, (hidden_size1, hidden_size2))
     C  = scope.param('C' , ortho_init, (hidden_size2, output_dim))
 
-    # (D) 初始化 h1, h2
-    h1 = jnp.zeros((hidden_size1,), dtype=jnp.float32)
-    h2 = jnp.zeros((hidden_size2,), dtype=jnp.float32)
+    # ============= 定义单步更新函数 =============
+    def ssm_step(carry, x_t):
+        """
+        carry: (h1, h2), each shape=(hidden_sizeN,)
+        x_t:   shape=(4,)  => input(t)
+        returns:
+          new_carry = (h1_new, h2_new)
+          y_t       = shape(4,) => output(t)
+        """
+        (h1, h2) = carry
+        # update h1
+        h1_new = jnp.dot(h1, A1) + jnp.dot(x_t, B1)
+        # update h2
+        h2_new = jnp.dot(h2, A2) + jnp.dot(h1_new, B2)
+        # output y_t
+        y_t = jnp.dot(h2_new, C)
+        new_carry = (h1_new, h2_new)
+        return new_carry, y_t
 
-    outputs = []
+    # ============= 初始化 h1, h2 =============
+    h1_init = jnp.zeros((hidden_size1,), dtype=jnp.float32)
+    h2_init = jnp.zeros((hidden_size2,), dtype=jnp.float32)
+    carry_init = (h1_init, h2_init)
 
-    # (E) 逐时刻迭代:
-    for t_idx in range(N):
-        # x_in(t_idx): shape(4,)
-        x_t = seq_in[t_idx]
+    # ============= scan 迭代，得到全序列输出 =============
+    (h1_final, h2_final), all_outputs = jax.lax.scan(ssm_step, carry_init, seq_in)
+    # all_outputs: shape (N, 4)
 
-        # 更新 h1, h2
-        # h1 = h1 * A1 + x_t * B1
-        # 其实是 (h1, )@(A1) + (x_t,)@(B1)
-        h1 = jnp.dot(h1, A1) + jnp.dot(x_t, B1)
-        h2 = jnp.dot(h2, A2) + jnp.dot(h1, B2)
-
-        # 输出 y_t = h2 * C => shape( output_dim )
-        y_t = jnp.dot(h2, C)
-        outputs.append(y_t)
-
-    # (F) stack => shape (N, output_dim)
-    outputs = jnp.stack(outputs, axis=0)
-
-    # (G) 把 outputs: (N,4) => (N,2) 复数
-    out_real = outputs[:, :2]
-    out_imag = outputs[:, 2:]
+    # ============= (N,4) => (N,2) 复数 =============
+    out_real = all_outputs[:, :2]
+    out_imag = all_outputs[:, 2:]
     res = out_real + 1j * out_imag  # (N,2)
     return res
+
 
 
 def fdbp1(
