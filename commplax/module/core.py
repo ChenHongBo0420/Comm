@@ -767,82 +767,68 @@ def fdbp(
 
 #     return Signal(x, t)
 
-import jax
-import jax.numpy as jnp
-from flax.core import Scope
-
-def ssm_res_correction_scan(
-    scope: Scope,
-    x: jnp.ndarray,
-    hidden_size1: int = 4,
-    hidden_size2: int = 4
-):
+def multi_res_mlp_correction(scope, x: jnp.ndarray,
+                             n_blocks: int = 2,
+                             hidden_size: int = 32):
     """
-    用状态空间模型(SSM)对 (N,2) 复数信号做残差修正, 使用 jax.lax.scan
-    避免逐时刻 Python for‐loop, 以减少内存占用.
-
-    x.shape = (N,2) 复数, 若是一维(2,)则自动扩展成 (1,2).
-    返回: (N,2) 复数 => 残差
+    多层 ResNet-style MLP，用来对 FDBP 输出做残差修正。
+    x: shape (N, 2) 的复数信号
+    n_blocks: 堆叠多少个 ResBlock
+    hidden_size: 每个Block的隐藏层大小
     """
-
-    # (A) 确保 x=(N,2)
-    x = jnp.atleast_2d(x)
-    N = x.shape[0]
-
-    # (B) 拆分实部/虚部 => (N,4)
+    # 把 (N,2) 复数 => (N,4) 实数
     xr = jnp.real(x)
     xi = jnp.imag(x)
-    seq_in = jnp.concatenate([xr, xi], axis=-1)  # (N,4)
+    x_in = jnp.concatenate([xr, xi], axis=-1)  # (N,4)
 
-    input_dim = 4
-    output_dim = 4
+    # 先做一次线性升维 (4-> hidden_size), 作为输入变换
+    w0 = scope.param('w0', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (4, hidden_size))
+    b0 = scope.param('b0', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (hidden_size,))
+    h = jnp.dot(x_in, w0) + b0
+    h = jnp.maximum(h, 0)  # ReLU
 
-    # ============= 声明可训练参数 ==============
-    def ortho_init(rng, shape):
-        mat = jax.random.normal(rng, shape)
-        q, r = jnp.linalg.qr(mat)
-        # 若 shape[0]<shape[1], 还需额外处理; 这里演示
-        return q[:shape[0], :shape[1]]
+    # 依次堆叠 n_blocks 个 ResBlock
+    for block_i in range(n_blocks):
+        h = scope.child(_res_block, name=f"resblock_{block_i}")(h, hidden_size)
 
-    A1 = scope.param('A1', ortho_init, (hidden_size1, hidden_size1))
-    B1 = scope.param('B1', ortho_init, (input_dim, hidden_size1))
-    A2 = scope.param('A2', ortho_init, (hidden_size2, hidden_size2))
-    B2 = scope.param('B2', ortho_init, (hidden_size1, hidden_size2))
-    C  = scope.param('C' , ortho_init, (hidden_size2, output_dim))
+    # 最后映射回 (hidden_size -> 4)
+    w_out = scope.param('w_out', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                        (hidden_size, 4))
+    b_out = scope.param('b_out', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                        (4,))
+    out = jnp.dot(h, w_out) + b_out  # (N,4)
 
-    # ============= 定义单步更新函数 =============
-    def ssm_step(carry, x_t):
-        """
-        carry: (h1, h2), each shape=(hidden_sizeN,)
-        x_t:   shape=(4,)  => input(t)
-        returns:
-          new_carry = (h1_new, h2_new)
-          y_t       = shape(4,) => output(t)
-        """
-        (h1, h2) = carry
-        # update h1
-        h1_new = jnp.dot(h1, A1) + jnp.dot(x_t, B1)
-        # update h2
-        h2_new = jnp.dot(h2, A2) + jnp.dot(h1_new, B2)
-        # output y_t
-        y_t = jnp.dot(h2_new, C)
-        new_carry = (h1_new, h2_new)
-        return new_carry, y_t
-
-    # ============= 初始化 h1, h2 =============
-    h1_init = jnp.zeros((hidden_size1,), dtype=jnp.float32)
-    h2_init = jnp.zeros((hidden_size2,), dtype=jnp.float32)
-    carry_init = (h1_init, h2_init)
-
-    # ============= scan 迭代，得到全序列输出 =============
-    (h1_final, h2_final), all_outputs = jax.lax.scan(ssm_step, carry_init, seq_in)
-    # all_outputs: shape (N, 4)
-
-    # ============= (N,4) => (N,2) 复数 =============
-    out_real = all_outputs[:, :2]
-    out_imag = all_outputs[:, 2:]
-    res = out_real + 1j * out_imag  # (N,2)
+    # 拆回 (N,2) 复数
+    out_real = out[:, :2]
+    out_imag = out[:, 2:]
+    res = out_real + 1j*out_imag
     return res
+
+def _res_block(scope: Scope, h: jnp.ndarray, hidden_size: int):
+    """
+    单个 ResBlock: (hidden_size -> hidden_size) -> ReLU -> (hidden_size->hidden_size) + skip
+    """
+    # FC1
+    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (hidden_size, hidden_size))
+    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (hidden_size,))
+    h1 = jnp.dot(h, w1) + b1
+    h1 = jnp.maximum(h1, 0)
+
+    # FC2
+    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (hidden_size, hidden_size))
+    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (hidden_size,))
+    h2 = jnp.dot(h1, w2) + b2
+
+    # 跳跃连接: out = h + h2
+    out = h + h2
+    return out
+
 
 
 
@@ -891,10 +877,12 @@ def fdbp1(
 
     # 3) "黑盒" MLP 残差修正
     #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
-    res = scope.child(ssm_res_correction_scan, name='res_correction', hidden_size1=4, hidden_size2=4)(x)
+    res = scope.child(multi_res_mlp_correction,
+                  name='res_correction',
+                  n_blocks=3,      # 比如堆叠3个ResBlock
+                  hidden_size=4,  # 隐藏层大小
+                  )(x)
     x = x + res
-
-
     return Signal(x, t)
 
 
