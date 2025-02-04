@@ -773,8 +773,8 @@ from flax.core import Scope
 
 def ssm_res_correction(scope: Scope,
                        x: jnp.ndarray,
-                       hidden_size1: int = 16,
-                       hidden_size2: int = 16):
+                       hidden_size1: int = 4,
+                       hidden_size2: int = 4):
     """
     用状态空间模型(SSM)对 (N,2) 复数信号做残差修正。
     - 两层状态: h1, h2
@@ -856,7 +856,7 @@ def fdbp1(
     ixpm_window=7,
     d_init=delta,
     n_init=gauss,
-    hidden_size=2
+    hidden_size=4
 ):
     """
     在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
