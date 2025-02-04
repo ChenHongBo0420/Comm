@@ -767,40 +767,68 @@ def fdbp(
 
 #     return Signal(x, t)
 
-def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
+def multi_res_mlp_correction(scope, x: jnp.ndarray,
+                             n_blocks: int = 2,
+                             hidden_size: int = 32):
     """
-    一个简单的 MLP，用来对 FDBP 输出做残差修正。
-    x: shape (N, 2) 的复数信号 (N 表示样本数, 2 表示偏振)
-       - 这里只是示意: 需要先拆成实部/虚部, 再做 MLP.
-    hidden_size: 隐藏层大小 (可调)
-    
-    输出: shape (N, 2) 的复数修正量.
+    多层 ResNet-style MLP，用来对 FDBP 输出做残差修正。
+    x: shape (N, 2) 的复数信号
+    n_blocks: 堆叠多少个 ResBlock
+    hidden_size: 每个Block的隐藏层大小
     """
-    # 1) 拆分实部、虚部 => shape (N,4) 实数
-    #   x[:,0]是X偏振, x[:,1]是Y偏振, 但每个偏振都是复数 => real+imag
+    # 把 (N,2) 复数 => (N,4) 实数
     xr = jnp.real(x)
     xi = jnp.imag(x)
-    # 拼起来 => (N,4)
-    x_in = jnp.concatenate([xr, xi], axis=-1)  # shape (N,4)
+    x_in = jnp.concatenate([xr, xi], axis=-1)  # (N,4)
 
-    # 2) 全连接层 1: (4 -> hidden_size), ReLU
-    #   声明可训练权重
-    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (4, hidden_size))
-    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32), (hidden_size,))
-    h = jnp.dot(x_in, w1) + b1
+    # 先做一次线性升维 (4-> hidden_size), 作为输入变换
+    w0 = scope.param('w0', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (4, hidden_size))
+    b0 = scope.param('b0', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (hidden_size,))
+    h = jnp.dot(x_in, w0) + b0
     h = jnp.maximum(h, 0)  # ReLU
 
-    # 3) 全连接层 2: (hidden_size -> 4), 无激活
-    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (hidden_size, 4))
-    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32), (4,))
-    out = jnp.dot(h, w2) + b2  # shape (N,4)
+    # 依次堆叠 n_blocks 个 ResBlock
+    for block_i in range(n_blocks):
+        h = scope.child(_res_block, name=f"resblock_{block_i}")(h, hidden_size)
 
-    # 4) 还原成 (N,2) 复数
-    #   out[:,:2] -> real,  out[:,2:] -> imag
+    # 最后映射回 (hidden_size -> 4)
+    w_out = scope.param('w_out', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                        (hidden_size, 4))
+    b_out = scope.param('b_out', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                        (4,))
+    out = jnp.dot(h, w_out) + b_out  # (N,4)
+
+    # 拆回 (N,2) 复数
     out_real = out[:, :2]
     out_imag = out[:, 2:]
-    res = out_real + 1j * out_imag  # shape (N,2)
+    res = out_real + 1j*out_imag
     return res
+
+def _res_block(scope: Scope, h: jnp.ndarray, hidden_size: int):
+    """
+    单个 ResBlock: (hidden_size -> hidden_size) -> ReLU -> (hidden_size->hidden_size) + skip
+    """
+    # FC1
+    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (hidden_size, hidden_size))
+    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (hidden_size,))
+    h1 = jnp.dot(h, w1) + b1
+    h1 = jnp.maximum(h1, 0)
+
+    # FC2
+    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (hidden_size, hidden_size))
+    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (hidden_size,))
+    h2 = jnp.dot(h1, w2) + b2
+
+    # 跳跃连接: out = h + h2
+    out = h + h2
+    return out
+
 
   
 def fdbp1(
@@ -848,7 +876,11 @@ def fdbp1(
 
     # 3) "黑盒" MLP 残差修正
     #   这里 scope.child(...) 调用 mlp_res_correction => 返回 shape (N,2)
-    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
+    res = scope.child(multi_res_mlp_correction,
+                  name='res_correction',
+                  n_blocks=3,      # 比如堆叠3个ResBlock
+                  hidden_size=32,  # 隐藏层大小
+                  )(x)
     x = x + res
 
     return Signal(x, t)
