@@ -775,53 +775,70 @@ def _single_adaptive_scale(scope: Scope, z_s: jnp.ndarray):
     """
     Handle exactly ONE sample's residual z_s, shape=(2,) complex.
     We'll compute a scale factor in [0,1] via a tiny MLP, then scale z_s.
+
+    MUST return (output, auxiliary_info), even if auxiliary_info = () or {}.
     """
-    # (A) Compute a small feature, e.g. mean of |z_s|
+    # (A) A simple feature: e.g. mean magnitude
     feat = jnp.mean(jnp.abs(z_s))  # scalar
 
     # (B) We'll have a tiny MLP:
-    #     hidden_size=4 => out=1 => scaled => [0,1]
-    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
-                     (1,4))
-    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32),
-                     (4,))
-    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
-                     (4,1))
-    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32),
-                     (1,))
+    w1 = scope.param('w1', 
+        lambda rng, shape: 0.01 * jax.random.normal(rng, shape),
+        (1,4))
+    b1 = scope.param('b1',
+        lambda rng, shape: jnp.zeros(shape, jnp.float32),
+        (4,))
+    w2 = scope.param('w2',
+        lambda rng, shape: 0.01 * jax.random.normal(rng, shape),
+        (4,1))
+    b2 = scope.param('b2',
+        lambda rng, shape: jnp.zeros(shape, jnp.float32),
+        (1,))
 
-    # shape => (1,) => expand dims to (1,).
     feat2 = jnp.expand_dims(feat, axis=0)  # shape (1,)
 
-    # First FC => shape (1,4)
-    h = jnp.dot(feat2, w1) + b1            # (1,4)
+    # 1st FC => shape (1,4)
+    h = jnp.dot(feat2, w1) + b1
     h = jax.nn.relu(h)
 
-    # Second FC => shape (1,1)
-    s = jnp.dot(h, w2) + b2               # (1,1)
-    s = jax.nn.sigmoid(s)                 # => (1,1) in [0,1]
-    scale = s[0,0]                        # => scalar
+    # 2nd FC => shape (1,1), then sigmoid => scale in [0,1]
+    s = jnp.dot(h, w2) + b2
+    scale = jax.nn.sigmoid(s)[0,0]  # => scalar
 
-    # (C) Multiply the residual
-    return z_s * scale
+    # scale the single-sample residual
+    out = z_s * scale
+
+    # (C) Return a 2-tuple: (output, empty_aux)
+    return out, ()
+
+
+from flax.core import lift
 
 def adaptive_res_scale(scope: Scope, z: jnp.ndarray):
     """
     Vectorized over batch dimension N:
       z: shape (N,2) complex.
-    For each sample, compute an adaptive scale factor via _single_adaptive_scale.
-    Returns z * scale (per-sample).
+
+    For each row, compute an adaptive scale factor via _single_adaptive_scale.
+    Then return the scaled outputs shape (N,2).
+
+    Must "unpack" the (outputs, aux) returned by vmap.
     """
-    # We'll vmap the single-sample function over the leading dimension.
-    #   'params': means we *don’t* replicate the param for each sample,
-    #             but keep one shared MLP. 'params': None => same MLP
-    #   'batch' => z, meaning each sample has a separate z_s.
-    vfun = lift.vmap(_single_adaptive_scale,
-                     in_axes=(None,0),
-                     out_axes=0,
-                     variable_axes={'params': None},  # one set of MLP params
-                     split_rngs={'params': False})
-    return vfun(scope, z)
+    def single_fn(scope, z_s):
+        return _single_adaptive_scale(scope, z_s)
+
+    # We'll vmap on (None,0): scope is broadcast, z is split along axis=0
+    vfun = lift.vmap(
+        single_fn,
+        in_axes=(None, 0),
+        out_axes=0,
+        variable_axes={'params': None},   # 1 set of MLP params total
+        split_rngs={'params': False}
+    )
+
+    # vmap returns (all_outputs, all_aux), updated_variables
+    (outs, _), _ = vfun(scope, z)
+    return outs
 
 
 def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
