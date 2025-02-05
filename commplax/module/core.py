@@ -767,36 +767,62 @@ def fdbp(
 
 #     return Signal(x, t)
 
-def soft_threshold_complex(scope, z: jnp.ndarray, init_lam: float = 0.01):
+import jax
+import jax.numpy as jnp
+from flax.core import Scope, lift
+
+def _single_adaptive_scale(scope: Scope, z_s: jnp.ndarray):
     """
-    软阈值(Soft‐Thresholding)操作，对 (N,2) 复数分量分别进行坐标轴上的阈值收缩。
-    z: shape (N,2) 复数
-    init_lam: 阈值初始值
-
-    返回: shape (N,2) 复数
+    Handle exactly ONE sample's residual z_s, shape=(2,) complex.
+    We'll compute a scale factor in [0,1] via a tiny MLP, then scale z_s.
     """
+    # (A) Compute a small feature, e.g. mean of |z_s|
+    feat = jnp.mean(jnp.abs(z_s))  # scalar
 
-    # 1) 声明可学习阈值 lam（也可固定不学）
-    lam = scope.param(
-        'threshold', 
-        lambda rng, shape: jnp.full(shape, init_lam, dtype=jnp.float32), 
-        ()
-    )
-    # lam 将是一个标量，可在训练中被更新，或只做固定参数
+    # (B) We'll have a tiny MLP:
+    #     hidden_size=4 => out=1 => scaled => [0,1]
+    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (1,4))
+    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (4,))
+    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape),
+                     (4,1))
+    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32),
+                     (1,))
 
-    # 2) 对复数z分别取实部/虚部 => 软阈值
-    zr = jnp.real(z)
-    zi = jnp.imag(z)
+    # shape => (1,) => expand dims to (1,).
+    feat2 = jnp.expand_dims(feat, axis=0)  # shape (1,)
 
-    # soft‐threshold: st(x) = sign(x)*max(|x|-lam, 0)
-    def st(x):
-        return jnp.sign(x) * jnp.maximum(jnp.abs(x) - lam, 0.)
+    # First FC => shape (1,4)
+    h = jnp.dot(feat2, w1) + b1            # (1,4)
+    h = jax.nn.relu(h)
 
-    sr = st(zr)
-    si = st(zi)
+    # Second FC => shape (1,1)
+    s = jnp.dot(h, w2) + b2               # (1,1)
+    s = jax.nn.sigmoid(s)                 # => (1,1) in [0,1]
+    scale = s[0,0]                        # => scalar
 
-    # 3) 拼回复数 => shape (N,2)
-    return sr + 1j*si
+    # (C) Multiply the residual
+    return z_s * scale
+
+def adaptive_res_scale(scope: Scope, z: jnp.ndarray):
+    """
+    Vectorized over batch dimension N:
+      z: shape (N,2) complex.
+    For each sample, compute an adaptive scale factor via _single_adaptive_scale.
+    Returns z * scale (per-sample).
+    """
+    # We'll vmap the single-sample function over the leading dimension.
+    #   'params': means we *don’t* replicate the param for each sample,
+    #             but keep one shared MLP. 'params': None => same MLP
+    #   'batch' => z, meaning each sample has a separate z_s.
+    vfun = lift.vmap(_single_adaptive_scale,
+                     in_axes=(None,0),
+                     out_axes=0,
+                     variable_axes={'params': None},  # one set of MLP params
+                     split_rngs={'params': False})
+    return vfun(scope, z)
+
 
 def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     """
@@ -883,8 +909,11 @@ def fdbp1(
     # --- 3) 软阈值(Soft‐Threshold) ---
     res_st = scope.child(soft_threshold_complex, name='soft_thresh', init_lam=0.01)(res)
 
-    # 将收缩后的残差加回
-    x = x + res_st
+    # --- (4) Adaptive scale the thresholded residual per sample ---
+    res_scaled = scope.child(adaptive_res_scale, name='res_scale')(res_st)
+
+    # Then add to the main path
+    x = x + res_scaled
 
     return Signal(x, t)
 
