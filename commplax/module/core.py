@@ -859,7 +859,37 @@ def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
     res = out_real + 1j * out_imag  # shape (N,2)
     return res
     
+def soft_threshold_complex(scope, z: jnp.ndarray, init_lam: float = 0.01):
+    """
+    软阈值(Soft‐Thresholding)操作，对 (N,2) 复数分量分别进行坐标轴上的阈值收缩。
+    z: shape (N,2) 复数
+    init_lam: 阈值初始值
 
+    返回: shape (N,2) 复数
+    """
+
+    # 1) 声明可学习阈值 lam（也可固定不学）
+    lam = scope.param(
+        'threshold', 
+        lambda rng, shape: jnp.full(shape, init_lam, dtype=jnp.float32), 
+        ()
+    )
+    # lam 将是一个标量，可在训练中被更新，或只做固定参数
+
+    # 2) 对复数z分别取实部/虚部 => 软阈值
+    zr = jnp.real(z)
+    zi = jnp.imag(z)
+
+    # soft‐threshold: st(x) = sign(x)*max(|x|-lam, 0)
+    def st(x):
+        return jnp.sign(x) * jnp.maximum(jnp.abs(x) - lam, 0.)
+
+    sr = st(zr)
+    si = st(zi)
+
+    # 3) 拼回复数 => shape (N,2)
+    return sr + 1j*si
+  
 def fdbp1(
     scope: Scope,
     signal,
