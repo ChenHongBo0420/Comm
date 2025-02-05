@@ -918,7 +918,7 @@ def fdbp1(
     x = scope.child(soft_threshold_complex, name='soft_thresh', init_lam=0.01)(x)
 
     # 将收缩后的残差加回
-    x = x + res_st
+    x = x + res
 
     return Signal(x, t)
 
