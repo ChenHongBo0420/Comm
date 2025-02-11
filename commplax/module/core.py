@@ -766,6 +766,9 @@ def fdbp(
 #         t = t_new  # 更新时间戳
 
 #     return Signal(x, t)
+
+def kernel_initializer(rng, shape, dtype=jnp.float32):
+    return jax.random.normal(rng, shape, dtype)
   
 def fno_module_td(scope, signal, num_layers=3, taps=256, activation=jax.nn.relu):
     """
