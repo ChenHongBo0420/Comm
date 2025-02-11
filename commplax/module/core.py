@@ -766,162 +766,105 @@ def fdbp(
 #         t = t_new  # 更新时间戳
 
 #     return Signal(x, t)
-
-import jax
-import jax.numpy as jnp
-from flax.core import Scope, lift
-
-def soft_threshold_complex(scope, z: jnp.ndarray, init_lam: float = 0.01):
-    """
-    软阈值(Soft‐Thresholding)操作，对 (N,2) 复数分量分别进行坐标轴上的阈值收缩。
-    z: shape (N,2) 复数
-    init_lam: 阈值初始值
-
-    返回: shape (N,2) 复数
-    """
-
-    # 1) 声明可学习阈值 lam（也可固定不学）
-    lam = scope.param(
-        'threshold', 
-        lambda rng, shape: jnp.full(shape, init_lam, dtype=jnp.float32), 
-        ()
-    )
-    # lam 将是一个标量，可在训练中被更新，或只做固定参数
-
-    # 2) 对复数z分别取实部/虚部 => 软阈值
-    zr = jnp.real(z)
-    zi = jnp.imag(z)
-
-    # soft‐threshold: st(x) = sign(x)*max(|x|-lam, 0)
-    def st(x):
-        return jnp.sign(x) * jnp.maximum(jnp.abs(x) - lam, 0.)
-
-    sr = st(zr)
-    si = st(zi)
-
-    # 3) 拼回复数 => shape (N,2)
-    return sr + 1j*si
-
-def mlp_res_correction(scope: Scope, x: jnp.ndarray, hidden_size=16):
-    """
-    一个简单的 MLP，用来对 FDBP 输出做残差修正。
-    x: shape (N, 2) 的复数信号 (N 表示样本数, 2 表示偏振)
-       - 这里只是示意: 需要先拆成实部/虚部, 再做 MLP.
-    hidden_size: 隐藏层大小 (可调)
-    
-    输出: shape (N, 2) 的复数修正量.
-    """
-    # 1) 拆分实部、虚部 => shape (N,4) 实数
-    #   x[:,0]是X偏振, x[:,1]是Y偏振, 但每个偏振都是复数 => real+imag
-    xr = jnp.real(x)
-    xi = jnp.imag(x)
-    # 拼起来 => (N,4)
-    x_in = jnp.concatenate([xr, xi], axis=-1)  # shape (N,4)
-
-    # 2) 全连接层 1: (4 -> hidden_size), ReLU
-    #   声明可训练权重
-    w1 = scope.param('w1', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (4, hidden_size))
-    b1 = scope.param('b1', lambda rng, shape: jnp.zeros(shape, jnp.float32), (hidden_size,))
-    h = jnp.dot(x_in, w1) + b1
-    h = jnp.maximum(h, 0)  # ReLU
-
-    # 3) 全连接层 2: (hidden_size -> 4), 无激活
-    w2 = scope.param('w2', lambda rng, shape: 0.01*jax.random.normal(rng, shape), (hidden_size, 4))
-    b2 = scope.param('b2', lambda rng, shape: jnp.zeros(shape, jnp.float32), (4,))
-    out = jnp.dot(h, w2) + b2  # shape (N,4)
-
-    # 4) 还原成 (N,2) 复数
-    #   out[:,:2] -> real,  out[:,2:] -> imag
-    out_real = out[:, :2]
-    out_imag = out[:, 2:]
-    res = out_real + 1j * out_imag  # shape (N,2)
-    return res
-    
-def soft_threshold_complex(scope, z: jnp.ndarray, init_lam: float = 0.01):
-    """
-    软阈值(Soft‐Thresholding)操作，对 (N,2) 复数分量分别进行坐标轴上的阈值收缩。
-    z: shape (N,2) 复数
-    init_lam: 阈值初始值
-
-    返回: shape (N,2) 复数
-    """
-
-    # 1) 声明可学习阈值 lam（也可固定不学）
-    lam = scope.param(
-        'threshold', 
-        lambda rng, shape: jnp.full(shape, init_lam, dtype=jnp.float32), 
-        ()
-    )
-    # lam 将是一个标量，可在训练中被更新，或只做固定参数
-
-    # 2) 对复数z分别取实部/虚部 => 软阈值
-    zr = jnp.real(z)
-    zi = jnp.imag(z)
-
-    # soft‐threshold: st(x) = sign(x)*max(|x|-lam, 0)
-    def st(x):
-        return jnp.sign(x) * jnp.maximum(jnp.abs(x) - lam, 0.)
-
-    sr = st(zr)
-    si = st(zi)
-
-    # 3) 拼回复数 => shape (N,2)
-    return sr + 1j*si
   
-def fdbp1(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    ixpm_window=7,
-    d_init=delta,
-    n_init=gauss,
-    hidden_size=4
-):
+def fno_module_td(scope, signal, num_layers=3, taps=256, activation=jax.nn.relu):
     """
-    在原 fdbp1 的基础上, 最后增加一个 "mlp_res_correction" 进行残差修正.
+    时域版 FNO 模块：
+      - 先将输入信号在通道维度上升维（Lift），将原始通道数提升到较高维度；
+      - 通过 num_layers 层大核卷积（mode='same' 保持长度）捕捉全局信息，每一层均施加非线性激活；
+      - 最后降维投影回原始通道数，并（如果尺寸匹配）加入残差连接。
+    参数：
+      scope       : 模型作用域对象，用于参数管理
+      signal      : Signal 对象，包含信号数据和时间信息
+      num_layers  : FNO 模块的层数
+      taps        : 每层卷积使用的核长（较大的 taps 意味着较强的全局性）
+      activation  : 非线性激活函数
+    返回：
+      修正后的 Signal 对象
     """
     x, t = signal
-  
-    # 1) 色散滤波器 => vmap
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # 如果 x 为 1D，则扩展通道维度（假设最后一维为通道）
+    if x.ndim == 1:
+        x = x[:, None]
+    in_channels = x.shape[-1]
+    width = 64  # 提升后的通道数，可以根据任务调整
 
-    # 2) 主要的 FDBP 循环 (与 fdbp1 基本相同)
-    for i in range(steps):
-        # 2.1) DConv
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+    # Lift：从 in_channels 投影到 width
+    W_lift = scope.param('W_lift_td', kernel_initializer, (in_channels, width))
+    x = jnp.dot(x, W_lift)  # 形状变为 (..., width)
 
-        # 2.2) IXPM power
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+    # 通过多层大核时域卷积捕捉全局信息
+    for i in range(num_layers):
+        # 这里调用 conv1d，设置 mode 为 'same' 以保持信号长度
+        x_conv_signal = scope.child(conv1d, name=f"TDConv_{i}")(
+            Signal(x, t),
+            taps=taps,
+            rtap=None,    # 若需要可指定 rtap，否则由 conv1d 内部默认计算
+            mode='same',
+            kernel_init=kernel_initializer)
+        # conv1d 返回 Signal 类型，取其值并施加非线性激活
+        x = activation(x_conv_signal.val)
 
-        # 2.3) NConv => c
-        c, t_new = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(ixpm_power, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
+    # 降维：将 width 投影回 in_channels
+    W_proj = scope.param('W_proj_td', kernel_initializer, (width, in_channels))
+    x = jnp.dot(x, W_proj)
 
-        # 2.4) 非线性相位: x = e^{j c} * x_slice
-        x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
-        x = jnp.exp(1j * c) * x_slice
-        t = t_new
-      
-    # --- 2) "黑盒" MLP 残差 ---
-    res = scope.child(mlp_res_correction, name='res_correction', hidden_size=hidden_size)(x)
-
-    # --- 3) 软阈值(Soft‐Threshold) ---
-    x = scope.child(soft_threshold_complex, name='soft_thresh', init_lam=0.01)(x)
-
-    # 将收缩后的残差加回
-    x = x + res
+    # 如果输出形状与输入一致，采用残差连接
+    if x.shape == signal.val.shape:
+        x = x + signal.val
 
     return Signal(x, t)
 
+def fdbp1(scope,
+                  signal,
+                  steps=3,
+                  dtaps=261,
+                  ntaps=41,
+                  sps=2,
+                  d_init=delta,
+                  n_init=gauss,
+                  fno_num_layers=3,
+                  fno_taps=256):
+    """
+    级联式 FDBP 模型：
+      1. 先通过多步 FDBP 补偿（局部时域补偿色散和非线性效应）获得初步结果；
+      2. 再将该结果输入时域版 FNO 模块（fno_module_td）进行全局修正。
+    参数：
+      scope         : 模型作用域
+      signal        : 初始 Signal 对象
+      steps         : FDBP 迭代步骤数
+      dtaps         : DConv 阶段卷积核长度（用于色散补偿）
+      ntaps         : NConv 阶段卷积核长度（用于非线性补偿）
+      sps           : 采样率因子（如果需要）
+      d_init, n_init: 卷积核初始化函数
+      fno_num_layers: FNO 模块层数
+      fno_taps      : FNO 模块中时域卷积的核长
+    返回：
+      经全局修正后的 Signal 对象
+    """
+    x, t = signal
+    # 构造局部补偿部分：使用 vmap 包装的 conv1d（DConv 阶段）
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    for i in range(steps):
+        # DConv 阶段：线性色散补偿
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        # NConv 阶段：非线性补偿（采用 mimoconv1d）
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init)
+        # 利用相位校正更新信号，并对齐时间轴
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    signal_dbp = Signal(x, t)
+    
+    # 级联全局修正：调用时域版 FNO 模块对 FDBP 输出进行全局补偿
+    signal_corrected = scope.child(fno_module_td, name='FNO_global_td')(
+        signal_dbp,
+        num_layers=fno_num_layers,
+        taps=fno_taps,
+        activation=jax.nn.relu)
+    
+    return signal_corrected
 
      
 def identity(scope, inputs):
