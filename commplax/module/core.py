@@ -770,26 +770,25 @@ def fdbp(
 def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta):
     """
     一个简单的 FNO 层实现示例：
-    1. 对输入信号做 FFT 变换
-    2. 仅对低频部分（或全部频谱）施加可学习的频域权重
+    1. 对输入信号做 FFT 变换（支持复数输入）
+    2. 对低频部分施加可学习的频域权重
     3. 进行 IFFT 得到时域结果
     """
-    x, t = signal  # x 是时域信号，t 为 SigTime 对象
-    # 进行 FFT（这里假设信号是一维）
-    X = jnp.fft.rfft(x)
+    x, t = signal  # x 是时域信号（复数），t 为 SigTime 对象
+    # 使用支持复数的 FFT
+    X = jnp.fft.fft(x)
     
-    # 定义频域权重（可学习参数）
-    # 假设低频部分取前 fno_taps 个模式，权重形状为 (fno_taps,) 复数数值
+    # 定义频域权重（可学习参数），假设对前 fno_taps 个频率分量进行加权
     weight = scope.param('fno_kernel', weight_init, (fno_taps,), np.complex64)
     
     # 仅修改低频部分，其他部分保持不变
-    # 假设 X 的形状为 (signal_length_fft, ...)，对前 fno_taps 进行乘法
     X_new = X.at[:fno_taps].set(X[:fno_taps] * weight)
     
-    # IFFT 得到处理后的时域信号
-    x_new = jnp.fft.irfft(X_new, n=x.shape[0])
+    # 进行逆 FFT 得到处理后的时域信号
+    x_new = jnp.fft.ifft(X_new)
     
     return Signal(x_new, t)
+
 
 
 def fdbp1(
