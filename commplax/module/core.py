@@ -793,7 +793,6 @@ def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta
 
 
 
-
 def fdbp1(
     scope: Scope,
     signal,
@@ -805,31 +804,34 @@ def fdbp1(
     n_init=gauss,
     use_fno=True):
     """
-    结合 FNO 层的 FDBP 迭代补偿结构：
-    - 如果 use_fno 为 True，在每一步迭代中先用 FNO 层处理信号，
-      然后再进行传统的 MIMO 卷积补偿相位计算。
+    DBP + FNO 残差补偿的迭代结构：
+    
+    1. 先执行 DBP 的局部补偿（dconv 和 mimoconv1d），得到中间结果 x_dbp；
+    2. 如果启用 FNO，则用 FNO 模块计算残差补偿 residual；
+    3. 最后将 DBP 输出与残差相加得到最终信号。
     """
     x, t = signal
-    # 定义传统的时域卷积（如原先的 dconv）——可选
+    # 定义传统的局部时域卷积模块（dconv）
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     for i in range(steps):
-        # 如果采用 FNO 结构，则首先进行频域全局补偿
-        if use_fno:
-            x_signal = Signal(x, t)
-            x_signal = scope.child(fno_layer, name='FNO_%d' % i)(x_signal)
-            x = x_signal.val  # 更新 x
-        
-        # 原有的局部时域补偿操作：可用于补充 FNO 处理后残余的局部非线性
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        # --- DBP 局部补偿部分 ---
+        x_dbp, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+            Signal(jnp.abs(x_dbp)**2, td), taps=ntaps, kernel_init=n_init)
+        x_dbp = jnp.exp(1j * c) * x_dbp[t.start - td.start: t.stop - td.stop + x_dbp.shape[0]]
         
-        # 用计算得到的相位补偿信号更新 x
-        # 注意这里的切片需要根据实际时间对齐进行调整
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    
+        # --- FNO 残差补偿部分 ---
+        if use_fno:
+            # 计算残差：FNO 模块预测 DBP 输出的残差误差
+            residual_signal = scope.child(fno_layer, name='FNO_%d' % i)(Signal(x_dbp, t))
+            # 将 DBP 输出与残差相加（残差补偿）
+            x = x_dbp + residual_signal.val
+        else:
+            x = x_dbp
+
     return Signal(x, t)
+
 
 def identity(scope, inputs):
     return inputs
