@@ -780,6 +780,8 @@ def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta
     
     # 定义频域权重（可学习参数），假设对前 fno_taps 个频率分量进行加权
     weight = scope.param('fno_kernel', weight_init, (fno_taps,), np.complex64)
+    # 将 weight reshape 成 (fno_taps, 1) 以便广播
+    weight = weight.reshape((fno_taps, 1))
     
     # 仅修改低频部分，其他部分保持不变
     X_new = X.at[:fno_taps].set(X[:fno_taps] * weight)
@@ -788,6 +790,7 @@ def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta
     x_new = jnp.fft.ifft(X_new)
     
     return Signal(x_new, t)
+
 
 
 
