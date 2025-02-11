@@ -767,110 +767,68 @@ def fdbp(
 
 #     return Signal(x, t)
 
-def kernel_initializer(rng, shape, dtype=jnp.float32):
-    # 一个简单的随机初始化函数
-    return jax.random.normal(rng, shape, dtype)
-  
-def fno_module_td(scope, signal, num_layers=3, taps=256, activation=jax.nn.relu):
+def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta):
     """
-    时域版 FNO 模块：
-      - 对输入信号先进行升维（Lift），将通道数从 in_channels 提升到 width；
-      - 通过 num_layers 层大核时域卷积层（mode='same'，保证长度不变）累积全局信息，
-        每一层后施加非线性激活，并保证输出至少为二维；
-      - 最后降维投影回原始通道数，如果形状匹配，则进行残差连接。
-    参数：
-      scope       : 模型作用域（用于参数管理）
-      signal      : Signal 对象，包含信号数据和时间信息
-      num_layers  : FNO 模块的层数
-      taps        : 每层卷积的核长度（较大核可以隐式捕捉全局信息）
-      activation  : 非线性激活函数
-    返回：
-      修正后的 Signal 对象
+    一个简单的 FNO 层实现示例：
+    1. 对输入信号做 FFT 变换
+    2. 仅对低频部分（或全部频谱）施加可学习的频域权重
+    3. 进行 IFFT 得到时域结果
     """
-    x, t = signal
+    x, t = signal  # x 是时域信号，t 为 SigTime 对象
+    # 进行 FFT（这里假设信号是一维）
+    X = jnp.fft.rfft(x)
+    
+    # 定义频域权重（可学习参数）
+    # 假设低频部分取前 fno_taps 个模式，权重形状为 (fno_taps,) 复数数值
+    weight = scope.param('fno_kernel', weight_init, (fno_taps,), np.complex64)
+    
+    # 仅修改低频部分，其他部分保持不变
+    # 假设 X 的形状为 (signal_length_fft, ...)，对前 fno_taps 进行乘法
+    X_new = X.at[:fno_taps].set(X[:fno_taps] * weight)
+    
+    # IFFT 得到处理后的时域信号
+    x_new = jnp.fft.irfft(X_new, n=x.shape[0])
+    
+    return Signal(x_new, t)
 
-    # 如果 x 为 1D，则扩展为 (n, 1)
-    if x.ndim == 1:
-        x = x[:, None]
-    in_channels = x.shape[-1]
-    width = 64  # 升维后的通道数
 
-    # Lift：将 x 从 in_channels 投影到 width
-    W_lift = scope.param('W_lift_td', kernel_initializer, (in_channels, width))
-    x = jnp.dot(x, W_lift)  # 结果形状为 (n, width)
-
-    # 多层大核时域卷积
-    for i in range(num_layers):
-        # 调用 conv1d，mode 设为 'same' 保持信号长度
-        conv_signal = scope.child(conv1d, name=f"TDConv_{i}")(
-            Signal(x, t),
-            taps=taps,
-            rtap=None,   # 默认为内部自动计算
-            mode='same',
-            kernel_init=kernel_initializer)
-        x = activation(conv_signal.val)
-        # 如果经过卷积后变为 1D，则扩展维度
-        if x.ndim == 1:
-            x = x[:, None]
-
-    # 降维：将宽度从 width 投影回原始通道数 in_channels
-    W_proj = scope.param('W_proj_td', kernel_initializer, (width, in_channels))
-    x = jnp.dot(x, W_proj)  # 结果形状应为 (n, in_channels)
-
-    # 如果降维后形状与原始信号一致，则采用残差连接
-    if x.shape == signal.val.shape:
-        x = x + signal.val
-
-    return Signal(x, t)
-def fdbp1(scope,
-                  signal,
-                  steps=3,
-                  dtaps=261,
-                  ntaps=41,
-                  sps=2,
-                  d_init=delta,
-                  n_init=gauss,
-                  fno_num_layers=3,
-                  fno_taps=256):
+def fdbp1(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
+    use_fno=True):
     """
-    级联式 FDBP 模型：
-      1. 先执行多步 FDBP 补偿（利用局部时域卷积补偿色散和非线性效应）得到初步结果；
-      2. 将初步结果输入时域版 FNO 模块（fno_module_td）进行全局修正。
-    参数：
-      scope         : 模型作用域
-      signal        : 初始 Signal 对象
-      steps         : FDBP 迭代步数
-      dtaps         : DConv 阶段的卷积核长度（色散补偿）
-      ntaps         : NConv 阶段的卷积核长度（非线性补偿）
-      sps           : 采样率因子（如果需要）
-      d_init, n_init: 卷积核的初始化函数
-      fno_num_layers: FNO 模块层数
-      fno_taps      : FNO 模块中卷积核的长度
-    返回：
-      全局修正后的 Signal 对象
+    结合 FNO 层的 FDBP 迭代补偿结构：
+    - 如果 use_fno 为 True，在每一步迭代中先用 FNO 层处理信号，
+      然后再进行传统的 MIMO 卷积补偿相位计算。
     """
     x, t = signal
+    # 定义传统的时域卷积（如原先的 dconv）——可选
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
     for i in range(steps):
-        # DConv 阶段：线性色散补偿
+        # 如果采用 FNO 结构，则首先进行频域全局补偿
+        if use_fno:
+            x_signal = Signal(x, t)
+            x_signal = scope.child(fno_layer, name='FNO_%d' % i)(x_signal)
+            x = x_signal.val  # 更新 x
+        
+        # 原有的局部时域补偿操作：可用于补充 FNO 处理后残余的局部非线性
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        # NConv 阶段：非线性补偿（利用 mimoconv1d）
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init)
-        # 利用相位校正更新信号，同时对齐时间轴
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        
+        # 用计算得到的相位补偿信号更新 x
+        # 注意这里的切片需要根据实际时间对齐进行调整
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    signal_dbp = Signal(x, t)
     
-    # 级联全局修正：调用时域版 FNO 模块对 FDBP 输出进行全局修正
-    signal_corrected = scope.child(fno_module_td, name='FNO_global_td')(
-        signal_dbp,
-        num_layers=fno_num_layers,
-        taps=fno_taps,
-        activation=jax.nn.relu)
-    
-    return signal_corrected     
+    return Signal(x, t)
+
 def identity(scope, inputs):
     return inputs
 
