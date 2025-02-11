@@ -792,7 +792,6 @@ def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta
     return Signal(x_new, t)
 
 
-
 def fdbp1(
     scope: Scope,
     signal,
@@ -808,7 +807,7 @@ def fdbp1(
     
     1. 先执行 DBP 的局部补偿（dconv 和 mimoconv1d），得到中间结果 x_dbp；
     2. 如果启用 FNO，则用 FNO 模块计算残差补偿 residual；
-    3. 最后将 DBP 输出与残差相加得到最终信号。
+    3. 最后将 DBP 输出与残差相减得到最终信号，从而期望获得正的 Q 值。
     """
     x, t = signal
     # 定义传统的局部时域卷积模块（dconv）
@@ -825,12 +824,13 @@ def fdbp1(
         if use_fno:
             # 计算残差：FNO 模块预测 DBP 输出的残差误差
             residual_signal = scope.child(fno_layer, name='FNO_%d' % i)(Signal(x_dbp, t))
-            # 将 DBP 输出与残差相加（残差补偿）
-            x = x_dbp + residual_signal.val
+            # 将 DBP 输出与残差相减（残差补偿）
+            x = x_dbp - residual_signal.val
         else:
             x = x_dbp
 
     return Signal(x, t)
+
 
 
 def identity(scope, inputs):
