@@ -835,7 +835,7 @@ def fdbp1(
             res_imag = jnp.clip(jnp.imag(res_complex), -clip_val, clip_val)
             res = res_real + 1j * res_imag
             # 使用缩放因子调整残差补偿幅度，并采用减法（根据补偿方向）
-            x = x_dbp - alpha * res
+            x = x_dbp + alpha * res
         else:
             x = x_dbp
 
