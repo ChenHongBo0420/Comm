@@ -674,6 +674,44 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+def fdbp_branch(scope: Scope,
+                signal,
+                steps,      # 补偿步数，例如 3、5、7 等
+                dtaps=261,
+                ntaps=41,
+                sps=2,
+                d_init=delta,
+                n_init=gauss):
+    """
+    fdbp_branch: 单分支 DBP 补偿函数，用于对输入信号进行 DBP 补偿。
+    
+    参数:
+      scope   -- 当前模块作用域（用于子模块的注册）
+      signal  -- 输入信号，类型为 Signal，包含信号数据 x 和时间信息 t
+      steps   -- 补偿的迭代步数（例如 3、5、7 步）
+      dtaps   -- 用于 conv1d 的 tap 数（色散补偿核长度）
+      ntaps   -- 用于 mimoconv1d 的 tap 数（非线性补偿核长度）
+      sps     -- 每秒采样数
+      d_init  -- conv1d 卷积核的初始化函数（例如 delta）
+      n_init  -- mimoconv1d 卷积核的初始化函数（例如 gauss）
+    
+    返回:
+      Signal 对象，包含补偿后的信号和更新后的时间信息。
+    """
+    x, t = signal
+    # 使用 vmap 包裹 conv1d，构造局部时域卷积函数
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    for i in range(steps):
+        # 进行局部补偿操作，scope.child 用于注册子模块
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 计算非线性补偿参数 c，注意这里传入的是信号幅度平方
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        # 应用补偿：利用相位信息 c 对信号 x 进行校正，并根据时间信息进行切片
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
+
 def fdbp(
     scope: Scope,
     signal,
