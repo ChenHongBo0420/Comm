@@ -807,11 +807,16 @@ def fdbp1(
     
     1. 先执行 DBP 的局部补偿（dconv 和 mimoconv1d），得到中间结果 x_dbp；
     2. 如果启用 FNO，则用 FNO 模块计算残差补偿 residual；
-    3. 最后将 DBP 输出与残差相减得到最终信号，从而期望获得正的 Q 值。
+    3. 将 DBP 输出与缩放和裁剪后的残差相减得到最终信号，
+       从而期望使最终的 Q 值为正且数值合理。
     """
     x, t = signal
     # 定义传统的局部时域卷积模块（dconv）
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    # 定义残差缩放因子和裁剪阈值（需要根据实际情况调整）
+    alpha = 0.1         # 残差缩放因子
+    clip_val = 1.0      # 裁剪阈值，根据信号尺度设置
     
     for i in range(steps):
         # --- DBP 局部补偿部分 ---
@@ -822,14 +827,17 @@ def fdbp1(
         
         # --- FNO 残差补偿部分 ---
         if use_fno:
-            # 计算残差：FNO 模块预测 DBP 输出的残差误差
+            # 计算残差：FNO 模块预测 DBP 输出的残余误差
             residual_signal = scope.child(fno_layer, name='FNO_%d' % i)(Signal(x_dbp, t))
-            # 将 DBP 输出与残差相减（残差补偿）
-            x = x_dbp - residual_signal.val
+            # 对残差进行裁剪，防止过大或过小的数值
+            res = jnp.clip(residual_signal.val, -clip_val, clip_val)
+            # 使用缩放因子调整残差补偿幅度，并采用减法（根据残差校正方向）
+            x = x_dbp - alpha * res
         else:
             x = x_dbp
 
     return Signal(x, t)
+
 
 
 
