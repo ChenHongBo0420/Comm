@@ -673,64 +673,45 @@ def weighted_interaction(x1, x2):
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
-from flax import linen as nn
 
-class Conv1dModule(nn.Module):
-    taps: int
-    kernel_init: callable = delta
-
-    @nn.compact
-    def __call__(self, signal):
-        return conv1d(signal, taps=self.taps, kernel_init=self.kernel_init)
-
-class VmapConv1dModule(nn.Module):
-    taps: int
-    kernel_init: callable = delta
-
-    @nn.compact
-    def __call__(self, signal):
-        conv_mod = Conv1dModule(self.taps, self.kernel_init)
-        vmap_conv = nn.vmap(conv_mod, in_axes=0, out_axes=0)
-        return vmap_conv(signal)
-
-def fdbp(scope: Scope, signal,
-                    steps_global=1,
-                    steps_local=2,
-                    dtaps_global=321,
-                    dtaps_local=261,
-                    ntaps=41,
-                    sps=2,
-                    down_factor=2,
-                    d_init=delta,
-                    n_init=gauss):
-    # 1. 全局尺度补偿分支（下采样后补偿再上采样）
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss):
+    """
+    多尺度 DBP：在每个迭代步骤中保存补偿后的信号，
+    最后将各步骤输出融合，达到多尺度补偿的目的。
+    """
     x, t = signal
-    # 下采样
-    def downsample(x, factor):
-        return x[::factor]
-    def upsample(x, factor):
-        # 简单重复扩展（实际可采用插值方法）
-        return jnp.repeat(x, factor, axis=0)
+    # 使用原有方式构造局部时域卷积函数
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-    x_down = downsample(x, down_factor)
-    t_down = SigTime(t.start, t.stop, t.sps // down_factor)
-    low_signal = Signal(x_down, t_down)
+    # 用于保存每一步的输出
+    outputs = []
     
-    # 全局补偿（使用较大的 dtaps）
-    x_global = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps_global, dtaps_global, ntaps, t_down.sps, d_init, n_init), name="GlobalBranch"), low_signal)
-    # 上采样回原始采样率
-    x_global_up = upsample(x_global.val, down_factor)
-    global_branch = Signal(x_global_up, t)
+    for i in range(steps):
+        # 每一步的 DBP 补偿操作（与原始 fdbp 一致）
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init)
+        # 切片操作保持与原始 fdbp 一致
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # 保存当前步骤的输出
+        outputs.append(x)
     
-    # 2. 局部分支：直接在全分辨率上进行补偿，使用较小的 dtaps
-    local_branch = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps_local, dtaps_local, ntaps, sps, d_init, n_init), name="LocalBranch"), signal)
+    # 融合所有步骤的输出，简单采用平均（你也可尝试其他加权策略）
+    fused = sum(outputs) / len(outputs)
     
-    # 3. 融合两个分支，例如简单加权融合
-    alpha = 0.5
-    beta = 1.0 - alpha
-    fused_output = alpha * local_branch.val + beta * global_branch.val
-    
-    return Signal(fused_output, t)
+    # 返回融合后的信号，时间信息采用最后一次更新后的 t
+    return Signal(fused, t)
+
 
 
       
