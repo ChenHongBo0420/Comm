@@ -800,27 +800,27 @@ def fdbp1(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    use_fno=True):
+    n_init=gauss):
     """
-    DBP 先完成补偿，再用 FNO 对 DBP 输出进行后处理，
-    得到最终输出信号。
+    通过 FNO 模块生成调制因子来调节 DBP 补偿。
     """
     x, t = signal
-    # DBP 部分
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[ t.start - td.start: t.stop - td.stop + x.shape[0] ]
     
-    # FNO 后处理
-    if use_fno:
-        # 这里直接让 FNO 端到端学习 DBP 输出到最终输出的映射
-        x = scope.child(fno_layer, name='FNO_post')(Signal(x, t)).val
-        
+    # FNO 模块生成调制因子（假设输出为一个实数或复数调制信号）
+    modulation = scope.child(fno_layer, name='FNO_mod')(Signal(x, t)).val
+    # 这里可以对 modulation 做一定归一化处理
+    modulation = modulation / jnp.abs(modulation).max()
+    
+    for i in range(steps):
+        x_dbp, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x_dbp)**2, td), taps=ntaps, kernel_init=n_init)
+        # 这里将 modulation 用作 DBP 补偿的调制因子
+        x = jnp.exp(1j * c * modulation) * x_dbp[t.start - td.start: t.stop - td.stop + x_dbp.shape[0]]
+    
     return Signal(x, t)
+
 
 
 
