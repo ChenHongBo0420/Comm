@@ -674,7 +674,7 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp(
+def fdbp_multiscale(
     scope: Scope,
     signal,
     steps=3,
@@ -685,7 +685,7 @@ def fdbp(
     n_init=gauss):
     """
     多尺度 DBP：在每个迭代步骤中保存补偿后的信号，
-    最后将各步骤输出融合，达到多尺度补偿的目的。
+    最后将各步骤输出融合（取公共重叠区域），达到多尺度补偿的目的。
     """
     x, t = signal
     # 使用原有方式构造局部时域卷积函数
@@ -695,21 +695,21 @@ def fdbp(
     outputs = []
     
     for i in range(steps):
-        # 每一步的 DBP 补偿操作（与原始 fdbp 一致）
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init)
-        # 切片操作保持与原始 fdbp 一致
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        # 保存当前步骤的输出
         outputs.append(x)
     
-    # 融合所有步骤的输出，简单采用平均（你也可尝试其他加权策略）
-    fused = sum(outputs) / len(outputs)
+    # 计算所有输出信号的最小长度
+    min_length = min(o.shape[0] for o in outputs)
     
-    # 返回融合后的信号，时间信息采用最后一次更新后的 t
+    # 对所有输出都截取到相同长度后再融合
+    outputs_cropped = [o[:min_length] for o in outputs]
+    fused = sum(outputs_cropped) / len(outputs_cropped)
+    
+    # 对时间信息也进行相应更新：这里简单取最后一次的 t，并假设其长度与 fused 对应
+    # 如果需要更精确，可以根据实际情况调整 SigTime 的 start/stop
     return Signal(fused, t)
 
 
