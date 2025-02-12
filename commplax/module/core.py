@@ -674,7 +674,7 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp_multiscale(
+def fdbp(
     scope: Scope,
     signal,
     steps=3,
