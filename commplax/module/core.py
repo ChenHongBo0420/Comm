@@ -801,45 +801,30 @@ def fdbp1(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    use_fno=True):
+    alpha_dbp=0.6,    # DBP 分支权重
+    alpha_fno=0.4):   # FNO 分支权重
     """
-    DBP + FNO 残差补偿的迭代结构：
-    
-    1. 先执行 DBP 的局部补偿（dconv 和 mimoconv1d），得到中间结果 x_dbp；
-    2. 如果启用 FNO，则用 FNO 模块计算残差补偿 residual；
-    3. 将 DBP 输出与缩放和裁剪后的残差相减得到最终信号，
-       使得最终的 Q 值趋向正值。
+    并行融合模式：分别使用 DBP 和 FNO 补偿，然后融合输出。
     """
     x, t = signal
-    # 定义传统的局部时域卷积模块（dconv）
+
+    # DBP 分支
+    x_dbp = x
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 定义残差缩放因子和裁剪阈值（根据实际情况调整）
-    alpha = 0.1         # 残差缩放因子
-    clip_val = 1.0      # 裁剪阈值，根据信号尺度设置
-    
     for i in range(steps):
-        # --- DBP 局部补偿部分 ---
-        x_dbp, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        x_dbp, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x_dbp, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
             Signal(jnp.abs(x_dbp)**2, td), taps=ntaps, kernel_init=n_init)
         x_dbp = jnp.exp(1j * c) * x_dbp[t.start - td.start: t.stop - td.stop + x_dbp.shape[0]]
-        
-        # --- FNO 残差补偿部分 ---
-        if use_fno:
-            # 计算残差：FNO 模块预测 DBP 输出的残余误差
-            residual_signal = scope.child(fno_layer, name='FNO_%d' % i)(Signal(x_dbp, t))
-            # 对残差的实部和虚部分别进行裁剪
-            res_complex = residual_signal.val
-            res_real = jnp.clip(jnp.real(res_complex), -clip_val, clip_val)
-            res_imag = jnp.clip(jnp.imag(res_complex), -clip_val, clip_val)
-            res = res_real + 1j * res_imag
-            # 使用缩放因子调整残差补偿幅度，并采用减法（根据补偿方向）
-            x = x_dbp + alpha * res
-        else:
-            x = x_dbp
 
-    return Signal(x, t)
+    # FNO 分支：对原始信号或 DBP 输出进行全局频域处理
+    x_fno = scope.child(fno_layer, name='FNO_parallel')(Signal(x, t)).val
+
+    # 融合两者：例如按固定权重融合
+    x_final = alpha_dbp * x_dbp + alpha_fno * x_fno
+
+    return Signal(x_final, t)
+
 
 
 
