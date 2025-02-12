@@ -801,29 +801,27 @@ def fdbp1(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    alpha_dbp=0.6,    # DBP 分支权重
-    alpha_fno=0.4):   # FNO 分支权重
+    use_fno=True):
     """
-    并行融合模式：分别使用 DBP 和 FNO 补偿，然后融合输出。
+    DBP 先完成补偿，再用 FNO 对 DBP 输出进行后处理，
+    得到最终输出信号。
     """
     x, t = signal
-
-    # DBP 分支
-    x_dbp = x
+    # DBP 部分
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        x_dbp, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x_dbp, t))
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x_dbp)**2, td), taps=ntaps, kernel_init=n_init)
-        x_dbp = jnp.exp(1j * c) * x_dbp[t.start - td.start: t.stop - td.stop + x_dbp.shape[0]]
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[ t.start - td.start: t.stop - td.stop + x.shape[0] ]
+    
+    # FNO 后处理
+    if use_fno:
+        # 这里直接让 FNO 端到端学习 DBP 输出到最终输出的映射
+        x = scope.child(fno_layer, name='FNO_post')(Signal(x, t)).val
+        
+    return Signal(x, t)
 
-    # FNO 分支：对原始信号或 DBP 输出进行全局频域处理
-    x_fno = scope.child(fno_layer, name='FNO_parallel')(Signal(x, t)).val
-
-    # 融合两者：例如按固定权重融合
-    x_final = alpha_dbp * x_dbp + alpha_fno * x_fno
-
-    return Signal(x_final, t)
 
 
 
