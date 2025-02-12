@@ -673,13 +673,33 @@ def weighted_interaction(x1, x2):
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
+from flax import linen as nn
+
+class Conv1dModule(nn.Module):
+    taps: int
+    kernel_init: callable = delta
+
+    @nn.compact
+    def __call__(self, signal):
+        return conv1d(signal, taps=self.taps, kernel_init=self.kernel_init)
+
+class VmapConv1dModule(nn.Module):
+    taps: int
+    kernel_init: callable = delta
+
+    @nn.compact
+    def __call__(self, signal):
+        conv_mod = Conv1dModule(self.taps, self.kernel_init)
+        vmap_conv = nn.vmap(conv_mod, in_axes=0, out_axes=0)
+        return vmap_conv(signal)
+
 
 def fdbp_branch(scope: Scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_init=gauss):
-    # 这是原有的 fdbp 补偿流程
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # 使用包装后的模块
+    dconv_module = VmapConv1dModule(taps=dtaps, kernel_init=d_init)
     for i in range(steps):
-        x, td = dconv(Signal(x, t))
+        x, td = scope.child(dconv_module, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
