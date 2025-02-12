@@ -655,60 +655,124 @@ def weighted_interaction(x1, x2):
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
-
-      
-# def fdbp1(
+# def fdbp(
 #     scope: Scope,
 #     signal,
 #     steps=3,
 #     dtaps=261,
 #     ntaps=41,
 #     sps=2,
-#     ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
 #     d_init=delta,
 #     n_init=gauss):
-    
 #     x, t = signal
 #     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-#     # input_dim = x.shape[1]
-#     # hidden_size = 2 
-#     # output_dim = x.shape[1]
-#     # x1 = x[:, 0]
-#     # x2 = x[:, 1]
-#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
-#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-#     # x = rnn_layer(x_updated)
 #     for i in range(steps):
 #         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         ixpm_samples = [
-#             jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-#         ]
-#         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
 #                                                             taps=ntaps,
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
+
+def fdbp_branch(scope: Scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_init=gauss):
+    # 这是原有的 fdbp 补偿流程
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
+
+def fdbp(scope: Scope, signal,
+                     steps=3,
+                     dtaps=261,
+                     ntaps=41,
+                     sps=2,
+                     down_factor=2,
+                     d_init=delta,
+                     n_init=gauss):
+    """
+    多尺度 DBP 的实现：
+    1. 高分辨率分支（原始信号）：利用 fdbp_branch 对原始信号进行 DBP 补偿，捕捉局部细节；
+    2. 低分辨率分支：先对信号下采样，再利用 fdbp_branch 补偿全局特征，然后上采样恢复原始分辨率；
+    3. 最后将两条分支的结果进行融合，得到最终输出信号。
+    """
+    # 高分辨率分支：直接使用 fdbp_branch
+    high_branch = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps, dtaps, ntaps, sps, d_init, n_init),
+                                           name='HighBranch'),
+                              signal, steps, dtaps, ntaps, sps, d_init, n_init)
+    
+    # 低分辨率分支：下采样、补偿、上采样
+    x, t = signal
+    # 下采样：例如取平均或者简单取每 down_factor 个采样点（具体方法根据应用设计）
+    def downsample(x, factor):
+        # 这里简单采用取子采样点方式（注意可能需要抗混叠滤波）
+        return x[::factor]
+    def upsample(x, factor):
+        # 简单的线性插值或重复扩展（具体方法需要根据需求设计）
+        return jnp.repeat(x, factor, axis=0)
+    
+    x_low = downsample(x, down_factor)
+    # 更新时间信息，假设 SigTime 结构支持简单修改：
+    t_low = SigTime(t.start, t.stop, t.sps // down_factor)
+    low_signal = Signal(x_low, t_low)
+    
+    # 对低分辨率信号进行 DBP 补偿
+    low_branch_comp = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps, dtaps, ntaps, sps // down_factor, d_init, n_init),
+                                               name='LowBranch'),
+                                  low_signal, steps, dtaps, ntaps, sps // down_factor, d_init, n_init)
+    
+    # 上采样补偿后的低分辨率结果回到原始采样率
+    x_low_up = upsample(low_branch_comp.val, down_factor)
+    # 时间信息恢复为原始 t
+    low_branch = Signal(x_low_up, t)
+    
+    # 融合两个分支：例如简单加权融合，这里的 alpha 可调节
+    alpha = 0.5  # 高分辨率权重
+    beta = 1.0 - alpha  # 低分辨率权重
+    # 保证两分支形状一致：
+    # 假设 high_branch.val 和 low_branch.val 的第一维均为时间维度，且形状一致
+    fused = alpha * high_branch.val + beta * low_branch.val
+    
+    return Signal(fused, t)
+
+      
+def fdbp1(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
+    d_init=delta,
+    n_init=gauss):
+    
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
 
       
 # def fdbp1(
@@ -767,48 +831,6 @@ def fdbp(
 #         t = t_new  # 更新时间戳
 
 #     return Signal(x, t)
-
-def fdbp1(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    ixpm_window=7,  # 新增参数，设置边缘裁剪窗口大小
-    d_init=delta,
-    n_init=gauss):
-    # 从输入信号中取出数据和时间信息
-    x, t = signal
-    
-    # 以下部分保持原有的加权交互和 RNN 处理逻辑
-    input_dim = x.shape[1]
-    hidden_size = 2 
-    output_dim = x.shape[1]
-    x1 = x[:, 0]
-    x2 = x[:, 1]
-    x1_updated, x2_updated = weighted_interaction(x1, x2)
-    x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x_rnn = rnn_layer(x_updated)
-    
-    # 引入边缘裁剪操作，保证输出长度与 DBP 模块一致
-    # 这里假设 DBP 由于卷积操作通常会“失掉”两端的部分采样点
-    crop = ixpm_window // 2
-    # 如果输出长度足够，则裁剪两端 crop 个采样点
-    if x_rnn.shape[0] > 2 * crop:
-        x_sliced = x_rnn[crop:-crop]
-    else:
-        x_sliced = x_rnn  # 如果输出长度太短，不裁剪
-    
-    # 同时更新时间信息，假设 t 有属性 start、stop 和 sps（samples per second）
-    # 更新后的时间范围应剔除相应裁剪掉的采样点，假设每个采样点的时间间隔为 Δt = 1/sps
-    dt = 1.0 / t.sps
-    new_start = t.start + crop
-    new_stop = t.stop - crop
-    t_new = SigTime(new_start, new_stop, t.sps)
-    
-    return Signal(x_sliced, t_new)
 
 
 def identity(scope, inputs):
