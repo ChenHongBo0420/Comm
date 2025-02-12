@@ -675,40 +675,40 @@ def fdbp(
     return Signal(x, t)
 
       
-# def fdbp1(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
-#     d_init=delta,
-#     n_init=gauss):
+def fdbp1(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
+    d_init=delta,
+    n_init=gauss):
     
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-#     # input_dim = x.shape[1]
-#     # hidden_size = 2 
-#     # output_dim = x.shape[1]
-#     # x1 = x[:, 0]
-#     # x2 = x[:, 1]
-#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
-#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-#     # x = rnn_layer(x_updated)
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         ixpm_samples = [
-#             jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-#         ]
-#         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
 
 # def fdbp1(
 #     scope: Scope,
@@ -766,64 +766,6 @@ def fdbp(
 #         t = t_new  # 更新时间戳
 
 #     return Signal(x, t)
-
-def fno_layer(scope: Scope, signal, fno_taps=128, mode='same', weight_init=delta):
-    """
-    一个简单的 FNO 层实现示例：
-    1. 对输入信号做 FFT 变换（支持复数输入）
-    2. 对低频部分施加可学习的频域权重
-    3. 进行 IFFT 得到时域结果
-    """
-    x, t = signal  # x 是时域信号（复数），t 为 SigTime 对象
-    # 使用支持复数的 FFT
-    X = jnp.fft.fft(x)
-    
-    # 定义频域权重（可学习参数），假设对前 fno_taps 个频率分量进行加权
-    weight = scope.param('fno_kernel', weight_init, (fno_taps,), np.complex64)
-    # 将 weight reshape 成 (fno_taps, 1) 以便广播
-    weight = weight.reshape((fno_taps, 1))
-    
-    # 仅修改低频部分，其他部分保持不变
-    X_new = X.at[:fno_taps].set(X[:fno_taps] * weight)
-    
-    # 进行逆 FFT 得到处理后的时域信号
-    x_new = jnp.fft.ifft(X_new)
-    
-    return Signal(x_new, t)
-
-
-def fdbp1(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    """
-    通过 FNO 模块生成调制因子来调节 DBP 补偿。
-    """
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # FNO 模块生成调制因子（假设输出为一个实数或复数调制信号）
-    modulation = scope.child(fno_layer, name='FNO_mod')(Signal(x, t)).val
-    # 这里可以对 modulation 做一定归一化处理
-    modulation = modulation / jnp.abs(modulation).max()
-    
-    for i in range(steps):
-        x_dbp, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x_dbp)**2, td), taps=ntaps, kernel_init=n_init)
-        # 这里将 modulation 用作 DBP 补偿的调制因子
-        x = jnp.exp(1j * c * modulation) * x_dbp[t.start - td.start: t.stop - td.stop + x_dbp.shape[0]]
-    
-    return Signal(x, t)
-
-
-
-
 
 
 def identity(scope, inputs):
