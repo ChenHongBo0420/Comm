@@ -674,52 +674,48 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp(
+def fdbp_multiscale_branches(
     scope: Scope,
     signal,
-    steps=3,
+    steps=3,           # 保持接口不变，默认 steps=3
     dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
     n_init=gauss):
     """
-    多尺度 DBP：
-    - 在每个迭代步骤中保存补偿后的信号及其时间信息，
-    - 融合时取所有步骤输出的公共（最短）时域长度，
-    - 同时根据各步时间信息构造新的 SigTime 对象。
+    多尺度 DBP：内部定义多个尺度（步数）的分支，例如 [steps, steps+2, steps+4]，
+    每个分支分别进行 DBP 补偿，然后对各分支输出取公共重叠区域进行融合。
     """
-    x, t = signal
-    # 使用原有方式构造局部时域卷积函数
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # 在函数内部定义多尺度步数列表，若 steps=3，则列表为 [3, 5, 7]
+    steps_list = [steps, steps + 2, steps + 4]
     
-    outputs = []   # 保存各步补偿后的信号
-    time_list = [] # 保存各步对应的 SigTime（即 td 对象）
+    branch_outputs = []  # 保存各分支补偿后的信号（时域数据）
+    branch_times = []    # 保存各分支对应的 SigTime 对象
 
-    for i in range(steps):
-        # 调用局部时域卷积模块，获得当前步骤的信号 x 和更新后的时间信息 td
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        time_list.append(td)
-        # 调用 mimoconv1d 获得相位校正信息 c，同时 t 被更新
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 原始补偿操作：利用相位信息对信号进行校正，并进行切片操作
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        outputs.append(x)
-    
-    # 统一各步输出的时域长度：计算所有输出中最小的长度
-    min_length = min(o.shape[0] for o in outputs)
-    outputs_cropped = [o[:min_length] for o in outputs]
-    # 融合：简单求平均
-    fused = sum(outputs_cropped) / len(outputs_cropped)
-    
-    # 重新构造新的 SigTime：
-    # 这里取所有步骤中 td.start 的最大值与 td.stop 的最小值作为有效区域
-    new_start = max(td.start for td in time_list)
-    new_stop  = min(td.stop  for td in time_list)
-    t_new = SigTime(new_start, new_stop, t.sps)
-    
-    return Signal(fused, t_new)
+    # 对每个步数分别调用补偿流程
+    for s in steps_list:
+        # 调用 fdbp_branch 进行补偿，注意这里通过 scope.child 来构造子模块
+        branch_signal = fdbp_branch(
+            scope.child(lambda sc, sig: fdbp_branch(sc, sig, s, dtaps, ntaps, sps, d_init, n_init),
+                        name=f"Branch_{s}"),
+            signal, s, dtaps, ntaps, sps, d_init, n_init)
+        branch_outputs.append(branch_signal.val)
+        branch_times.append(branch_signal.t)
+
+    # 统一各分支输出的时域长度：取所有分支输出中最小的长度
+    min_length = min(output.shape[0] for output in branch_outputs)
+    outputs_cropped = [output[:min_length] for output in branch_outputs]
+    # 融合各分支输出，这里采用简单平均（也可设计加权融合）
+    fused_output = sum(outputs_cropped) / len(outputs_cropped)
+
+    # 统一各分支的时间信息：取所有分支中 start 的最大值，stop 的最小值
+    new_start = max(ti.start for ti in branch_times)
+    new_stop  = min(ti.stop  for ti in branch_times)
+    t_new = SigTime(new_start, new_stop, sps)
+
+    return Signal(fused_output, t_new)
+
 
 
 
