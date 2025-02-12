@@ -775,13 +775,13 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
+    ixpm_window=7,  # 新增参数，设置边缘裁剪窗口大小
     d_init=delta,
     n_init=gauss):
-    
+    # 从输入信号中取出数据和时间信息
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
+    # 以下部分保持原有的加权交互和 RNN 处理逻辑
     input_dim = x.shape[1]
     hidden_size = 2 
     output_dim = x.shape[1]
@@ -790,8 +790,26 @@ def fdbp1(
     x1_updated, x2_updated = weighted_interaction(x1, x2)
     x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
     rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    x = rnn_layer(x_updated)
-    return Signal(x, t)
+    x_rnn = rnn_layer(x_updated)
+    
+    # 引入边缘裁剪操作，保证输出长度与 DBP 模块一致
+    # 这里假设 DBP 由于卷积操作通常会“失掉”两端的部分采样点
+    crop = ixpm_window // 2
+    # 如果输出长度足够，则裁剪两端 crop 个采样点
+    if x_rnn.shape[0] > 2 * crop:
+        x_sliced = x_rnn[crop:-crop]
+    else:
+        x_sliced = x_rnn  # 如果输出长度太短，不裁剪
+    
+    # 同时更新时间信息，假设 t 有属性 start、stop 和 sps（samples per second）
+    # 更新后的时间范围应剔除相应裁剪掉的采样点，假设每个采样点的时间间隔为 Δt = 1/sps
+    dt = 1.0 / t.sps
+    new_start = t.start + crop
+    new_stop = t.stop - crop
+    t_new = SigTime(new_start, new_stop, t.sps)
+    
+    return Signal(x_sliced, t_new)
+
 
 def identity(scope, inputs):
     return inputs
