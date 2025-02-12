@@ -693,70 +693,45 @@ class VmapConv1dModule(nn.Module):
         vmap_conv = nn.vmap(conv_mod, in_axes=0, out_axes=0)
         return vmap_conv(signal)
 
-
-def fdbp_branch(scope: Scope, signal, steps=3, dtaps=261, ntaps=41, sps=2, d_init=delta, n_init=gauss):
-    x, t = signal
-    # 使用包装后的模块
-    dconv_module = VmapConv1dModule(taps=dtaps, kernel_init=d_init)
-    for i in range(steps):
-        x, td = scope.child(dconv_module, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
-
 def fdbp(scope: Scope, signal,
-                     steps=3,
-                     dtaps=261,
-                     ntaps=41,
-                     sps=2,
-                     down_factor=2,
-                     d_init=delta,
-                     n_init=gauss):
-    """
-    多尺度 DBP 的实现：
-    1. 高分辨率分支（原始信号）：利用 fdbp_branch 对原始信号进行 DBP 补偿，捕捉局部细节；
-    2. 低分辨率分支：先对信号下采样，再利用 fdbp_branch 补偿全局特征，然后上采样恢复原始分辨率；
-    3. 最后将两条分支的结果进行融合，得到最终输出信号。
-    """
-    # 高分辨率分支：直接使用 fdbp_branch
-    high_branch = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps, dtaps, ntaps, sps, d_init, n_init),
-                                           name='HighBranch'),
-                              signal, steps, dtaps, ntaps, sps, d_init, n_init)
-    
-    # 低分辨率分支：下采样、补偿、上采样
+                    steps_global=1,
+                    steps_local=2,
+                    dtaps_global=321,
+                    dtaps_local=261,
+                    ntaps=41,
+                    sps=2,
+                    down_factor=2,
+                    d_init=delta,
+                    n_init=gauss):
+    # 1. 全局尺度补偿分支（下采样后补偿再上采样）
     x, t = signal
-    # 下采样：例如取平均或者简单取每 down_factor 个采样点（具体方法根据应用设计）
+    # 下采样
     def downsample(x, factor):
-        # 这里简单采用取子采样点方式（注意可能需要抗混叠滤波）
         return x[::factor]
     def upsample(x, factor):
-        # 简单的线性插值或重复扩展（具体方法需要根据需求设计）
+        # 简单重复扩展（实际可采用插值方法）
         return jnp.repeat(x, factor, axis=0)
     
-    x_low = downsample(x, down_factor)
-    # 更新时间信息，假设 SigTime 结构支持简单修改：
-    t_low = SigTime(t.start, t.stop, t.sps // down_factor)
-    low_signal = Signal(x_low, t_low)
+    x_down = downsample(x, down_factor)
+    t_down = SigTime(t.start, t.stop, t.sps // down_factor)
+    low_signal = Signal(x_down, t_down)
     
-    # 对低分辨率信号进行 DBP 补偿
-    low_branch_comp = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps, dtaps, ntaps, sps // down_factor, d_init, n_init),
-                                               name='LowBranch'),
-                                  low_signal, steps, dtaps, ntaps, sps // down_factor, d_init, n_init)
+    # 全局补偿（使用较大的 dtaps）
+    x_global = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps_global, dtaps_global, ntaps, t_down.sps, d_init, n_init), name="GlobalBranch"), low_signal)
+    # 上采样回原始采样率
+    x_global_up = upsample(x_global.val, down_factor)
+    global_branch = Signal(x_global_up, t)
     
-    # 上采样补偿后的低分辨率结果回到原始采样率
-    x_low_up = upsample(low_branch_comp.val, down_factor)
-    # 时间信息恢复为原始 t
-    low_branch = Signal(x_low_up, t)
+    # 2. 局部分支：直接在全分辨率上进行补偿，使用较小的 dtaps
+    local_branch = fdbp_branch(scope.child(lambda s, sig: fdbp_branch(s, sig, steps_local, dtaps_local, ntaps, sps, d_init, n_init), name="LocalBranch"), signal)
     
-    # 融合两个分支：例如简单加权融合，这里的 alpha 可调节
-    alpha = 0.5  # 高分辨率权重
-    beta = 1.0 - alpha  # 低分辨率权重
-    # 保证两分支形状一致：
-    # 假设 high_branch.val 和 low_branch.val 的第一维均为时间维度，且形状一致
-    fused = alpha * high_branch.val + beta * low_branch.val
+    # 3. 融合两个分支，例如简单加权融合
+    alpha = 0.5
+    beta = 1.0 - alpha
+    fused_output = alpha * local_branch.val + beta * global_branch.val
     
-    return Signal(fused, t)
+    return Signal(fused_output, t)
+
 
       
 def fdbp1(
