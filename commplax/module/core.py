@@ -684,33 +684,42 @@ def fdbp(
     d_init=delta,
     n_init=gauss):
     """
-    多尺度 DBP：在每个迭代步骤中保存补偿后的信号，
-    最后将各步骤输出融合（取公共重叠区域），达到多尺度补偿的目的。
+    多尺度 DBP：
+    - 在每个迭代步骤中保存补偿后的信号及其时间信息，
+    - 融合时取所有步骤输出的公共（最短）时域长度，
+    - 同时根据各步时间信息构造新的 SigTime 对象。
     """
     x, t = signal
     # 使用原有方式构造局部时域卷积函数
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-    # 用于保存每一步的输出
-    outputs = []
-    
+    outputs = []   # 保存各步补偿后的信号
+    time_list = [] # 保存各步对应的 SigTime（即 td 对象）
+
     for i in range(steps):
+        # 调用局部时域卷积模块，获得当前步骤的信号 x 和更新后的时间信息 td
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        time_list.append(td)
+        # 调用 mimoconv1d 获得相位校正信息 c，同时 t 被更新
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        # 原始补偿操作：利用相位信息对信号进行校正，并进行切片操作
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         outputs.append(x)
     
-    # 计算所有输出信号的最小长度
+    # 统一各步输出的时域长度：计算所有输出中最小的长度
     min_length = min(o.shape[0] for o in outputs)
-    
-    # 对所有输出都截取到相同长度后再融合
     outputs_cropped = [o[:min_length] for o in outputs]
+    # 融合：简单求平均
     fused = sum(outputs_cropped) / len(outputs_cropped)
     
-    # 对时间信息也进行相应更新：这里简单取最后一次的 t，并假设其长度与 fused 对应
-    # 如果需要更精确，可以根据实际情况调整 SigTime 的 start/stop
-    return Signal(fused, t)
+    # 重新构造新的 SigTime：
+    # 这里取所有步骤中 td.start 的最大值与 td.stop 的最小值作为有效区域
+    new_start = max(td.start for td in time_list)
+    new_stop  = min(td.stop  for td in time_list)
+    t_new = SigTime(new_start, new_stop, t.sps)
+    
+    return Signal(fused, t_new)
 
 
 
