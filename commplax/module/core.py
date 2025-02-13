@@ -219,8 +219,6 @@ def conv1d(
                      kernel_init,
                      (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
-    norm = jnp.sum(jnp.abs(h))
-    x = x / (norm + 1e-8)
     return Signal(x, t)
       
 def conv1d1(
