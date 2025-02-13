@@ -674,86 +674,49 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp_branch(scope: Scope,
-                signal,
-                steps,      # 补偿步数，例如 3、5、7 等
-                dtaps=261,
-                ntaps=41,
-                sps=2,
-                d_init=delta,
-                n_init=gauss):
-    """
-    fdbp_branch: 单分支 DBP 补偿函数，用于对输入信号进行 DBP 补偿。
-    
-    参数:
-      scope   -- 当前模块作用域（用于子模块的注册）
-      signal  -- 输入信号，类型为 Signal，包含信号数据 x 和时间信息 t
-      steps   -- 补偿的迭代步数（例如 3、5、7 步）
-      dtaps   -- 用于 conv1d 的 tap 数（色散补偿核长度）
-      ntaps   -- 用于 mimoconv1d 的 tap 数（非线性补偿核长度）
-      sps     -- 每秒采样数
-      d_init  -- conv1d 卷积核的初始化函数（例如 delta）
-      n_init  -- mimoconv1d 卷积核的初始化函数（例如 gauss）
-    
-    返回:
-      Signal 对象，包含补偿后的信号和更新后的时间信息。
-    """
-    x, t = signal
-    # 使用 vmap 包裹 conv1d，构造局部时域卷积函数
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    for i in range(steps):
-        # 进行局部补偿操作，scope.child 用于注册子模块
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 计算非线性补偿参数 c，注意这里传入的是信号幅度平方
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用补偿：利用相位信息 c 对信号 x 进行校正，并根据时间信息进行切片
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
-
 def fdbp(
     scope: Scope,
     signal,
-    steps=3,           # 保持接口不变，默认 steps=3
+    steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss):
+    n_init=gauss,
+    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+):
     """
-    多尺度 DBP：内部定义多个尺度（步数）的分支，例如 [steps, steps+2, steps+4]，
-    每个分支分别进行 DBP 补偿，然后对各分支输出取公共重叠区域进行融合。
+    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+    以减少误差累积，提升整体补偿性能。
     """
-    # 在函数内部定义多尺度步数列表，若 steps=3，则列表为 [3, 5, 7]
-    steps_list = [steps, steps + 2, steps + 4]
+    x, t = signal
+    # 初始化自适应相位缩放因子 gamma
+    gamma = 1.0
+    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-    branch_outputs = []  # 保存各分支补偿后的信号（时域数据）
-    branch_times = []    # 保存各分支对应的 SigTime 对象
-
-    # 对每个步数分别调用补偿流程
-    for s in steps_list:
-        # 调用 fdbp_branch 进行补偿，注意这里通过 scope.child 来构造子模块
-        branch_signal = fdbp_branch(
-            scope.child(lambda sc, sig: fdbp_branch(sc, sig, s, dtaps, ntaps, sps, d_init, n_init),
-                        name=f"Branch_{s}"),
-            signal, s, dtaps, ntaps, sps, d_init, n_init)
-        branch_outputs.append(branch_signal.val)
-        branch_times.append(branch_signal.t)
-
-    # 统一各分支输出的时域长度：取所有分支输出中最小的长度
-    min_length = min(output.shape[0] for output in branch_outputs)
-    outputs_cropped = [output[:min_length] for output in branch_outputs]
-    # 融合各分支输出，这里采用简单平均（也可设计加权融合）
-    fused_output = sum(outputs_cropped) / len(outputs_cropped)
-
-    # 统一各分支的时间信息：取所有分支中 start 的最大值，stop 的最小值
-    new_start = max(ti.start for ti in branch_times)
-    new_stop  = min(ti.stop  for ti in branch_times)
-    t_new = SigTime(new_start, new_stop, sps)
-
-    return Signal(fused_output, t_new)
-
+    for i in range(steps):
+        # 执行局部色散补偿步骤
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 执行非线性补偿步骤：计算相位校正 c
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+        # 这里的 error 定义可以根据实际需求进行设计
+        power_before = jnp.mean(jnp.square(jnp.abs(x)))
+        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+        error = power_after - power_before
+        
+        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+        # 注意：根据实际误差定义，可能需要调整符号
+        gamma = gamma - mu * error
+        
+        # 将更新后的信号作为下一步输入
+        x = x_new
+    return Signal(x, t)
 
 
 
