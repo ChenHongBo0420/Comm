@@ -203,13 +203,6 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
     else:
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
-  
-def conv1d_kernel_init(key, shape, dtype=np.complex64):
-    # 例如采用小随机扰动加上 delta 核
-    delta_kernel = np.zeros(shape, dtype=dtype)
-    delta_kernel[shape[0] // 2] = 1.0  # 中心为1
-    noise = 0.01 * random.normal(key, shape, dtype=dtype)
-    return delta_kernel + noise
 
 def conv1d(
     scope: Scope,
@@ -223,10 +216,11 @@ def conv1d(
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel',
-                     conv1d_kernel_init,
+                     kernel_init,
                      (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
-
+    norm = jnp.sum(jnp.abs(h))
+    x = x / (norm + 1e-8)
     return Signal(x, t)
       
 def conv1d1(
