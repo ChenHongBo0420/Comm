@@ -349,27 +349,24 @@ def newton(step_size, eps=1e-8):
           x_new = x_real_new + 1j * x_imag_new
   
   Args:
-    step_size: 标量或步长调度函数。注意这里我们确保传入调度函数的迭代步数为整数。
+    step_size: 标量或步长调度函数。确保步长调度函数能够接受 JAX 的抽象值。
     eps: 防止除零的小常数。
 
   Returns:
     一个 (init_fn, update_fn, get_params) 的 Optimizer 三元组。
   """
-  # 确保步长调度函数返回标量
+  # 保证步长调度函数通过 make_schedule 构造出来
   step_size = make_schedule(step_size)
   
   def init(x0):
     return x0
   
   def update(i, g, x):
-    # 将迭代步数转换为整数，确保传入调度函数的参数类型正确
-    i_int = int(i)
-    current_step = step_size(i_int)
+    # 直接使用 i，不做 int() 转换
+    current_step = step_size(i)
     if _iscomplex(g):
-      # 分别取复数梯度的实部和虚部
       gr = g.real
       gi = g.imag
-      # 更新实部和虚部（注意虚部更新时取正，相当于对梯度取负）
       x_real_new = x.real - current_step * gr / (jnp.square(gr) + eps)
       x_imag_new = x.imag + current_step * gi / (jnp.square(gi) + eps)
       return x_real_new + 1j * x_imag_new
@@ -380,6 +377,7 @@ def newton(step_size, eps=1e-8):
     return x
   
   return Optimizer(init, update, get_params)
+
 
 
 ### learning rate schedules
