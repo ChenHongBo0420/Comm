@@ -334,49 +334,43 @@ def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8, rectify=True, sma_threshold
   return init, update, get_params
 
 @optimizer
-def newton(step_size, eps=1e-8):
-  """
-  一个简单的牛顿式二阶优化器，使用对角 Hessian 近似更新参数，
-  而且显式考虑了复数参数的情况。
-  
-  对于每个参数叶子，更新公式为：
-      如果参数为实数：
-          x_new = x - step_size(i) * g / (g^2 + eps)
-      如果参数为复数：
-          分别更新实部和虚部，其中虚部更新时取反：
-          x_real_new = x.real - step_size(i) * g.real / (g.real^2 + eps)
-          x_imag_new = x.imag + step_size(i) * g.imag / (g.imag^2 + eps)
-          x_new = x_real_new + 1j * x_imag_new
+def adamw(step_size, weight_decay=0.01, b1=0.9, b2=0.999, eps=1e-8):
+  """Construct optimizer triple for AdamW.
   
   Args:
-    step_size: 标量或步长调度函数。确保步长调度函数能够接受 JAX 的抽象值。
-    eps: 防止除零的小常数。
-
+    step_size: positive scalar, or a callable representing a step size schedule
+      that maps the iteration index to a positive scalar.
+    weight_decay: positive scalar for weight decay (decoupled L2 regularization).
+    b1: exponential decay rate for the first moment estimates (default 0.9).
+    b2: exponential decay rate for the second moment estimates (default 0.999).
+    eps: small constant for numerical stability (default 1e-8).
+    
   Returns:
-    一个 (init_fn, update_fn, get_params) 的 Optimizer 三元组。
+    An (init_fn, update_fn, get_params) triple.
   """
-  # 保证步长调度函数通过 make_schedule 构造出来
   step_size = make_schedule(step_size)
   
   def init(x0):
-    return x0
+    m0 = jnp.zeros_like(x0)
+    v0 = jnp.zeros_like(x0)
+    return x0, m0, v0
   
-  def update(i, g, x):
-    # 直接使用 i，不做 int() 转换
-    current_step = step_size(i)
-    if _iscomplex(g):
-      gr = g.real
-      gi = g.imag
-      x_real_new = x.real - current_step * gr / (jnp.square(gr) + eps)
-      x_imag_new = x.imag + current_step * gi / (jnp.square(gi) + eps)
-      return x_real_new + 1j * x_imag_new
-    else:
-      return x - current_step * g / (jnp.square(g) + eps)
+  def update(i, g, state):
+    x, m, v = state
+    m = (1 - b1) * g + b1 * m  # first moment estimate
+    v = (1 - b2) * jnp.square(g) + b2 * v  # second moment estimate
+    mhat = m / (1 - b1 ** (i + 1))  # bias correction for first moment
+    vhat = v / (1 - b2 ** (i + 1))  # bias correction for second moment
+    # AdamW更新：先做常规Adam更新，再加上 decoupled weight decay
+    update_term = mhat / (jnp.sqrt(vhat) + eps)
+    x = x - step_size(i) * (update_term + weight_decay * x)
+    return x, m, v
   
-  def get_params(x):
+  def get_params(state):
+    x, _, _ = state
     return x
   
-  return Optimizer(init, update, get_params)
+  return init, update, get_params
 
 
 
