@@ -734,7 +734,7 @@ def dynamic_schedule(step, total_steps, init_val=1.0, final_val=0.2):
     return init_val - (init_val - final_val) * (step / (total_steps - 1))
 
 
-def fdbp_dynamic(
+def fdbp(
     scope: Scope,
     signal,
     steps=3,
