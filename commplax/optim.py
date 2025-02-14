@@ -336,51 +336,51 @@ def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8, rectify=True, sma_threshold
 @optimizer
 def newton(step_size, eps=1e-8):
   """
-  一个简单的牛顿式二阶优化器，使用对角 Hessian 近似更新参数。
+  一个简单的牛顿式二阶优化器，使用对角 Hessian 近似更新参数，
+  而且显式考虑了复数参数的情况。
   
   对于每个参数叶子，更新公式为：
       如果参数为实数：
           x_new = x - step_size(i) * g / (g^2 + eps)
       如果参数为复数：
-          分别更新实部和虚部，其中虚部的梯度取反：
+          分别更新实部和虚部，其中虚部更新时取反：
           x_real_new = x.real - step_size(i) * g.real / (g.real^2 + eps)
           x_imag_new = x.imag + step_size(i) * g.imag / (g.imag^2 + eps)
           x_new = x_real_new + 1j * x_imag_new
   
-  这样设计确保了复数参数的更新遵循正确的梯度方向。
-
   Args:
-    step_size: 标量或一个步长调度函数。
-    eps: 一个小正数，防止除零。
+    step_size: 标量或步长调度函数。注意这里我们确保传入调度函数的迭代步数为整数。
+    eps: 防止除零的小常数。
 
   Returns:
     一个 (init_fn, update_fn, get_params) 的 Optimizer 三元组。
   """
+  # 确保步长调度函数返回标量
   step_size = make_schedule(step_size)
   
   def init(x0):
     return x0
   
   def update(i, g, x):
-    # 检查梯度是否为复数
+    # 将迭代步数转换为整数，确保传入调度函数的参数类型正确
+    i_int = int(i)
+    current_step = step_size(i_int)
     if _iscomplex(g):
-      # 提取实部和虚部
+      # 分别取复数梯度的实部和虚部
       gr = g.real
       gi = g.imag
-      # 根据原始 complex_as_realtuple 的思想：
-      # 实部更新：直接用 g.real
-      # 虚部更新：使用 -g.imag，相当于加上正项
-      x_real_new = x.real - step_size(i) * gr / (jnp.square(gr) + eps)
-      x_imag_new = x.imag + step_size(i) * gi / (jnp.square(gi) + eps)
+      # 更新实部和虚部（注意虚部更新时取正，相当于对梯度取负）
+      x_real_new = x.real - current_step * gr / (jnp.square(gr) + eps)
+      x_imag_new = x.imag + current_step * gi / (jnp.square(gi) + eps)
       return x_real_new + 1j * x_imag_new
     else:
-      # 对于实数参数，直接应用更新公式
-      return x - step_size(i) * g / (jnp.square(g) + eps)
+      return x - current_step * g / (jnp.square(g) + eps)
   
   def get_params(x):
     return x
   
   return Optimizer(init, update, get_params)
+
 
 ### learning rate schedules
 
