@@ -561,7 +561,7 @@ def generate_hippo_matrix(size):
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
 
-class twoLayerrnn:
+class twolayerrnn:
     def __init__(self, input_dim=2, hidden_size1=2, hidden_size2=2, output_dim=2):
         self.hidden_size1 = hidden_size1
         self.hidden_size2 = hidden_size2
