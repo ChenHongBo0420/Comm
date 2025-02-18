@@ -620,52 +620,6 @@ import jax
 import jax.numpy as jnp
 from jax.nn.initializers import orthogonal, zeros
 
-def invertible_leaky_relu(x, negative_slope=0.2):
-    """可逆的 Leaky ReLU 激活函数。"""
-    return jnp.where(x >= 0, x, negative_slope * x)
-
-def twolayerrnn(scope, signal, 
-                            input_dim=None, 
-                            hidden_size1=2, hidden_size2=2, output_dim=2,
-                            negative_slope=0.2):
-    """
-    两层全连接神经网络，使用可逆激活函数（Leaky ReLU）：
-      - scope: 用于参数初始化（如 scope.param）
-      - signal: 一个包含 (x, t) 的元组，此处仅使用 x 作为输入
-      - input_dim: 若未提供则从 x 的最后一维推断
-      - negative_slope: Leaky ReLU 的负半轴斜率，非零确保激活函数可逆
-
-    返回:
-      Signal 对象，包含网络输出和时间向量 t（t 从 signal 中获取）
-    """
-    # 从 signal 中提取输入数据 x 和时间信息 t
-    x, t = signal
-
-    # 如果未指定 input_dim，从 x 的最后一维推断
-    if input_dim is None:
-        input_dim = x.shape[-1]
-
-    # 使用 scope.param 初始化各层参数
-    # 第一层参数：权重和偏置
-    W1 = scope.param('W1', orthogonal(), (input_dim, hidden_size1), jnp.float32)
-    b1 = scope.param('b1', zeros, (hidden_size1,), jnp.float32)
-    
-    # 第二层参数：权重和偏置
-    W2 = scope.param('W2', orthogonal(), (hidden_size1, hidden_size2), jnp.float32)
-    b2 = scope.param('b2', zeros, (hidden_size2,), jnp.float32)
-    
-    # 输出层参数：权重和偏置
-    W3 = scope.param('W3', orthogonal(), (hidden_size2, output_dim), jnp.float32)
-    b3 = scope.param('b3', zeros, (output_dim,), jnp.float32)
-
-    # 前向传播
-    h1 = jnp.dot(x, W1) + b1
-    h1 = invertible_leaky_relu(h1, negative_slope)  # 使用可逆激活函数
-    h2 = jnp.dot(h1, W2) + b2
-    h2 = invertible_leaky_relu(h2, negative_slope)  # 同样使用可逆激活函数
-    output = jnp.dot(h2, W3) + b3
-
-    return Signal(output, t)
 
 
                    
@@ -747,52 +701,135 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss,
-    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
-):
-    """
-    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-    以减少误差累积，提升整体补偿性能。
-    """
-    x, t = signal
-    # 初始化自适应相位缩放因子 gamma
-    gamma = 1.0
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+# ):
+#     """
+#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+#     以减少误差累积，提升整体补偿性能。
+#     """
+#     x, t = signal
+#     # 初始化自适应相位缩放因子 gamma
+#     gamma = 1.0
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
+#     for i in range(steps):
+#         # 执行局部色散补偿步骤
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#         # 执行非线性补偿步骤：计算相位校正 c
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+#         # 这里的 error 定义可以根据实际需求进行设计
+#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
+#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+#         error = power_after - power_before
+        
+#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+#         # 注意：根据实际误差定义，可能需要调整符号
+#         gamma = gamma - mu * error
+        
+#         # 将更新后的信号作为下一步输入
+#         x = x_new
+#     return Signal(x, t)
+
+def improved_dispersion_compensator(x, dt, beta2, beta3=0.0, beta4=0.0):
+    """
+    利用 FFT/IFFT 在频域中施加色散补偿，支持二阶、三阶和四阶色散。
+    
+    :param x: 输入时域信号（1D 复数数组）
+    :param dt: 采样时间间隔
+    :param beta2: 二阶色散系数
+    :param beta3: 三阶色散系数（默认为 0.0）
+    :param beta4: 四阶色散系数（默认为 0.0）
+    :return: 补偿后的时域信号
+    """
+    X = jnp.fft.fft(x)
+    N = x.shape[-1]
+    freqs = jnp.fft.fftfreq(N, d=dt)
+    omega = 2 * jnp.pi * freqs
+
+    # 计算色散补偿相位（负号表示反向补偿）
+    phase = -0.5 * beta2 * (omega ** 2)
+    if beta3 != 0.0:
+        phase += (1.0 / 6.0) * beta3 * (omega ** 3)
+    if beta4 != 0.0:
+        phase += - (1.0 / 24.0) * beta4 * (omega ** 4)
+
+    X_comp = X * jnp.exp(1j * phase)
+    x_comp = jnp.fft.ifft(X_comp)
+    return x_comp
+
+def improved_dconv(signal: Signal, beta2, beta3, beta4):
+    """
+    作为色散补偿的模块，调用 improved_dispersion_compensator 完成 FFT 基的色散补偿。
+    返回补偿后的信号和时间轴（保持不变）。
+    
+    :param signal: 输入 Signal 对象
+    :param beta2: 二阶色散系数
+    :param beta3: 三阶色散系数
+    :param beta4: 四阶色散系数
+    :return: (补偿后信号, 时间轴)
+    """
+    x, t = signal.x, signal.t
+    dt = t[1] - t[0]  # 假设 t 为均匀采样的数组
+    x_disp = improved_dispersion_compensator(x, dt, beta2, beta3, beta4)
+    return x_disp, t
+  
+def fdbp(scope, signal, steps=3,
+         dtaps=261, ntaps=41, sps=2,
+         d_init=None,    # 保留原接口（本例中未使用）
+         n_init=None,    # 保留原接口（本例中未使用）
+         beta2=1.0, beta3=0.0, beta4=0.0):
+    """
+    改进版 DBP 算法：仅替换色散补偿部分，采用 improved_dconv 进行 FFT-based 色散补偿，
+    非线性补偿部分保持不变，调用原有 mimoconv1d 模块。
+
+    :param scope: 参数作用域对象，用于管理子模块
+    :param signal: 输入 Signal 对象（包含 x, t）
+    :param steps: 迭代步数
+    :param dtaps: 原色散补偿卷积核 tap 数（预留接口）
+    :param ntaps: 非线性补偿卷积核 tap 数（预留接口）
+    :param sps: 每符号采样数（预留接口）
+    :param d_init: 色散补偿核初始化函数（预留接口）
+    :param n_init: 非线性补偿核初始化函数（预留接口）
+    :param beta2: 二阶色散系数
+    :param beta3: 三阶色散系数
+    :param beta4: 四阶色散系数
+    :return: 补偿后的 Signal 对象
+    """
+    x, t = signal.x, signal.t
+
     for i in range(steps):
-        # 执行局部色散补偿步骤
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 执行非线性补偿步骤：计算相位校正 c
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # 用 improved_dconv 替换原有的 dconv（色散补偿）
+        dispersion_fn = lambda sig: improved_dconv(sig, beta2, beta3, beta4)
+        x, td = scope.child(dispersion_fn, name=f'DConv_{i}')(Signal(x, t))
         
-        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-        # 这里的 error 定义可以根据实际需求进行设计
-        power_before = jnp.mean(jnp.square(jnp.abs(x)))
-        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
-        error = power_after - power_before
-        
-        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-        # 注意：根据实际误差定义，可能需要调整符号
-        gamma = gamma - mu * error
-        
-        # 将更新后的信号作为下一步输入
-        x = x_new
+        # 非线性补偿部分保持不变
+        c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 按照原有公式更新 x，时间轴切片操作保持不变
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # 可选择更新 t，这里直接用 t_new（或保持 td，根据具体实现）
+        t = t_new
+
     return Signal(x, t)
-
-
-      
+           
 def fdbp1(
     scope: Scope,
     signal,
