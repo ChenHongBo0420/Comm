@@ -600,11 +600,11 @@ def twolayerrnn(scope, signal,
 
     # 第一层 RNN 状态更新与注意力机制
     hidden_state1 = jnp.dot(hidden_state1, A1) + jnp.dot(x, B1)
-    hidden_state1 = squeeze_excite_attention(hidden_state1)
+    # hidden_state1 = squeeze_excite_attention(hidden_state1)
 
     # 第二层 RNN 状态更新与注意力机制
     hidden_state2 = jnp.dot(hidden_state2, A2) + jnp.dot(hidden_state1, B2)
-    hidden_state2 = complex_channel_attention(hidden_state2)
+    # hidden_state2 = complex_channel_attention(hidden_state2)
 
     # 输出：使用观测矩阵 C 得到最终输出
     output = jnp.dot(hidden_state2, C)
