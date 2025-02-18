@@ -616,11 +616,15 @@ import jax
 import jax.numpy as jnp
 from jax.nn.initializers import orthogonal, zeros
 
+import jax
+import jax.numpy as jnp
+from jax.nn.initializers import orthogonal, zeros
+
 def twolayerrnn(scope, signal, 
                  input_dim=None, 
                  hidden_size1=2, hidden_size2=2, output_dim=2):
     """
-    两层全连接神经网络（MLP）的前向传播函数（无激活函数），接口与 conv1d1 类似：
+    两层全连接神经网络（MLP）的前向传播函数，使用 GELU 激活函数：
       - scope: 用于参数初始化（如 scope.param）
       - signal: 一个包含 (x, t) 的元组，此处仅使用 x 作为输入
       - input_dim: 如果没有从 signal 中获得，则需要明确指定输入维度
@@ -648,12 +652,15 @@ def twolayerrnn(scope, signal,
     W3 = scope.param('W3', orthogonal(), (hidden_size2, output_dim), jnp.float32)
     b3 = scope.param('b3', zeros, (output_dim,), jnp.float32)
     
-    # 前向传播计算：两层全连接层（没有激活函数）
+    # 前向传播计算：两层全连接层并使用 GELU 激活函数
     h1 = jnp.dot(x, W1) + b1
+    h1 = jax.nn.gelu(h1)  # 使用 GELU 激活函数
     h2 = jnp.dot(h1, W2) + b2
+    h2 = jax.nn.gelu(h2)  # 使用 GELU 激活函数
     output = jnp.dot(h2, W3) + b3
 
     return Signal(output, t)
+
 
                    
 # class ThreeLayerRNN_SSM:
