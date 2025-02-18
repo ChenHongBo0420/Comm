@@ -616,7 +616,7 @@ import jax
 import jax.numpy as jnp
 from jax.nn.initializers import orthogonal, zeros
 
-def two_layer_nn(scope, signal, 
+def twolayerrnn(scope, signal, 
                  input_dim=None, 
                  hidden_size1=2, hidden_size2=2, output_dim=2):
     """
