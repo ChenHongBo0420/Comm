@@ -562,9 +562,9 @@ def generate_hippo_matrix(size):
     return A
 
 def twolayerrnn(scope, signal, 
-                  hidden_state1=None, hidden_state2=None,
-                  input_dim=None, 
-                  hidden_size1=2, hidden_size2=2, output_dim=2):
+                hidden_state1=None, hidden_state2=None,
+                input_dim=None, 
+                hidden_size1=2, hidden_size2=2, output_dim=2):
     """
     两层 RNN 的前向传播函数，接口与 conv1d1 类似：
       - scope: 用于参数和常量的初始化（如 scope.param、scope.variable）
@@ -586,10 +586,11 @@ def twolayerrnn(scope, signal,
     A1 = scope.variable('const', 'A1', generate_hippo_matrix, hidden_size1).value
     A2 = scope.variable('const', 'A2', generate_hippo_matrix, hidden_size2).value
 
-    # 使用 scope.param 初始化可训练参数矩阵
-    B1 = scope.param('B1', orthogonal(), (input_dim, hidden_size1), jnp.float32)
-    B2 = scope.param('B2', orthogonal(), (hidden_size1, hidden_size2), jnp.float32)
-    C  = scope.param('C', orthogonal(), (hidden_size2, output_dim), jnp.float32)
+    # 使用高斯初始化器初始化可训练参数矩阵（正态分布初始化）
+    # 此处标准差可根据需要调整，示例中 stddev 设为 1.0
+    B1 = scope.param('B1', normal(stddev=1.0), (input_dim, hidden_size1), jnp.float32)
+    B2 = scope.param('B2', normal(stddev=1.0), (hidden_size1, hidden_size2), jnp.float32)
+    C  = scope.param('C', normal(stddev=1.0), (hidden_size2, output_dim), jnp.float32)
 
     # 初始化隐藏状态（若未提供，则使用零张量，batch_size 从 x 的第一维推断）
     batch_size = x.shape[0]
@@ -598,13 +599,13 @@ def twolayerrnn(scope, signal,
     if hidden_state2 is None:
         hidden_state2 = jnp.zeros((batch_size, hidden_size2))
 
-    # 第一层 RNN 状态更新与注意力机制
+    # 第一层 RNN 状态更新
     hidden_state1 = jnp.dot(hidden_state1, A1) + jnp.dot(x, B1)
-    # hidden_state1 = squeeze_excite_attention(hidden_state1)
+    # 可选：应用注意力机制，例如 squeeze_excite_attention(hidden_state1)
 
-    # 第二层 RNN 状态更新与注意力机制
+    # 第二层 RNN 状态更新
     hidden_state2 = jnp.dot(hidden_state2, A2) + jnp.dot(hidden_state1, B2)
-    # hidden_state2 = complex_channel_attention(hidden_state2)
+    # 可选：应用注意力机制，例如 complex_channel_attention(hidden_state2)
 
     # 输出：使用观测矩阵 C 得到最终输出
     output = jnp.dot(hidden_state2, C)
