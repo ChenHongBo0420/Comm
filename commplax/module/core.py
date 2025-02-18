@@ -620,43 +620,49 @@ import jax
 import jax.numpy as jnp
 from jax.nn.initializers import orthogonal, zeros
 
+def invertible_leaky_relu(x, negative_slope=0.2):
+    """可逆的 Leaky ReLU 激活函数。"""
+    return jnp.where(x >= 0, x, negative_slope * x)
+
 def twolayerrnn(scope, signal, 
-                 input_dim=None, 
-                 hidden_size1=2, hidden_size2=2, output_dim=2):
+                            input_dim=None, 
+                            hidden_size1=2, hidden_size2=2, output_dim=2,
+                            negative_slope=0.2):
     """
-    两层全连接神经网络（MLP）的前向传播函数，使用 GELU 激活函数：
+    两层全连接神经网络，使用可逆激活函数（Leaky ReLU）：
       - scope: 用于参数初始化（如 scope.param）
       - signal: 一个包含 (x, t) 的元组，此处仅使用 x 作为输入
-      - input_dim: 如果没有从 signal 中获得，则需要明确指定输入维度
+      - input_dim: 若未提供则从 x 的最后一维推断
+      - negative_slope: Leaky ReLU 的负半轴斜率，非零确保激活函数可逆
 
     返回:
-      Signal 对象，包含网络输出和时间向量 t（此处 t 来自 signal 中）
+      Signal 对象，包含网络输出和时间向量 t（t 从 signal 中获取）
     """
     # 从 signal 中提取输入数据 x 和时间信息 t
     x, t = signal
 
-    # 如果未提供 input_dim，则从 x 的最后一维推断
+    # 如果未指定 input_dim，从 x 的最后一维推断
     if input_dim is None:
         input_dim = x.shape[-1]
 
     # 使用 scope.param 初始化各层参数
-    # 第一层权重和偏置
+    # 第一层参数：权重和偏置
     W1 = scope.param('W1', orthogonal(), (input_dim, hidden_size1), jnp.float32)
     b1 = scope.param('b1', zeros, (hidden_size1,), jnp.float32)
     
-    # 第二层权重和偏置
+    # 第二层参数：权重和偏置
     W2 = scope.param('W2', orthogonal(), (hidden_size1, hidden_size2), jnp.float32)
     b2 = scope.param('b2', zeros, (hidden_size2,), jnp.float32)
     
-    # 输出层权重和偏置
+    # 输出层参数：权重和偏置
     W3 = scope.param('W3', orthogonal(), (hidden_size2, output_dim), jnp.float32)
     b3 = scope.param('b3', zeros, (output_dim,), jnp.float32)
-    
-    # 前向传播计算：两层全连接层并使用 GELU 激活函数
+
+    # 前向传播
     h1 = jnp.dot(x, W1) + b1
-    h1 = jax.nn.gelu(h1)  # 使用 GELU 激活函数
+    h1 = invertible_leaky_relu(h1, negative_slope)  # 使用可逆激活函数
     h2 = jnp.dot(h1, W2) + b2
-    h2 = jax.nn.gelu(h2)  # 使用 GELU 激活函数
+    h2 = invertible_leaky_relu(h2, negative_slope)  # 同样使用可逆激活函数
     output = jnp.dot(h2, W3) + b3
 
     return Signal(output, t)
