@@ -810,7 +810,7 @@ def fdbp(scope, signal, steps=3,
     :param beta4: 四阶色散系数
     :return: 补偿后的 Signal 对象
     """
-    x, t = signal.x, signal.t
+    x, t = signal
 
     for i in range(steps):
         # 用 improved_dconv 替换原有的 dconv（色散补偿）
