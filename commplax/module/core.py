@@ -774,18 +774,13 @@ def improved_dispersion_compensator(x, dt, beta2, beta3=0.0, beta4=0.0):
 
 def improved_dconv(signal: Signal, beta2, beta3, beta4):
     """
-    作为色散补偿的模块，调用 improved_dispersion_compensator 完成 FFT 基的色散补偿。
+    改进版色散补偿模块，利用 FFT/IFFT 实现高阶色散补偿，
     返回补偿后的信号和时间轴（保持不变）。
-    
-    :param signal: 输入 Signal 对象
-    :param beta2: 二阶色散系数
-    :param beta3: 三阶色散系数
-    :param beta4: 四阶色散系数
-    :return: (补偿后信号, 时间轴)
     """
     x, t = signal.x, signal.t
-    dt = t[1] - t[0]  # 假设 t 为均匀采样的数组
+    dt = t[1] - t[0]  # 假设 t 为均匀采样数组
     x_disp = improved_dispersion_compensator(x, dt, beta2, beta3, beta4)
+    # 返回与原来接口一致的 tuple
     return x_disp, t
   
 def fdbp(scope, signal, steps=3,
@@ -814,7 +809,7 @@ def fdbp(scope, signal, steps=3,
 
     for i in range(steps):
         # 用 improved_dconv 替换原有的 dconv（色散补偿）
-        dispersion_fn = lambda sig: improved_dconv(sig, beta2, beta3, beta4)
+        dispersion_fn = lambda sc, sig: improved_dconv(sig, beta2, beta3, beta4)
         x, td = scope.child(dispersion_fn, name=f'DConv_{i}')(Signal(x, t))
         
         # 非线性补偿部分保持不变
