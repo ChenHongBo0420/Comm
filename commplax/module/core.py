@@ -560,7 +560,7 @@ def generate_hippo_matrix(size):
     P = jnp.arange(1, n+1)
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
-
+from jax.nn.initializers import normal
 def twolayerrnn(scope, signal, 
                 hidden_state1=None, hidden_state2=None,
                 input_dim=None, 
