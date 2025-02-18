@@ -561,7 +561,7 @@ def generate_hippo_matrix(size):
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
 
-def two_layer_rnn(scope, signal, 
+def twolayerrnn(scope, signal, 
                   hidden_state1=None, hidden_state2=None,
                   input_dim=None,
                   hidden_size1=2, hidden_size2=2, output_dim=2):
