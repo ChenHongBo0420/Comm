@@ -777,7 +777,7 @@ def improved_dconv(signal: Signal, beta2, beta3, beta4):
     改进版色散补偿模块，利用 FFT/IFFT 实现高阶色散补偿，
     返回补偿后的信号和时间轴（保持不变）。
     """
-    x, t = signal.x, signal.t
+    x, t = signal
     dt = t[1] - t[0]  # 假设 t 为均匀采样数组
     x_disp = improved_dispersion_compensator(x, dt, beta2, beta3, beta4)
     # 返回与原来接口一致的 tuple
