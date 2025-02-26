@@ -751,29 +751,16 @@ def conv1d(scope: Scope,
                    block_size=1024,
                    kernel_init=delta,
                    conv_fn=None):
-    """
-    新的 conv1d 实现，利用 overlap‐and‐save 方法实现卷积补偿，
-    适用于色散补偿场景，可以更好地处理脉冲展宽及边缘效应。
-
-    参数：
-      scope: Flax 的参数作用域对象，用于管理参数和常量
-      signal: Signal 对象，包含 (x, t)，其中 x 是输入时域信号，t 为时间信息
-      taps: 卷积核长度（默认 31）
-      rtap: 对称核中右侧 tap 的数目，若为 None 则自动设置为 (taps - 1) // 2
-      block_size: overlap‐and‐save 方法中每个块保留的有效输出长度（可根据实际采样率调整）
-      kernel_init: 卷积核初始化函数（如 delta）
-      conv_fn: 如果需要使用其他卷积函数（本例中不再使用 xop.convolve），可传入
-
-    返回：
-      Signal 对象，包含卷积后的信号和原始时间信息 t（本例假设输出长度与输入相同）
-    """
     x, t = signal
-    # 获取卷积核参数，注意这里 kernel 的 shape 为 (taps,)
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    # 调用 overlap_and_save_convolve 完成卷积
     y = overlap_and_save_convolve(x, h, block_size)
-    # 如果需要更新时间信息，可根据卷积模式调整（这里采用 'same' 模式，故 t 保持不变）
+    # 如果 y 的长度比原始 x 短，则补零到 x 的长度
+    if y.shape[0] < x.shape[0]:
+        pad_len = x.shape[0] - y.shape[0]
+        # 这里采用在末尾补零，你也可以采用两侧均衡补零
+        y = jnp.pad(y, (0, pad_len))
     return Signal(y, t)
+
 
 def fdbp(
     scope: Scope,
