@@ -701,29 +701,15 @@ def weighted_interaction(x1, x2):
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 def overlap_and_save_convolve(x, h, block_size):
-    """
-    使用 overlap‐and‐save 方法对 1D 信号 x 与滤波器 h 进行卷积。
-
-    参数：
-      x: 输入信号，形状 (N,)（1D 复数数组）
-      h: 卷积核，形状 (L,)（一般为复数类型）
-      block_size: 每个块中希望保留的有效输出样本数
-
-    实现步骤：
-      1. 设滤波器长度 L = h.shape[0]，则每块实际需要的长度为 block_length = block_size + L - 1；
-      2. 对信号 x 进行末尾补零，使得总长度为 num_blocks * block_size + (L - 1)；
-      3. 对每个块进行 FFT 卷积，并舍弃前 L - 1 个样本（即边缘失真部分）；
-      4. 拼接所有块的有效输出，并截断到原始信号长度。
-    """
     L = h.shape[0]
     block_length = block_size + L - 1
     N = x.shape[0]
-    num_blocks = int(jnp.ceil((N - (L - 1)) / block_size))
+    # 使用纯 Python 算法计算 num_blocks
+    num_blocks = (N - (L - 1) + block_size - 1) // block_size
     total_length = num_blocks * block_size + (L - 1)
     pad_length = total_length - N
     x_padded = jnp.pad(x, (0, pad_length))
     
-    # 预先计算滤波器的 FFT：先将 h 补零到 block_length 长度
     h_padded = jnp.pad(h, (0, block_length - L))
     H_fft = jnp.fft.fft(h_padded)
     
@@ -732,16 +718,14 @@ def overlap_and_save_convolve(x, h, block_size):
         start = i * block_size
         end = start + block_length
         x_block = x_padded[start:end]
-        # 计算当前块的 FFT，并与 H_fft 相乘
         X_fft = jnp.fft.fft(x_block)
         Y_fft = X_fft * H_fft
         y_block = jnp.fft.ifft(Y_fft)
-        # 舍弃前 L - 1 个样本，保留后 block_size 个样本为有效输出
         valid_part = y_block[L - 1:]
         outputs.append(valid_part)
-    # 拼接各块有效部分，并截断到原始信号长度
     y_full = jnp.concatenate(outputs)
     return y_full[:N]
+
 
 
 def conv1d(scope: Scope,
