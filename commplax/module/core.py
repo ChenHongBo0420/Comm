@@ -221,23 +221,23 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
 #     x = conv_fn(x, h, mode=mode)
 #     return Signal(x, t)
       
-def conv1d1(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
+# def conv1d1(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
 
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
 
-    return Signal(x, t)   
+#     return Signal(x, t)   
       
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -761,7 +761,23 @@ def conv1d(scope: Scope,
         y = jnp.pad(y, (0, pad_len))
     return Signal(y, t)
 
-
+def conv1d1(scope: Scope,
+                   signal,
+                   taps=31,
+                   rtap=None,
+                   block_size=1024,
+                   kernel_init=delta,
+                   conv_fn=None):
+    x, t = signal
+    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
+    y = overlap_and_save_convolve(x, h, block_size)
+    # 如果 y 的长度比原始 x 短，则补零到 x 的长度
+    if y.shape[0] < x.shape[0]:
+        pad_len = x.shape[0] - y.shape[0]
+        # 这里采用在末尾补零，你也可以采用两侧均衡补零
+        y = jnp.pad(y, (0, pad_len))
+    return Signal(y, t)
+                     
 def fdbp(
     scope: Scope,
     signal,
