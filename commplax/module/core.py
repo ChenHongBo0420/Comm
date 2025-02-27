@@ -729,7 +729,50 @@ def fdbp(
         # 将更新后的信号作为下一步输入
         x = x_new
     return Signal(x, t)
-
+  
+def fdbp1(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
+    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+):
+    """
+    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+    以减少误差累积，提升整体补偿性能。
+    """
+    x, t = signal
+    # 初始化自适应相位缩放因子 gamma
+    gamma = 1.0
+    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    for i in range(steps):
+        # 执行局部色散补偿步骤
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 执行非线性补偿步骤：计算相位校正 c
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+        # 这里的 error 定义可以根据实际需求进行设计
+        power_before = jnp.mean(jnp.square(jnp.abs(x)))
+        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+        error = power_after - power_before
+        
+        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+        # 注意：根据实际误差定义，可能需要调整符号
+        gamma = gamma - mu * error
+        
+        # 将更新后的信号作为下一步输入
+        x = x_new
+    return Signal(x, t)
            
 # def fdbp1(
 #     scope: Scope,
@@ -767,62 +810,62 @@ def fdbp(
 #     return Signal(x, t)
 
       
-def fdbp1(
-    scope: Scope,
-    signal,
-    steps: int = 3,
-    dtaps: int = 261,
-    ntaps: int = 41,
-    sps: int = 2,
-    max_ixpm_window: int = 5,  # 允许网络在 [-max_ixpm_window, +max_ixpm_window] 内学习
-    d_init = delta,
-    n_init = gauss
-):
-    """
-    与原fdbp1相似，但IXPM窗口在 [-max_ixpm_window, +max_ixpm_window]范围内
-    引入一个可学习的softmax权重(2*max_ixpm_window+1个参数)，
-    让网络决定每个shift的重要度，而不是均匀平均。
-    """
-    x, t = signal
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps: int = 3,
+#     dtaps: int = 261,
+#     ntaps: int = 41,
+#     sps: int = 2,
+#     max_ixpm_window: int = 5,  # 允许网络在 [-max_ixpm_window, +max_ixpm_window] 内学习
+#     d_init = delta,
+#     n_init = gauss
+# ):
+#     """
+#     与原fdbp1相似，但IXPM窗口在 [-max_ixpm_window, +max_ixpm_window]范围内
+#     引入一个可学习的softmax权重(2*max_ixpm_window+1个参数)，
+#     让网络决定每个shift的重要度，而不是均匀平均。
+#     """
+#     x, t = signal
 
-    # --- 1) 定义色散滤波 dconv (和你原先一样) ---
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     # --- 1) 定义色散滤波 dconv (和你原先一样) ---
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # --- 2) 声明一个可学习向量 alpha，用 softmax 得到 weight ---
-    #    alpha.shape = (2*max_ixpm_window + 1,)
-    alpha = scope.param(
-        'ixpm_alpha',
-        lambda rng, shape: jnp.zeros(shape, dtype=jnp.float32),  # init 0 or normal
-        (2 * max_ixpm_window + 1,)
-    )
-    # 计算 softmax, 保证非负且 sum=1
-    alpha_stable = alpha - jnp.max(alpha)  # 防止溢出
-    w = jnp.exp(alpha_stable)
-    w = w / jnp.sum(w)
+#     # --- 2) 声明一个可学习向量 alpha，用 softmax 得到 weight ---
+#     #    alpha.shape = (2*max_ixpm_window + 1,)
+#     alpha = scope.param(
+#         'ixpm_alpha',
+#         lambda rng, shape: jnp.zeros(shape, dtype=jnp.float32),  # init 0 or normal
+#         (2 * max_ixpm_window + 1,)
+#     )
+#     # 计算 softmax, 保证非负且 sum=1
+#     alpha_stable = alpha - jnp.max(alpha)  # 防止溢出
+#     w = jnp.exp(alpha_stable)
+#     w = w / jnp.sum(w)
 
-    # 主循环 steps
-    for i in range(steps):
-        # 2.1) 线性色散
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#     # 主循环 steps
+#     for i in range(steps):
+#         # 2.1) 线性色散
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
 
-        # 2.2) 计算 IXPM: sum over shifts(roll), 并由 w 加权
-        x_abs2 = jnp.abs(x)**2
-        ixpm_power = jnp.zeros_like(x_abs2)  # same shape as x_abs2
-        # 对 shift in [-max_ixpm_window, ..., +max_ixpm_window] 做 roll
-        for idx, shift in enumerate(range(-max_ixpm_window, max_ixpm_window + 1)):
-            ixpm_power += w[idx] * jnp.roll(x_abs2, shift, axis=0)
+#         # 2.2) 计算 IXPM: sum over shifts(roll), 并由 w 加权
+#         x_abs2 = jnp.abs(x)**2
+#         ixpm_power = jnp.zeros_like(x_abs2)  # same shape as x_abs2
+#         # 对 shift in [-max_ixpm_window, ..., +max_ixpm_window] 做 roll
+#         for idx, shift in enumerate(range(-max_ixpm_window, max_ixpm_window + 1)):
+#             ixpm_power += w[idx] * jnp.roll(x_abs2, shift, axis=0)
 
-        # 2.3) 做 mimoconv1d => c
-        c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(ixpm_power, td),
-                                                              taps=ntaps,
-                                                              kernel_init=n_init)
-        # 2.4) 相位补偿
-        #    这里与原版相同: x = exp(1j * c) * x[对齐切片]
-        x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
-        x = jnp.exp(1j * c) * x_slice
-        t = t_new  # 更新时间戳
+#         # 2.3) 做 mimoconv1d => c
+#         c, t_new = scope.child(mimoconv1d, name=f'NConv_{i}')(Signal(ixpm_power, td),
+#                                                               taps=ntaps,
+#                                                               kernel_init=n_init)
+#         # 2.4) 相位补偿
+#         #    这里与原版相同: x = exp(1j * c) * x[对齐切片]
+#         x_slice = x[t_new.start - td.start : t_new.stop - td.stop + x.shape[0]]
+#         x = jnp.exp(1j * c) * x_slice
+#         t = t_new  # 更新时间戳
 
-    return Signal(x, t)
+#     return Signal(x, t)
 
 
 def identity(scope, inputs):
