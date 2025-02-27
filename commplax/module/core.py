@@ -700,53 +700,54 @@ def weighted_interaction(x1, x2):
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
-def overlap_and_save_convolve(x, h, block_size):
-    """
-    使用 overlap‐and‐save 方法对 1D 信号 x 与滤波器 h 进行卷积，采用 jax.vmap 向量化块处理。
 
+def overlap_and_save_convolve(x, h, block_size, mode='valid'):
+    """
+    使用 overlap‐and‐save 方法对 1D 信号 x 与滤波器 h 进行卷积，并支持 'valid' 与 'same' 两种模式。
+    
+    对于 'valid' 模式，输出长度 = N - (L - 1)，
+    对于 'same' 模式，输出长度 = N。
+    
     参数：
       x: 输入信号，形状 (N,)（1D 复数数组）
       h: 卷积核，形状 (L,)
-      block_size: 每个块希望保留的有效输出样本数
-
-    处理流程：
-      1. 设滤波器长度 L = h.shape[0]，每块总长度为 block_length = block_size + L - 1；
-      2. 对 x 进行末尾补零，使得总长度为 num_blocks * block_size + (L - 1)；
-      3. 预先计算 h 补零至 block_length 长度后的 FFT（H_fft）；
-      4. 利用 jax.vmap 对每个块进行 FFT 卷积，取舍前 L-1 个样本（边缘失真部分）；
-      5. 将所有块的有效输出拼接后，再截断到原始信号长度。
+      block_size: 每个块保留的有效输出长度
+      mode: 'valid' 或 'same'
     """
     L = h.shape[0]
     block_length = block_size + L - 1
     N = x.shape[0]
-    # 纯 Python 算法计算 num_blocks（确保为静态整数）
+    # 用纯 Python 算法计算块数，确保静态整数
     num_blocks = (N - (L - 1) + block_size - 1) // block_size
     total_length = num_blocks * block_size + (L - 1)
     pad_length = total_length - N
     x_padded = jnp.pad(x, (0, pad_length))
     
-    # 对 h 补零到 block_length，计算 FFT
+    # 对 h 补零到 block_length 长度，计算 FFT
     h_padded = jnp.pad(h, (0, block_length - L))
     H_fft = jnp.fft.fft(h_padded, n=block_length)
     
-    # 定义处理单个块的函数，i 为块索引
     def process_block(i):
         start = i * block_size
-        # 使用 dynamic_slice 从 x_padded 中提取当前块，形状 (block_length,)
+        # 从 x_padded 中提取当前块
         block = jax.lax.dynamic_slice(x_padded, (start,), (block_length,))
         X_fft = jnp.fft.fft(block, n=block_length)
         Y_fft = X_fft * H_fft
         y_block = jnp.fft.ifft(Y_fft, n=block_length)
-        # 舍弃前 L-1 个样本，保留后 block_size 个有效样本
+        # 对于 valid 模式，舍弃前 L-1 个样本
         return y_block[L-1:]
     
-    # 对块索引向量化处理
     indices = jnp.arange(num_blocks)
-    blocks_valid = jax.vmap(process_block)(indices)  # shape (num_blocks, block_size)
-    # 将各块拼接为 1D 向量
+    blocks_valid = jax.vmap(process_block)(indices)  # shape: (num_blocks, block_size)
     y_full = blocks_valid.reshape(-1)
-    # 截断到原始信号长度
-    return y_full[:N]
+    
+    if mode == 'valid':
+        out_len = N - (L - 1)
+    elif mode == 'same':
+        out_len = N
+    else:
+        out_len = N
+    return y_full[:out_len]
 
 
 def conv1d(scope: Scope,
@@ -755,27 +756,29 @@ def conv1d(scope: Scope,
                    rtap=None,
                    block_size=1024,
                    kernel_init=delta,
-                   conv_fn=None):
+                   mode='valid'):
     """
-    新的 conv1d 层实现，利用 overlap‐and‐save 方法实现卷积补偿。
-
+    新的 conv1d 层实现，采用 overlap‐and‐save 方法进行 FFT 卷积补偿，
+    同时根据 mode 更新时域信息，确保输出长度与 conv1d_t 计算一致。
+    
     参数：
       scope: Flax 参数作用域对象
       signal: Signal 对象，包含 (x, t)
-      taps: 卷积核长度（默认 31）
-      rtap: 若为 None，则自动设为 (taps - 1) // 2
-      block_size: 每个块保留的有效输出样本数
+      taps: 卷积核长度（L）
+      rtap: 若为 None，则自动设置为 (taps - 1) // 2
+      block_size: 每个块保留的有效输出长度
       kernel_init: 卷积核初始化函数
-      conv_fn: 此处不再使用内置卷积函数，直接使用 overlap_and_save_convolve
-
+      mode: 'valid' 或 'same'，决定输出长度
     返回：
-      Signal 对象，其 val 为卷积结果，t 保持不变（或根据需要调整）。
+      Signal 对象，输出的 val 为卷积结果，t 为更新后的时间信息
     """
     x, t = signal
+    # 根据 mode 计算新的时间信息，使用 conv1d_t 保证与 valid 卷积输出长度一致
+    new_t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    y = overlap_and_save_convolve(x, h, block_size)
-    # 如果需要确保输出长度与输入一致，可做补零或截断，此处已截断到 x.shape[0]
-    return Signal(y, t)
+    y = overlap_and_save_convolve(x, h, block_size, mode=mode)
+    return Signal(y, new_t)
+
 
 def conv1d1(scope: Scope,
                    signal,
@@ -783,27 +786,28 @@ def conv1d1(scope: Scope,
                    rtap=None,
                    block_size=1024,
                    kernel_init=delta,
-                   conv_fn=None):
+                   mode='valid'):
     """
-    新的 conv1d 层实现，利用 overlap‐and‐save 方法实现卷积补偿。
-
+    新的 conv1d 层实现，采用 overlap‐and‐save 方法进行 FFT 卷积补偿，
+    同时根据 mode 更新时域信息，确保输出长度与 conv1d_t 计算一致。
+    
     参数：
       scope: Flax 参数作用域对象
       signal: Signal 对象，包含 (x, t)
-      taps: 卷积核长度（默认 31）
-      rtap: 若为 None，则自动设为 (taps - 1) // 2
-      block_size: 每个块保留的有效输出样本数
+      taps: 卷积核长度（L）
+      rtap: 若为 None，则自动设置为 (taps - 1) // 2
+      block_size: 每个块保留的有效输出长度
       kernel_init: 卷积核初始化函数
-      conv_fn: 此处不再使用内置卷积函数，直接使用 overlap_and_save_convolve
-
+      mode: 'valid' 或 'same'，决定输出长度
     返回：
-      Signal 对象，其 val 为卷积结果，t 保持不变（或根据需要调整）。
+      Signal 对象，输出的 val 为卷积结果，t 为更新后的时间信息
     """
     x, t = signal
+    # 根据 mode 计算新的时间信息，使用 conv1d_t 保证与 valid 卷积输出长度一致
+    new_t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    y = overlap_and_save_convolve(x, h, block_size)
-    # 如果需要确保输出长度与输入一致，可做补零或截断，此处已截断到 x.shape[0]
-    return Signal(y, t)
+    y = overlap_and_save_convolve(x, h, block_size, mode=mode)
+    return Signal(y, new_t)
                      
 def fdbp(
     scope: Scope,
