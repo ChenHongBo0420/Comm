@@ -686,6 +686,83 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
                      
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+# ):
+#     """
+#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+#     以减少误差累积，提升整体补偿性能。
+#     """
+#     x, t = signal
+#     # 初始化自适应相位缩放因子 gamma
+#     gamma = 1.0
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     for i in range(steps):
+#         # 执行局部色散补偿步骤
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#         # 执行非线性补偿步骤：计算相位校正 c
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+#         # 这里的 error 定义可以根据实际需求进行设计
+#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
+#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+#         error = power_after - power_before
+        
+#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+#         # 注意：根据实际误差定义，可能需要调整符号
+#         gamma = gamma - mu * error
+        
+#         # 将更新后的信号作为下一步输入
+#         x = x_new
+#     return Signal(x, t)
+
+def essfm_correction(x, dz=0.1, beta2=16.0, window=7):
+    """
+    基于 ESSFM 思路的修正函数，利用高斯核对 |x|² 进行卷积，然后乘以固定参数作为修正项。
+    
+    参数（均已固定，不需外部调整）：
+      x: 输入信号（1D 复数数组）
+      dz: 固定传播步长（例如 0.1）
+      beta2: 固定二阶色散系数（例如 16.0）
+      window: 卷积窗口大小（例如 7）
+      
+    返回：
+      修正项，形状与 x 相同。
+    """
+    # 构造高斯核
+    t_lin = jnp.linspace(-window, window, 2 * window + 1)
+    sigma = window / 2.0
+    kernel = jnp.exp(-t_lin**2 / (2 * sigma**2))
+    kernel = kernel / jnp.sum(kernel)
+    # 为了利用 jax.lax.conv_general_dilated 进行卷积，将输入扩展为 [1, N, 1]
+    x_abs2 = jnp.abs(x)**2
+    x_exp = x_abs2[None, :, None]  # shape: (1, N, 1)
+    kernel_exp = kernel[None, :, None]  # shape: (1, 2*window+1, 1)
+    # 使用 'SAME' padding 保证输出长度与输入相同
+    conv_out = jax.lax.conv_general_dilated(
+        x_exp,
+        kernel_exp,
+        window_strides=(1,),
+        padding="SAME",
+        dimension_numbers=('NHW', 'OHW', 'NHW')
+    )
+    conv_out = conv_out[0, :, 0]
+    return conv_out * (beta2 * dz)
+
 def fdbp(
     scope: Scope,
     signal,
@@ -693,43 +770,41 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
+    ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
-    n_init=gauss,
-    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
-):
+    n_init=gauss):
     """
-    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-    以减少误差累积，提升整体补偿性能。
+    改进版 fdbp1：在每步非线性补偿中引入基于 ESSFM 思想的修正项，
+    固定内部参数（dz=0.1, beta2=16.0, window=7），不需要用户调整。
+    
+    此外，仍采用 vmap 包装的局部色散补偿（conv1d）和 mimoconv1d 处理非线性补偿，
+    以补偿信道内部的 SPM/IXPM。
     """
     x, t = signal
-    # 初始化自适应相位缩放因子 gamma
-    gamma = 1.0
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
+    # 固定 ESSFM 参数（内部设置，不需调整）
+    fixed_dz = 0.1
+    fixed_beta2 = 16.0
+    fixed_window = ixpm_window  # 这里保持与 ixpm_window 一致
+    
     for i in range(steps):
-        # 执行局部色散补偿步骤
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 执行非线性补偿步骤：计算相位校正 c
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        
-        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-        # 这里的 error 定义可以根据实际需求进行设计
-        power_before = jnp.mean(jnp.square(jnp.abs(x)))
-        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
-        error = power_after - power_before
-        
-        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-        # 注意：根据实际误差定义，可能需要调整符号
-        gamma = gamma - mu * error
-        
-        # 将更新后的信号作为下一步输入
-        x = x_new
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        # 计算 IXPM 部分：对信号的幅值平方在窗口内各个延迟 roll 后求均值
+        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        # 计算 ESSFM 修正项（固定参数）
+        correction = essfm_correction(x, dz=fixed_dz, beta2=fixed_beta2, window=fixed_window)
+        # 构造增强后的非线性输入：原本的 |x|² 加上 ESSFM 修正项
+        nonlinear_input = jnp.abs(x)**2 + correction
+        # 使用 mimoconv1d 处理非线性补偿
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(nonlinear_input, td),
+            taps=ntaps,
+            kernel_init=n_init)
+        # 更新信号 x
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
-
            
 # def fdbp1(
 #     scope: Scope,
