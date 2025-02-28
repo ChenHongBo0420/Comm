@@ -732,79 +732,35 @@ from jax.nn.initializers import orthogonal, zeros
 
 def essfm_correction(x, dz=0.1, beta2=16.0, window=7):
     """
-    基于 ESSFM 思路的修正函数，利用高斯核对 |x|² 进行卷积，然后乘以固定参数作为修正项。
-    
-    参数（均已固定，不需外部调整）：
-      x: 输入信号（1D 复数数组）
-      dz: 固定传播步长（例如 0.1）
-      beta2: 固定二阶色散系数（例如 16.0）
-      window: 卷积窗口大小（例如 7）
-      
-    返回：
-      修正项，形状与 x 相同。
+    基于 ESSFM 思想的修正函数，利用高斯核对 |x|² 进行 1D 卷积，
+    并乘以 (beta2*dz) 得到修正项。此处假设 x 的形状为 (N, C)，其中 C 为通道数。
+    参数均在函数内固定，不需外部调整。
     """
-    # 构造高斯核
-    t_lin = jnp.linspace(-window, window, 2 * window + 1)
+    # 计算 |x|^2, shape: (N, C)
+    x_abs2 = jnp.abs(x)**2
+
+    # 构造高斯核，长度为 2*window+1
+    t_lin = jnp.linspace(-window, window, 2*window+1)
     sigma = window / 2.0
     kernel = jnp.exp(-t_lin**2 / (2 * sigma**2))
-    kernel = kernel / jnp.sum(kernel)
-    # 为了利用 jax.lax.conv_general_dilated 进行卷积，将输入扩展为 [1, N, 1]
-    x_abs2 = jnp.abs(x)**2
-    x_exp = x_abs2[None, :, None]  # shape: (1, N, 1)
-    kernel_exp = kernel[None, :, None]  # shape: (1, 2*window+1, 1)
-    # 使用 'SAME' padding 保证输出长度与输入相同
+    kernel = kernel / jnp.sum(kernel)  # shape: (2*window+1,)
+
+    # 将 x_abs2 调整为 3D 张量：形状 (batch, length, channels)，这里 batch=1
+    x_exp = x_abs2[None, :, :]  # shape: (1, N, C)
+    # 将 kernel 调整为 3D 张量，卷积核形状要求为 (filter_width, in_channels, out_channels)
+    kernel_exp = kernel[:, None, None]  # shape: (2*window+1, 1, 1)
+    
+    # 进行1D卷积，采用 dimension_numbers 对应 ('NWC', 'WIO', 'NWC')
     conv_out = jax.lax.conv_general_dilated(
         x_exp,
         kernel_exp,
         window_strides=(1,),
         padding="SAME",
-        dimension_numbers=('NHW', 'OHW', 'NHW')
+        dimension_numbers=('NWC', 'WIO', 'NWC')
     )
-    conv_out = conv_out[0, :, 0]
+    # 恢复成形状 (N, C)
+    conv_out = conv_out[0, :, :]
     return conv_out * (beta2 * dz)
-
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    ixpm_window=7,  # IXPM 窗口大小
-    d_init=delta,
-    n_init=gauss):
-    """
-    改进版 fdbp1：在每步非线性补偿中引入基于 ESSFM 思想的修正项，
-    固定内部参数（dz=0.1, beta2=16.0, window=7），不需要用户调整。
-    
-    此外，仍采用 vmap 包装的局部色散补偿（conv1d）和 mimoconv1d 处理非线性补偿，
-    以补偿信道内部的 SPM/IXPM。
-    """
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 固定 ESSFM 参数（内部设置，不需调整）
-    fixed_dz = 0.1
-    fixed_beta2 = 16.0
-    fixed_window = ixpm_window  # 这里保持与 ixpm_window 一致
-    
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        # 计算 IXPM 部分：对信号的幅值平方在窗口内各个延迟 roll 后求均值
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-        # 计算 ESSFM 修正项（固定参数）
-        correction = essfm_correction(x, dz=fixed_dz, beta2=fixed_beta2, window=fixed_window)
-        # 构造增强后的非线性输入：原本的 |x|² 加上 ESSFM 修正项
-        nonlinear_input = jnp.abs(x)**2 + correction
-        # 使用 mimoconv1d 处理非线性补偿
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(nonlinear_input, td),
-            taps=ntaps,
-            kernel_init=n_init)
-        # 更新信号 x
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
            
 # def fdbp1(
 #     scope: Scope,
