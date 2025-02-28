@@ -761,7 +761,49 @@ def essfm_correction(x, dz=0.1, beta2=16.0, window=7):
     # 恢复成形状 (N, C)
     conv_out = conv_out[0, :, :]
     return conv_out * (beta2 * dz)
-           
+  
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    ixpm_window=7,  # IXPM 窗口大小（固定）
+    d_init=delta,
+    n_init=gauss):
+    """
+    改进版 fdbp：在每步非线性补偿中引入 ESSFM 修正项，
+    固定参数：dz=0.1, beta2=16.0, window=ixpm_window。
+    
+    此外仍采用 vmap 包装的局部色散补偿（conv1d）和 mimoconv1d 进行非线性补偿，
+    补偿信道内部的 SPM 和信道内符号间的 IXPM。
+    """
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    # 固定 ESSFM 参数
+    fixed_dz = 0.1
+    fixed_beta2 = 16.0
+    fixed_window = ixpm_window
+
+    for i in range(steps):
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 计算 IXPM 部分：对信号幅值平方在 [-ixpm_window, ixpm_window] 内各个延迟 roll 后均值
+        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        # 计算 ESSFM 修正项（固定参数）
+        correction = essfm_correction(x, dz=fixed_dz, beta2=fixed_beta2, window=fixed_window)
+        # 构造增强后的非线性输入：|x|² + 修正项
+        nonlinear_input = jnp.abs(x)**2 + correction
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(nonlinear_input, td),
+            taps=ntaps,
+            kernel_init=n_init)
+        # 更新 x（注意下标对齐，保持与原代码一致）
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
+          
 # def fdbp1(
 #     scope: Scope,
 #     signal,
