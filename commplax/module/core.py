@@ -733,10 +733,9 @@ from jax.nn.initializers import orthogonal, zeros
 def essfm_correction(x, dz=0.1, beta2=16.0, window=7):
     """
     基于 ESSFM 思想的修正函数，利用高斯核对 |x|² 进行 1D 卷积，
-    并乘以 (beta2*dz) 得到修正项。此处假设 x 的形状为 (N, C)，其中 C 为通道数。
-    参数均在函数内固定，不需外部调整。
+    并乘以 (beta2 * dz) 得到修正项。此处假设 x 的形状为 (N, C)，其中 C 为通道数。
     """
-    # 计算 |x|^2, shape: (N, C)
+    # 计算 |x|^2，shape: (N, C)
     x_abs2 = jnp.abs(x)**2
 
     # 构造高斯核，长度为 2*window+1
@@ -747,10 +746,10 @@ def essfm_correction(x, dz=0.1, beta2=16.0, window=7):
 
     # 将 x_abs2 调整为 3D 张量：形状 (batch, length, channels)，这里 batch=1
     x_exp = x_abs2[None, :, :]  # shape: (1, N, C)
-    # 将 kernel 调整为 3D 张量，卷积核形状要求为 (filter_width, in_channels, out_channels)
+    # 将 kernel 调整为卷积核要求的形状 (filter_length, in_channels, out_channels)
     kernel_exp = kernel[:, None, None]  # shape: (2*window+1, 1, 1)
     
-    # 进行1D卷积，采用 dimension_numbers 对应 ('NWC', 'WIO', 'NWC')
+    # 使用 'NWC' 形式进行 1D 卷积
     conv_out = jax.lax.conv_general_dilated(
         x_exp,
         kernel_exp,
@@ -761,7 +760,7 @@ def essfm_correction(x, dz=0.1, beta2=16.0, window=7):
     # 恢复成形状 (N, C)
     conv_out = conv_out[0, :, :]
     return conv_out * (beta2 * dz)
-  
+
 def fdbp(
     scope: Scope,
     signal,
