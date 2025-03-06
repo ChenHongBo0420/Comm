@@ -239,6 +239,57 @@ def conv1d1(
 
     return Signal(x, t)   
       
+def conv1d2(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    kernel_init=delta,
+    conv_fn=xop.convolve
+):
+    """
+    与 conv1d 类似，但默认使用 'same' 模式，
+    即输出与输入的长度相同，减少裁剪。
+    """
+    x, t = signal
+    # 同样会更新 t，但这里传入 mode='same'
+    t_same = scope.variable('const', 't',
+                            conv1d_t, t, taps, rtap, 1, 'same').value
+    # 初始化卷积核
+    h = scope.param('kernel',
+                    kernel_init,
+                    (taps,),
+                    np.complex64)
+    # 在卷积时使用 mode='same'
+    x_out = conv_fn(x, h, mode='same')
+    return Signal(x_out, t_same)
+
+def conv1d3(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    kernel_init=delta,
+    conv_fn=xop.convolve
+):
+    """
+    与 conv1d 类似，但默认使用 'same' 模式，
+    即输出与输入的长度相同，减少裁剪。
+    """
+    x, t = signal
+    # 同样会更新 t，但这里传入 mode='same'
+    t_same = scope.variable('const', 't',
+                            conv1d_t, t, taps, rtap, 1, 'same').value
+    # 初始化卷积核
+    h = scope.param('kernel',
+                    kernel_init,
+                    (taps,),
+                    np.complex64)
+    # 在卷积时使用 mode='same'
+    x_out = conv_fn(x, h, mode='same')
+    return Signal(x_out, t_same)
+
+
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
@@ -744,7 +795,7 @@ def fdbp(
 
     # 线性卷积算子（色散补偿）
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
+    dconv1 = vmap(wpartial(conv1d2, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         # ---- (1) 执行 "半步" 线性补偿 ----
         # 为了模拟半步，可以将卷积核系数缩放 sqrt(0.5)，
@@ -760,7 +811,7 @@ def fdbp(
         x = jnp.exp(1j * c) * x[t.start - td.start : x.shape[0] + t.stop - td.stop]
 
         # ---- (3) 再执行 "半步" 线性补偿 ----
-        x, td = scope.child(dconv, name='DConv_half2_%d' % i)(Signal(x, t))
+        x, td = scope.child(dconv1, name='DConv_half2_%d' % i)(Signal(x, t))
         # 这里注意保持好对应的 time index，对 t 也要做相应处理
 
     return Signal(x, t)
@@ -853,8 +904,8 @@ def fdbp1(
 
     # 定义线性补偿算子，这里仍然是“完整”的 dtaps
     # 如果想更精确地做“半步”，可以改成半步距离的色散核
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
+    dconv = vmap(wpartial(conv1d1, taps=dtaps, kernel_init=d_init))
+    dconv1 = vmap(wpartial(conv1d3, taps=dtaps, kernel_init=d_init))
     # 可训练参数 ixpm_alpha，形状为 (2*ixpm_window + 1,)
     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2 * ixpm_window + 1,))
 
@@ -879,7 +930,7 @@ def fdbp1(
         x = jnp.exp(1j * c) * x[t.start - td.start : x.shape[0] + (t.stop - td.stop)]
 
         # ---- (3) 再执行“半步”线性补偿 ----
-        x, td = scope.child(dconv, name=f'DConv_half2_{i}')(Signal(x, t))
+        x, td = scope.child(dconv1, name=f'DConv_half2_{i}')(Signal(x, t))
 
     return Signal(x, t)
 
