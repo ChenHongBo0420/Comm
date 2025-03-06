@@ -896,50 +896,55 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
+    ixpm_window=7,
     d_init=delta,
     n_init=gauss
 ):
     """
-    在每一步中并行计算：
-      1) 色散分支 (DConv)  -> xD
-      2) 非线性分支 (NConv) -> xN
-      3) 通过 att_fusion_pool() 融合 xD, xN
-      4) 将融合后的输出作为下一步输入
+    与原 fdbp1 类似，但每步中并行计算:
+      1) 色散分支 (DConv)
+      2) IXPM 非线性分支 (NConv)
+      3) 用 att_fusion_pool1() 将 xD, xN 融合
     """
-
     x, t = signal
 
-    # 建立一个卷积算子 dconv，用于色散补偿
+    # 定义色散卷积算子 (DConv)
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
     for i in range(steps):
-        # ========== 色散分支 DConv ==========
+        # ========== 色散分支 ==========  
         xD, tD = scope.child(dconv, name=f'DConv_branch_{i}')(Signal(x, t))
-        # xD.shape 可能比 x 更短 (valid 卷积模式)，也可能一样长 (same 模式)
+        # xD.shape 可能比 x.shape[0] 短 (若 mode='valid')，也可能一样长 (mode='same')
         
-        # ========== 非线性分支 NConv ==========
-        # 1) 计算相位
+        # ========== IXPM 非线性分支 ==========  
+        # 1) 计算 ixpm_power
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift)
+            for shift in range(-ixpm_window, ixpm_window+1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+
+        # 2) 调用 mimoconv1d 得到相位 c
         c, tN = scope.child(mimoconv1d, name=f'NConv_branch_{i}')(
-            Signal(jnp.abs(x)**2, t),
+            Signal(ixpm_power, t),
             taps=ntaps,
             kernel_init=n_init
         )
-        # 2) 补偿
-        #   下面索引要注意对齐
+        # 3) 应用相位补偿得到 xN
         xN = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
         
-        # ========== 注意力融合 ==========
-        # 因为 xD, xN 长度可能不同，所以用我们的 att_fusion_pool
-        x_fused = scope.child(att_fusion_pool, name=f'AttFusion_{i}')(xD, xN)
-        # x_fused 形状 => (maxLen, D)
+        # ========== 池化+注意力 融合 ==========  
+        x_fused = scope.child(att_fusion_pool1, name=f'AttFusion_{i}')(xD, xN)
+        # x_fused.shape = (maxLen, D)
 
-        # ========== 更新下一步的输入 ==========
+        # ========== 更新下一步输入 ==========  
         x = x_fused
-        # 这里仅示例把 length 改成 maxLen，并保持 sps 不变
+        # 这里仅示例把 t 重置为 (start=0, stop=0)，保留原 sps
         new_len = x_fused.shape[0]
-        t = SigTime(0, 0, t.sps)  # 例如简单地重置 start=0, stop=0
-        
+        t = SigTime(0, 0, t.sps)
+
     return Signal(x, t)
+
   
 def identity(scope, inputs):
     return inputs
