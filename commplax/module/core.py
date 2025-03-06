@@ -800,6 +800,37 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # IXPM 窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         # 对信号幅度平方进行 roll
+#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+#         # 用 softmax 得到归一化权重
+#         weights = jax.nn.softmax(ixpm_alpha)
+#         # 计算加权和
+#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+#         # 更新信号 x
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp1(
     scope: Scope,
     signal,
@@ -809,27 +840,49 @@ def fdbp1(
     sps=2,
     ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
-    n_init=gauss):
-    
+    n_init=gauss
+):
+    """
+    对称分步版本的 fdbp1，在每个step中：
+      1. 半步线性补偿
+      2. 非线性补偿 (IXPM)
+      3. 半步线性补偿
+    """
+
     x, t = signal
+
+    # 定义线性补偿算子，这里仍然是“完整”的 dtaps
+    # 如果想更精确地做“半步”，可以改成半步距离的色散核
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
+
+    # 可训练参数 ixpm_alpha，形状为 (2*ixpm_window + 1,)
+    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2 * ixpm_window + 1,))
+
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-        # 用 softmax 得到归一化权重
+        # ---- (1) 执行“半步”线性补偿 ----
+        x, td = scope.child(dconv, name=f'DConv_half1_{i}')(Signal(x, t))
+        
+        # ---- (2) 执行一次完整的非线性补偿 ----
+        #   这里与原 fdbp1 类似，用 ixpm_alpha 对 |x|^2 进行加权窗口平滑，再做相位补偿
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)
+        ]
+        # 计算归一化权重
         weights = jax.nn.softmax(ixpm_alpha)
-        # 计算加权和
+        # 计算加权和（IXPM 功率）
         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init
+        )
         # 更新信号 x
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        x = jnp.exp(1j * c) * x[t.start - td.start : x.shape[0] + (t.stop - td.stop)]
+
+        # ---- (3) 再执行“半步”线性补偿 ----
+        x, td = scope.child(dconv, name=f'DConv_half2_{i}')(Signal(x, t))
+
     return Signal(x, t)
+
 
 def identity(scope, inputs):
     return inputs
