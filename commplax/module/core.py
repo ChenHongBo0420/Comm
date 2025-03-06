@@ -702,7 +702,30 @@ from jax.nn.initializers import orthogonal, zeros
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
-                     
+def att_fusion_pool(scope, xD, xN):
+    """
+    池化 + 注意力融合：
+      1) 对 xD, xN 分别做全局平均池化 => 得到 (D,) 形状的两个向量
+      2) 用可学习的 alpha 做 softmax，加权 sum => 得到融合向量 fused (D,)
+      3) 将 fused 广播回某个长度 (如二者长度的较大值)，得到最终 (L, D)
+    """
+    # xD.shape = (lenD, D), xN.shape = (lenN, D)
+    # 1) 全局平均池化 => (D,)
+    xD_avg = jnp.mean(xD, axis=0)  # (D,)
+    xN_avg = jnp.mean(xN, axis=0)  # (D,)
+
+    # 2) 注意力加权
+    alpha = scope.param("alpha", nn.initializers.zeros, (2,))
+    alpha_norm = jax.nn.softmax(alpha)  # shape (2,)
+    fused_vec = alpha_norm[0] * xD_avg + alpha_norm[1] * xN_avg  # (D,)
+
+    # 3) 将融合向量广播回一个统一长度
+    #   通常可选用二者长度的最大值:
+    out_len = max(xD.shape[0], xN.shape[0])
+    fused_out = jnp.tile(fused_vec[None, :], (out_len, 1))  # => (out_len, D)
+
+    return fused_out
+  
 def fdbp(
     scope: Scope,
     signal,
@@ -711,41 +734,93 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+    n_init=gauss
 ):
     """
-    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-    以减少误差累积，提升整体补偿性能。
+    在每一步中并行计算：
+      1) 色散分支 (DConv)  -> xD
+      2) 非线性分支 (NConv) -> xN
+      3) 通过 att_fusion_pool() 融合 xD, xN
+      4) 将融合后的输出作为下一步输入
     """
+
     x, t = signal
-    # 初始化自适应相位缩放因子 gamma
-    gamma = 1.0
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+
+    # 建立一个卷积算子 dconv，用于色散补偿
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
+
     for i in range(steps):
-        # 执行局部色散补偿步骤
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 执行非线性补偿步骤：计算相位校正 c
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # ========== 色散分支 DConv ==========
+        xD, tD = scope.child(dconv, name=f'DConv_branch_{i}')(Signal(x, t))
+        # xD.shape 可能比 x 更短 (valid 卷积模式)，也可能一样长 (same 模式)
         
-        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-        # 这里的 error 定义可以根据实际需求进行设计
-        power_before = jnp.mean(jnp.square(jnp.abs(x)))
-        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
-        error = power_after - power_before
+        # ========== 非线性分支 NConv ==========
+        # 1) 计算相位
+        c, tN = scope.child(mimoconv1d, name=f'NConv_branch_{i}')(
+            Signal(jnp.abs(x)**2, t),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 2) 补偿
+        #   下面索引要注意对齐
+        xN = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
         
-        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-        # 注意：根据实际误差定义，可能需要调整符号
-        gamma = gamma - mu * error
+        # ========== 注意力融合 ==========
+        # 因为 xD, xN 长度可能不同，所以用我们的 att_fusion_pool
+        x_fused = scope.child(att_fusion_pool, name=f'AttFusion_{i}')(xD, xN)
+        # x_fused 形状 => (maxLen, D)
+
+        # ========== 更新下一步的输入 ==========
+        x = x_fused
+        # 这里仅示例把 length 改成 maxLen，并保持 sps 不变
+        new_len = x_fused.shape[0]
+        t = SigTime(0, 0, t.sps)  # 例如简单地重置 start=0, stop=0
         
-        # 将更新后的信号作为下一步输入
-        x = x_new
     return Signal(x, t)
+                    
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+# ):
+#     """
+#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+#     以减少误差累积，提升整体补偿性能。
+#     """
+#     x, t = signal
+#     # 初始化自适应相位缩放因子 gamma
+#     gamma = 1.0
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     for i in range(steps):
+#         # 执行局部色散补偿步骤
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#         # 执行非线性补偿步骤：计算相位校正 c
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+#         # 这里的 error 定义可以根据实际需求进行设计
+#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
+#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+#         error = power_after - power_before
+        
+#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+#         # 注意：根据实际误差定义，可能需要调整符号
+#         gamma = gamma - mu * error
+        
+#         # 将更新后的信号作为下一步输入
+#         x = x_new
+#     return Signal(x, t)
 
 
 # def fdbp1(
