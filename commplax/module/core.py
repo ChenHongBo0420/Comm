@@ -730,41 +730,41 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = x_new
 #     return Signal(x, t)
 
-def complex_to_channels(x_cplx: jnp.ndarray) -> jnp.ndarray:
+def complex_to_channels(x: jnp.ndarray) -> jnp.ndarray:
     """
-    将形状为 (N,) 的复数向量 x_cplx 拆分为形状 (N, 2) 的实部/虚部通道。
-    若输入本身就有形状 (N, C) 或 (N, 2)，需根据情况做更细致的处理。
+    将形状 (N, ...) 的复数张量拆分为实部和虚部，最后一个维度扩展为2。
     """
-    return jnp.stack([jnp.real(x_cplx), jnp.imag(x_cplx)], axis=-1)
+    return jnp.stack([jnp.real(x), jnp.imag(x)], axis=-1)
 
-def channels_to_complex(x_ch: jnp.ndarray) -> jnp.ndarray:
+def channels_to_complex(x: jnp.ndarray) -> jnp.ndarray:
     """
-    将形状 (N, 2) 的实数通道合并回 (N,) 的复数向量。
+    将最后一维为2的张量（实部、虚部）合并回复数形式。
     """
-    return x_ch[..., 0] + 1j * x_ch[..., 1]
+    return x[..., 0] + 1j * x[..., 1]
 
-def dispersion_nonlinear_attention(scope: Scope, x_disp: jnp.ndarray, x_nl: jnp.ndarray):
-    """
-    简化版“色散–非线性”注意力融合模块。
-    假设 x_disp, x_nl 形状相同，且均为 (N, 2) 代表复数的实虚通道。
-    """
-    # 1) 将两个分支拼接起来: shape (N, 4)
-    x_cat = jnp.concatenate([x_disp, x_nl], axis=-1)
+class Disp_NL_Attention(nn.Module):
+    channel: int
+    reduct_ratio: int = 4
+    bias: bool = True
 
-    # 2) 全连接层：将 (N, 4) -> (N, 2)，再做激活，得到注意力权重 alpha
-    #   这里仅做演示，可用 MLP / multi-head attention 等更复杂结构
-    W = scope.param('attn_weight', nn.initializers.xavier_uniform(), (4, 2), jnp.float32)
-    b = scope.param('attn_bias', nn.initializers.zeros, (2,), jnp.float32)
-    alpha = jnp.tanh(x_cat @ W + b)  # shape (N, 2)
-
-    # 3) 将 alpha 的前一半视为对 x_disp 的权重，后一半视为对 x_nl 的权重
-    #   也可以改为 softmax 等方式
-    alpha_disp = alpha[..., 0:1]  # shape (N, 1)
-    alpha_nl   = alpha[..., 1:2]  # shape (N, 1)
-
-    # 4) 计算融合输出
-    out = alpha_disp * x_disp + alpha_nl * x_nl  # shape (N, 2)
-    return out
+    @nn.compact
+    def __call__(self, x_disp, x_nl):
+        # x_disp, x_nl: (N, C, 2)
+        # 可以先对两个分支做全局平均（或沿时间维度统计），这里简单采用 element-wise 拼接
+        # 拼接后 shape: (N, C, 4)
+        x_cat = jnp.concatenate([x_disp, x_nl], axis=-1)
+        # 使用一个 1x1 卷积（即全连接）进行特征融合
+        inner_channel = self.channel // self.reduct_ratio
+        x_att = nn.Conv(features=inner_channel, kernel_size=(1,), use_bias=self.bias)(x_cat)
+        x_att = nn.BatchNorm()(x_att)
+        x_att = nn.hardswish(x_att)
+        # 分支出两个注意力系数，分别用于 x_disp 和 x_nl，输出形状 (N, C, 2)
+        x_att = nn.Conv(features=self.channel, kernel_size=(1,))(x_att)
+        # 通过 sigmoid 限制到 [0,1]
+        att = nn.sigmoid(x_att)
+        # 假设 att[..., 0] 对应 x_disp，att[..., 1] 对应 x_nl
+        x_fused = att[..., 0:1] * x_disp + att[..., 1:2] * x_nl
+        return x_fused  # shape (N, C, 2)
   
 def fdbp(
     scope: Scope,
@@ -776,44 +776,42 @@ def fdbp(
     d_init=delta,
     n_init=gauss):
     """
-    在传统 fdbp 的每步中添加“并行分支 + 注意力融合”的示例。
+    改进版 DBP：在每一步中并行计算色散分支和非线性补偿分支，
+    然后通过注意力模块融合二者的输出，以捕捉色散与非线性之间的交互信息。
+    注意：这里假设两条分支的时间切片已经对齐。
     """
     x, t = signal
+
     # 构造局部色散补偿算子
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     for i in range(steps):
-        # 1) 色散分支 (Linear Branch)
-        x_disp, td_disp = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 色散分支：得到经过线性（色散）补偿的信号
+        x_disp, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 非线性分支：对原信号的幅值平方进行非线性补偿
+        c, t_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, t), taps=ntaps, kernel_init=n_init)
+        x_nl = jnp.exp(1j * c) * x[t_nl.start - t.start: t_nl.stop - t.stop + x.shape[0]]
         
-        # 2) 非线性分支 (Nonlinear Branch)
-        c, td_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, t),  # 这里要确保传入同一个 t 或者调 td_disp
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 注意要对齐索引
-        x_nl = jnp.exp(1j * c) * x[td_nl.start - t.start : td_nl.stop - t.stop + x.shape[0]]
+        # 这里我们要求 td 与 t_nl 对齐，若不一致，则采用截断或补零使其对齐
+        common_len = min(x_disp.shape[0], x_nl.shape[0])
+        x_disp = x_disp[:common_len]
+        x_nl = x_nl[:common_len]
         
-        # 3) 将二者转为实虚通道
+        # 转换为实虚通道表示：形状 (N, C, 2)
         x_disp_ch = complex_to_channels(x_disp)
         x_nl_ch   = complex_to_channels(x_nl)
         
-        # 4) 注意力融合
-        x_merged_ch = scope.child(dispersion_nonlinear_attention, name=f'Attn_{i}')(
-            x_disp_ch, x_nl_ch
-        )
+        # 注意力融合：利用注意力模块对色散分支和非线性分支进行加权融合
+        att_module = Disp_NL_Attention(channel=x_disp_ch.shape[1])
+        x_fused_ch = scope.child(att_module, name=f'Attn_{i}')(x_disp_ch, x_nl_ch)
         
-        # 5) 转回复数并更新 x
-        x_merged = channels_to_complex(x_merged_ch)
-        x = x_merged
+        # 转回复数形式
+        x = channels_to_complex(x_fused_ch)
+        t = td  # 假设 td 为更新后的时间信息
         
-        # 6) 时间轴以哪一个为准？
-        #   如果线性与非线性分支的 t 不同，需要做一次对齐或选择
-        #   简单起见，假设 td_disp == td_nl 并等于 t（或把 x_disp, x_nl 都做相同的切片）
-        t = td_disp
-    
     return Signal(x, t)
+
 
 
 
