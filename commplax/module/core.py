@@ -858,6 +858,37 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # IXPM 窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d1, taps=dtaps, kernel_init=d_init))
+    
+#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+#         # 对信号幅度平方进行 roll
+#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+#         # 用 softmax 得到归一化权重
+#         weights = jax.nn.softmax(ixpm_alpha)
+#         # 计算加权和
+#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+#         c, t = scope.child(mimoconv1d1, name='NConv1_%d' % i)(
+#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+#         # 更新信号 x
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp1(
     scope: Scope,
     signal,
@@ -865,31 +896,51 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
-    n_init=gauss):
-    
+    n_init=gauss
+):
+    """
+    在每一步中并行计算：
+      1) 色散分支 (DConv)  -> xD
+      2) 非线性分支 (NConv) -> xN
+      3) 通过 att_fusion_pool() 融合 xD, xN
+      4) 将融合后的输出作为下一步输入
+    """
+
     x, t = signal
-    dconv = vmap(wpartial(conv1d1, taps=dtaps, kernel_init=d_init))
-    
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
+
+    # 建立一个卷积算子 dconv，用于色散补偿
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-        # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-        # 用 softmax 得到归一化权重
-        weights = jax.nn.softmax(ixpm_alpha)
-        # 计算加权和
-        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d1, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-        # 更新信号 x
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # ========== 色散分支 DConv ==========
+        xD, tD = scope.child(dconv, name=f'DConv_branch_{i}')(Signal(x, t))
+        # xD.shape 可能比 x 更短 (valid 卷积模式)，也可能一样长 (same 模式)
+        
+        # ========== 非线性分支 NConv ==========
+        # 1) 计算相位
+        c, tN = scope.child(mimoconv1d, name=f'NConv_branch_{i}')(
+            Signal(jnp.abs(x)**2, t),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 2) 补偿
+        #   下面索引要注意对齐
+        xN = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
+        
+        # ========== 注意力融合 ==========
+        # 因为 xD, xN 长度可能不同，所以用我们的 att_fusion_pool
+        x_fused = scope.child(att_fusion_pool, name=f'AttFusion_{i}')(xD, xN)
+        # x_fused 形状 => (maxLen, D)
+
+        # ========== 更新下一步的输入 ==========
+        x = x_fused
+        # 这里仅示例把 length 改成 maxLen，并保持 sps 不变
+        new_len = x_fused.shape[0]
+        t = SigTime(0, 0, t.sps)  # 例如简单地重置 start=0, stop=0
+        
     return Signal(x, t)
-
-
+  
 def identity(scope, inputs):
     return inputs
 
