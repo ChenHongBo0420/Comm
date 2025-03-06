@@ -238,56 +238,6 @@ def conv1d1(
     x = conv_fn(x, h, mode=mode)
 
     return Signal(x, t)   
-      
-def conv1d2(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    kernel_init=delta,
-    conv_fn=xop.convolve
-):
-    """
-    与 conv1d 类似，但默认使用 'same' 模式，
-    即输出与输入的长度相同，减少裁剪。
-    """
-    x, t = signal
-    # 同样会更新 t，但这里传入 mode='same'
-    t_same = scope.variable('const', 't',
-                            conv1d_t, t, taps, rtap, 1, 'same').value
-    # 初始化卷积核
-    h = scope.param('kernel',
-                    kernel_init,
-                    (taps,),
-                    np.complex64)
-    # 在卷积时使用 mode='same'
-    x_out = conv_fn(x, h, mode='same')
-    return Signal(x_out, t_same)
-
-def conv1d3(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    kernel_init=delta,
-    conv_fn=xop.convolve
-):
-    """
-    与 conv1d 类似，但默认使用 'same' 模式，
-    即输出与输入的长度相同，减少裁剪。
-    """
-    x, t = signal
-    # 同样会更新 t，但这里传入 mode='same'
-    t_same = scope.variable('const', 't',
-                            conv1d_t, t, taps, rtap, 1, 'same').value
-    # 初始化卷积核
-    h = scope.param('kernel',
-                    kernel_init,
-                    (taps,),
-                    np.complex64)
-    # 在卷积时使用 mode='same'
-    x_out = conv_fn(x, h, mode='same')
-    return Signal(x_out, t_same)
 
 
 def kernel_initializer(rng, shape):
@@ -308,7 +258,23 @@ def mimoconv1d(
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
+      
+def mimoconv1d1(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    dims=2,
+    mode='valid',
+    kernel_init=zeros,
+    conv_fn=xop.convolve):
 
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
+    y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
+    return Signal(y, t)
+      
 def mimofoeaf(scope: Scope,
               signal,
               framesize=100,
@@ -835,14 +801,14 @@ def fdbp1(
     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
     
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
         # 对信号幅度平方进行 roll
         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
         # 用 softmax 得到归一化权重
         weights = jax.nn.softmax(ixpm_alpha)
         # 计算加权和
         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+        c, t = scope.child(mimoconv1d1, name='NConv1_%d' % i)(
             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
         # 更新信号 x
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
