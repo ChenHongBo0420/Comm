@@ -686,49 +686,136 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
                      
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+# ):
+#     """
+#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+#     以减少误差累积，提升整体补偿性能。
+#     """
+#     x, t = signal
+#     # 初始化自适应相位缩放因子 gamma
+#     gamma = 1.0
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     for i in range(steps):
+#         # 执行局部色散补偿步骤
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#         # 执行非线性补偿步骤：计算相位校正 c
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+#         # 这里的 error 定义可以根据实际需求进行设计
+#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
+#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+#         error = power_after - power_before
+        
+#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+#         # 注意：根据实际误差定义，可能需要调整符号
+#         gamma = gamma - mu * error
+        
+#         # 将更新后的信号作为下一步输入
+#         x = x_new
+#     return Signal(x, t)
+
+def complex_to_channels(x_cplx: jnp.ndarray) -> jnp.ndarray:
+    """
+    将形状为 (N,) 的复数向量 x_cplx 拆分为形状 (N, 2) 的实部/虚部通道。
+    若输入本身就有形状 (N, C) 或 (N, 2)，需根据情况做更细致的处理。
+    """
+    return jnp.stack([jnp.real(x_cplx), jnp.imag(x_cplx)], axis=-1)
+
+def channels_to_complex(x_ch: jnp.ndarray) -> jnp.ndarray:
+    """
+    将形状 (N, 2) 的实数通道合并回 (N,) 的复数向量。
+    """
+    return x_ch[..., 0] + 1j * x_ch[..., 1]
+
+def dispersion_nonlinear_attention(scope: Scope, x_disp: jnp.ndarray, x_nl: jnp.ndarray):
+    """
+    简化版“色散–非线性”注意力融合模块。
+    假设 x_disp, x_nl 形状相同，且均为 (N, 2) 代表复数的实虚通道。
+    """
+    # 1) 将两个分支拼接起来: shape (N, 4)
+    x_cat = jnp.concatenate([x_disp, x_nl], axis=-1)
+
+    # 2) 全连接层：将 (N, 4) -> (N, 2)，再做激活，得到注意力权重 alpha
+    #   这里仅做演示，可用 MLP / multi-head attention 等更复杂结构
+    W = scope.param('attn_weight', nn.initializers.xavier_uniform(), (4, 2), jnp.float32)
+    b = scope.param('attn_bias', nn.initializers.zeros, (2,), jnp.float32)
+    alpha = jnp.tanh(x_cat @ W + b)  # shape (N, 2)
+
+    # 3) 将 alpha 的前一半视为对 x_disp 的权重，后一半视为对 x_nl 的权重
+    #   也可以改为 softmax 等方式
+    alpha_disp = alpha[..., 0:1]  # shape (N, 1)
+    alpha_nl   = alpha[..., 1:2]  # shape (N, 1)
+
+    # 4) 计算融合输出
+    out = alpha_disp * x_disp + alpha_nl * x_nl  # shape (N, 2)
+    return out
+  
 def fdbp(
     scope: Scope,
-    signal,
+    signal: Signal,
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
-):
+    n_init=gauss):
     """
-    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-    以减少误差累积，提升整体补偿性能。
+    在传统 fdbp 的每步中添加“并行分支 + 注意力融合”的示例。
     """
     x, t = signal
-    # 初始化自适应相位缩放因子 gamma
-    gamma = 1.0
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    # 构造局部色散补偿算子
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     for i in range(steps):
-        # 执行局部色散补偿步骤
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 执行非线性补偿步骤：计算相位校正 c
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # 1) 色散分支 (Linear Branch)
+        x_disp, td_disp = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         
-        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-        # 这里的 error 定义可以根据实际需求进行设计
-        power_before = jnp.mean(jnp.square(jnp.abs(x)))
-        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
-        error = power_after - power_before
+        # 2) 非线性分支 (Nonlinear Branch)
+        c, td_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, t),  # 这里要确保传入同一个 t 或者调 td_disp
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 注意要对齐索引
+        x_nl = jnp.exp(1j * c) * x[td_nl.start - t.start : td_nl.stop - t.stop + x.shape[0]]
         
-        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-        # 注意：根据实际误差定义，可能需要调整符号
-        gamma = gamma - mu * error
+        # 3) 将二者转为实虚通道
+        x_disp_ch = complex_to_channels(x_disp)
+        x_nl_ch   = complex_to_channels(x_nl)
         
-        # 将更新后的信号作为下一步输入
-        x = x_new
+        # 4) 注意力融合
+        x_merged_ch = scope.child(dispersion_nonlinear_attention, name=f'Attn_{i}')(
+            x_disp_ch, x_nl_ch
+        )
+        
+        # 5) 转回复数并更新 x
+        x_merged = channels_to_complex(x_merged_ch)
+        x = x_merged
+        
+        # 6) 时间轴以哪一个为准？
+        #   如果线性与非线性分支的 t 不同，需要做一次对齐或选择
+        #   简单起见，假设 td_disp == td_nl 并等于 t（或把 x_disp, x_nl 都做相同的切片）
+        t = td_disp
+    
     return Signal(x, t)
+
+
 
 # def fdbp1(
 #     scope: Scope,
