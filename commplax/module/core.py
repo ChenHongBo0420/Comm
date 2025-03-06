@@ -730,6 +730,40 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = x_new
 #     return Signal(x, t)
 
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss
+):
+    x, t = signal
+
+    # 线性卷积算子（色散补偿）
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    for i in range(steps):
+        # ---- (1) 执行 "半步" 线性补偿 ----
+        # 为了模拟半步，可以将卷积核系数缩放 sqrt(0.5)，
+        # 或者干脆拆分总步长的一半，也可以用更灵活的思路实现。
+        x, td = scope.child(dconv, name='DConv_half1_%d' % i)(Signal(x, t))
+        
+        # ---- (2) 执行一次完整非线性补偿 ----
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        x = jnp.exp(1j * c) * x[t.start - td.start : x.shape[0] + t.stop - td.stop]
+
+        # ---- (3) 再执行 "半步" 线性补偿 ----
+        x, td = scope.child(dconv, name='DConv_half2_%d' % i)(Signal(x, t))
+        # 这里注意保持好对应的 time index，对 t 也要做相应处理
+
+    return Signal(x, t)
 
 # def fdbp1(
 #     scope: Scope,
