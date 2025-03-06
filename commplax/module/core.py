@@ -888,6 +888,28 @@ def fdbp(
 #         # 更新信号 x
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
+def att_fusion_pool1(scope, xD, xN):
+    """
+    简易的“池化 + 注意力加权 + 广播”示例：
+      xD, xN 分别是 (lenD, D) 和 (lenN, D)，长度可能不同。
+    1) 分别对 xD, xN 做全局平均池化 => 得到 (D,) x2
+    2) 用可学习的 alpha 对这两个向量做加权 => fused_vec (D,)
+    3) 将 fused_vec 广播到长度 max(lenD, lenN)，返回 (maxLen, D)
+    """
+    # 1) 全局平均池化
+    xD_avg = jnp.mean(xD, axis=0)  # (D,)
+    xN_avg = jnp.mean(xN, axis=0)  # (D,)
+
+    # 2) 注意力加权
+    alpha = scope.param("alpha", nn.initializers.zeros, (2,))  # shape (2,)
+    alpha_norm = jax.nn.softmax(alpha)  # 让两路注意力之和=1
+    fused_vec = alpha_norm[0] * xD_avg + alpha_norm[1] * xN_avg  # (D,)
+
+    # 3) 广播到统一长度
+    out_len = max(xD.shape[0], xN.shape[0])
+    fused_out = jnp.tile(fused_vec[None, :], (out_len, 1))  # => (out_len, D)
+
+    return fused_out
 
 def fdbp1(
     scope: Scope,
