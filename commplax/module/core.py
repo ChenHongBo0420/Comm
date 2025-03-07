@@ -585,7 +585,7 @@ def fdbp(
         att2 = complex_channel_attention(x)
         attention = att1 * att2
         attention = jnp.tile(attention, (x.shape[0], 1))
-        x = x * attention
+        x = attention
     return Signal(x, t)
       
 # def fdbp(
