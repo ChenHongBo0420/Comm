@@ -525,137 +525,16 @@ def complex_channel_attention(x):
         
 #         return output
 
-# class SSM:
-#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-#         self.hidden_size1 = hidden_size1
-#         self.hidden_size2 = hidden_size2
-
-#         # 状态转移矩阵 A 和输入矩阵 B
-#         self.A1 = orthogonal()(random.PRNGKey(0), (hidden_size1, hidden_size1))
-#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-#         self.A2 = orthogonal()(random.PRNGKey(2), (hidden_size2, hidden_size2))
-#         self.B2 = orthogonal()(random.PRNGKey(3), (hidden_size1, hidden_size2))
-
-#         # 观测矩阵 C
-#         self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
-    
-#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
-#         if hidden_state1 is None:
-#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-#         if hidden_state2 is None:
-#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
-#         # 状态方程
-#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-        
-#         # 观测方程
-#         output = jnp.dot(hidden_state2, self.C)
-        
-#         return output
-
 def generate_hippo_matrix(size):
     n = size
     P = jnp.arange(1, n+1)
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
+  
 from jax.nn.initializers import normal
-# def twolayerrnn(scope, signal, 
-#                   hidden_state1=None, hidden_state2=None,
-#                   input_dim=None, 
-#                   hidden_size1=2, hidden_size2=2, output_dim=2):
-#     """
-#     两层 RNN 的前向传播函数，接口与 conv1d1 类似：
-#       - scope: 用于参数和常量的初始化（如 scope.param、scope.variable）
-#       - signal: 一个包含 (x, t) 的元组，此处仅使用 x 作为输入
-#       - hidden_state1, hidden_state2: 可选的初始隐藏状态，若未提供则初始化为零张量
-#       - input_dim: 如果没有从 signal 中获得，则需要明确指定输入维度
-
-#     返回:
-#       Signal 对象，包含输出和时间向量 t（此处 t 来自 signal 中）
-#     """
-#     # 从 signal 中提取输入数据 x 和时间信息 t（t 可用于调试或传递给后续模块）
-#     x, t = signal
-
-#     # 若未显式提供输入维度，则从 x 中推断（假设 x 的最后一个维度为 input_dim）
-#     if input_dim is None:
-#         input_dim = x.shape[-1]
-
-#     # 初始化 HIPPO 状态转移矩阵作为常量（使用 scope.variable）
-#     A1 = scope.variable('const', 'A1', generate_hippo_matrix, hidden_size1).value
-#     A2 = scope.variable('const', 'A2', generate_hippo_matrix, hidden_size2).value
-
-#     # 使用 scope.param 初始化可训练参数矩阵
-#     B1 = scope.param('B1', orthogonal(), (input_dim, hidden_size1), jnp.float32)
-#     B2 = scope.param('B2', orthogonal(), (hidden_size1, hidden_size2), jnp.float32)
-#     C  = scope.param('C', orthogonal(), (hidden_size2, output_dim), jnp.float32)
-
-#     # 初始化隐藏状态（若未提供，则使用零张量，batch_size 从 x 的第一维推断）
-#     batch_size = x.shape[0]
-#     if hidden_state1 is None:
-#         hidden_state1 = jnp.zeros((batch_size, hidden_size1))
-#     if hidden_state2 is None:
-#         hidden_state2 = jnp.zeros((batch_size, hidden_size2))
-
-#     # 第一层 RNN 状态更新与注意力机制
-#     hidden_state1 = jnp.dot(hidden_state1, A1) + jnp.dot(x, B1)
-#     # hidden_state1 = squeeze_excite_attention(hidden_state1)
-
-#     # 第二层 RNN 状态更新与注意力机制
-#     hidden_state2 = jnp.dot(hidden_state2, A2) + jnp.dot(hidden_state1, B2)
-#     # hidden_state2 = complex_channel_attention(hidden_state2)
-
-#     # 输出：使用观测矩阵 C 得到最终输出
-#     output = jnp.dot(hidden_state2, C)
-#     return Signal(output, t)
-
-from jax.nn.initializers import orthogonal, zeros
-
 import jax
 import jax.numpy as jnp
 from jax.nn.initializers import orthogonal, zeros
-
-import jax
-import jax.numpy as jnp
-from jax.nn.initializers import orthogonal, zeros
-
-                   
-# class ThreeLayerRNN_SSM:
-#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
-#         self.hidden_size1 = hidden_size1
-#         self.hidden_size2 = hidden_size2
-  
-
-#         # 使用 HIPPO 矩阵初始化状态转移矩阵 A
-#         self.A1 = generate_hippo_matrix(hidden_size1)
-#         self.A2 = generate_hippo_matrix(hidden_size2)
-#         self.A3 = generate_hippo_matrix(hidden_size2)
-        
-#         # 输入矩阵 B
-#         self.B1 = orthogonal()(random.PRNGKey(1), (input_dim, hidden_size1))
-#         self.B2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
-#         self.B3 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
-
-#         # 观测矩阵 C
-#         self.C = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
-    
-#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
-      
-#         if hidden_state1 is None:
-#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
-#         if hidden_state2 is None:
-#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
-        
-#         # 第一层状态更新
-#         hidden_state1 = jnp.dot(hidden_state1, self.A1) + jnp.dot(x, self.B1)
-        
-#         hidden_state2 = jnp.dot(hidden_state2, self.A2) + jnp.dot(hidden_state1, self.B2)
-
-#         hidden_state3 = jnp.dot(hidden_state2, self.A3) + jnp.dot(hidden_state2, self.B3)
-        
-#         output = jnp.dot(hidden_state2, self.C)
-  
-#         return output
 
 
 # def weighted_interaction(x1, x2):
@@ -666,6 +545,25 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp(
     scope: Scope,
     signal,
@@ -679,13 +577,13 @@ def fdbp(
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
-
-                    
+      
 # def fdbp(
 #     scope: Scope,
 #     signal,
