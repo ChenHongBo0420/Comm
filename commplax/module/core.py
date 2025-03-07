@@ -577,15 +577,16 @@ def fdbp(
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        att1 = complex_channel_attention(x)
+        avg_pool1 = jnp.max(x, axis=0, keepdims=True)
+        attention1 = jnp.tanh(avg_pool1)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        att2 = complex_channel_attention(x)
-        attention = att1 * att2
-        attention = jnp.tile(attention, (x.shape[0], 1))
-        x = attention
+        avg_pool2 = jnp.max(x, axis=0, keepdims=True)
+        attention2 = jnp.tanh(avg_pool2) 
+        attention1 = jnp.tile(attention1, (x.shape[0], 1))
+        x = attention1 * x
     return Signal(x, t)
       
 # def fdbp(
