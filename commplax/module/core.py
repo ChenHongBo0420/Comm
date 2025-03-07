@@ -452,24 +452,6 @@ def channel_shuffle(x, groups):
 
 from jax.nn.initializers import orthogonal
 from jax.nn.initializers import orthogonal, glorot_uniform 
-# ############### 
-
-# def squeeze_excite_attention(x):
-#     avg_pool = jnp.max(x, axis=0, keepdims=True)
-#     attention = jnp.tanh(avg_pool)
-#     attention = jnp.tile(attention, (x.shape[0], 1))
-#     x = x * attention
-#     return x
-
-# def complex_channel_attention(x):
-#     x_real = jnp.real(x)
-#     x_imag = jnp.imag(x)
-#     x_real = squeeze_excite_attention(x_real)
-#     x_imag = squeeze_excite_attention(x_imag)
-#     x = x_real + 1j * x_imag
-#     return x
-# ###############  
-
 
 
 # class LinearRNN:
