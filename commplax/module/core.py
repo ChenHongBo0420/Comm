@@ -584,7 +584,8 @@ def fdbp(
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         avg_pool2 = jnp.max(x, axis=0, keepdims=True)
-        attention2 = jnp.tanh(avg_pool2) 
+        attention2 = jnp.tanh(avg_pool2)
+        attention1 = attention1 * attention2
         attention1 = jnp.tile(attention1, (x.shape[0], 1))
         x = attention1 * x
     return Signal(x, t)
