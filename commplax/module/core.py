@@ -666,48 +666,6 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-def att_fusion_pool(scope, xD, xN):
-    """
-    池化 + 注意力融合：
-      1) 对 xD, xN 分别做全局平均池化 => 得到 (D,) 形状的两个向量
-      2) 用可学习的 alpha 做 softmax，加权 sum => 得到融合向量 fused (D,)
-      3) 将 fused 广播回某个长度 (如二者长度的较大值)，得到最终 (L, D)
-    """
-    # xD.shape = (lenD, D), xN.shape = (lenN, D)
-    # 1) 全局平均池化 => (D,)
-    xD_avg = jnp.mean(xD, axis=0)  # (D,)
-    xN_avg = jnp.mean(xN, axis=0)  # (D,)
-
-    # 2) 注意力加权
-    alpha = scope.param("alpha", nn.initializers.zeros, (2,))
-    alpha_norm = jax.nn.softmax(alpha)  # shape (2,)
-    fused_vec = alpha_norm[0] * xD_avg + alpha_norm[1] * xN_avg  # (D,)
-
-    # 3) 将融合向量广播回一个统一长度
-    #   通常可选用二者长度的最大值:
-    out_len = max(xD.shape[0], xN.shape[0])
-    fused_out = jnp.tile(fused_vec[None, :], (out_len, 1))  # => (out_len, D)
-
-    return fused_out
-  
 def fdbp(
     scope: Scope,
     signal,
@@ -716,49 +674,17 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss
-):
-    """
-    在每一步中并行计算：
-      1) 色散分支 (DConv)  -> xD
-      2) 非线性分支 (NConv) -> xN
-      3) 通过 att_fusion_pool() 融合 xD, xN
-      4) 将融合后的输出作为下一步输入
-    """
-
+    n_init=gauss):
     x, t = signal
-
-    # 建立一个卷积算子 dconv，用于色散补偿
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
     for i in range(steps):
-        # ========== 色散分支 DConv ==========
-        xD, tD = scope.child(dconv, name=f'DConv_branch_{i}')(Signal(x, t))
-        # xD.shape 可能比 x 更短 (valid 卷积模式)，也可能一样长 (same 模式)
-        
-        # ========== 非线性分支 NConv ==========
-        # 1) 计算相位
-        c, tN = scope.child(mimoconv1d, name=f'NConv_branch_{i}')(
-            Signal(jnp.abs(x)**2, t),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 2) 补偿
-        #   下面索引要注意对齐
-        xN = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
-        
-        # ========== 注意力融合 ==========
-        # 因为 xD, xN 长度可能不同，所以用我们的 att_fusion_pool
-        x_fused = scope.child(att_fusion_pool, name=f'AttFusion_{i}')(xD, xN)
-        # x_fused 形状 => (maxLen, D)
-
-        # ========== 更新下一步的输入 ==========
-        x = x_fused
-        # 这里仅示例把 length 改成 maxLen，并保持 sps 不变
-        new_len = x_fused.shape[0]
-        t = SigTime(0, 0, t.sps)  # 例如简单地重置 start=0, stop=0
-        
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
+
                     
 # def fdbp(
 #     scope: Scope,
@@ -840,59 +766,6 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-# def fdbp1(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     ixpm_window=7,  # IXPM 窗口大小
-#     d_init=delta,
-#     n_init=gauss):
-    
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d1, taps=dtaps, kernel_init=d_init))
-    
-#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-#         # 对信号幅度平方进行 roll
-#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-#         # 用 softmax 得到归一化权重
-#         weights = jax.nn.softmax(ixpm_alpha)
-#         # 计算加权和
-#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-#         c, t = scope.child(mimoconv1d1, name='NConv1_%d' % i)(
-#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-#         # 更新信号 x
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-def att_fusion_pool1(scope, xD, xN):
-    """
-    简易的“池化 + 注意力加权 + 广播”示例：
-      xD, xN 分别是 (lenD, D) 和 (lenN, D)，长度可能不同。
-    1) 分别对 xD, xN 做全局平均池化 => 得到 (D,) x2
-    2) 用可学习的 alpha 对这两个向量做加权 => fused_vec (D,)
-    3) 将 fused_vec 广播到长度 max(lenD, lenN)，返回 (maxLen, D)
-    """
-    # 1) 全局平均池化
-    xD_avg = jnp.mean(xD, axis=0)  # (D,)
-    xN_avg = jnp.mean(xN, axis=0)  # (D,)
-
-    # 2) 注意力加权
-    alpha = scope.param("alpha", nn.initializers.zeros, (2,))  # shape (2,)
-    alpha_norm = jax.nn.softmax(alpha)  # 让两路注意力之和=1
-    fused_vec = alpha_norm[0] * xD_avg + alpha_norm[1] * xN_avg  # (D,)
-
-    # 3) 广播到统一长度
-    out_len = max(xD.shape[0], xN.shape[0])
-    fused_out = jnp.tile(fused_vec[None, :], (out_len, 1))  # => (out_len, D)
-
-    return fused_out
-
 def fdbp1(
     scope: Scope,
     signal,
@@ -900,55 +773,29 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,
+    ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
-    n_init=gauss
-):
-    """
-    与原 fdbp1 类似，但每步中并行计算:
-      1) 色散分支 (DConv)
-      2) IXPM 非线性分支 (NConv)
-      3) 用 att_fusion_pool1() 将 xD, xN 融合
-    """
+    n_init=gauss):
+    
     x, t = signal
-
-    # 定义色散卷积算子 (DConv)
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
+    dconv = vmap(wpartial(conv1d1, taps=dtaps, kernel_init=d_init))
+    
+    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
     for i in range(steps):
-        # ========== 色散分支 ==========  
-        xD, tD = scope.child(dconv, name=f'DConv_branch_{i}')(Signal(x, t))
-        # xD.shape 可能比 x.shape[0] 短 (若 mode='valid')，也可能一样长 (mode='same')
-        
-        # ========== IXPM 非线性分支 ==========  
-        # 1) 计算 ixpm_power
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift)
-            for shift in range(-ixpm_window, ixpm_window+1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-
-        # 2) 调用 mimoconv1d 得到相位 c
-        c, tN = scope.child(mimoconv1d, name=f'NConv_branch_{i}')(
-            Signal(ixpm_power, t),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 3) 应用相位补偿得到 xN
-        xN = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
-        
-        # ========== 池化+注意力 融合 ==========  
-        x_fused = scope.child(att_fusion_pool1, name=f'AttFusion_{i}')(xD, xN)
-        # x_fused.shape = (maxLen, D)
-
-        # ========== 更新下一步输入 ==========  
-        x = x_fused
-        # 这里仅示例把 t 重置为 (start=0, stop=0)，保留原 sps
-        new_len = x_fused.shape[0]
-        t = SigTime(0, 0, t.sps)
-
+        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+        # 对信号幅度平方进行 roll
+        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+        # 用 softmax 得到归一化权重
+        weights = jax.nn.softmax(ixpm_alpha)
+        # 计算加权和
+        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+        c, t = scope.child(mimoconv1d1, name='NConv1_%d' % i)(
+            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+        # 更新信号 x
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
-
   
 def identity(scope, inputs):
     return inputs
