@@ -473,9 +473,9 @@ from jax.nn.initializers import orthogonal, glorot_uniform
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
-    attention = jnp.tile(attention, (x.shape[0], 1))
-    x = x * attention
-    return x
+    # attention = jnp.tile(attention, (x.shape[0], 1))
+    # x = x * attention
+    return attention
 
 def complex_channel_attention(x):
     x_real = jnp.real(x)
@@ -583,7 +583,9 @@ def fdbp(
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         att2 = complex_channel_attention(x)
-        x = att1 * att2
+        attention = att1 * att2
+        attention = jnp.tile(attention, (x.shape[0], 1))
+        x = x * attention
     return Signal(x, t)
       
 # def fdbp(
