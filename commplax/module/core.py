@@ -204,24 +204,133 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+#     return Signal(x, t)
+
+def full_dispersion_init(
+    rng,
+    shape,
+    dtype=jnp.complex64,
+    # 下面这些参数可视需求调整，传入 dbp_params
+    sample_rate=32e9,
+    span_length=80e3,
+    spans=1,
+    steps_per_span=1,
+    virtual_spans=None,
+    launch_power=0.,
+    polmux=True,
+):
+    """
+    使用 dbp_params(...) 构造 '整步' 色散卷积核:
+    - domain='time'
+    - 只取其中第 0 步的 'h_casual'
+    - 截取前 shape[0] 点, 返回 shape=(taps,) (或 dims>1 时做相应处理)
+    """
+    taps = shape[0]
+    
+    # 1) 调用 dbp_params 生成 h_casual (时域滤波器) 和 phi (非线性相位)
+    #    注意: freq 的大小 => freqs
+    freqs = taps  # 若想让 freq 轴正好与 taps 一样大
+    h_casual, phi = dbp_params(
+        sample_rate=sample_rate,
+        span_length=span_length,
+        spans=spans,
+        freqs=freqs,
+        launch_power=launch_power,
+        steps_per_span=steps_per_span,
+        virtual_spans=virtual_spans,
+        domain='time',  # 关键: time domain => 返回 h_casual
+        polmux=polmux,
+        step_method="uniform"
+    )
+    # h_casual shape: (NIter, freqs, dims)  => NIter = steps_per_span*virtual_spans
+    
+    # 2) 假设只取第 0 步 / 第 0 通道
+    #    如果 polmux=False => dims=1, pol_idx=0
+    #    如果 polmux=True => dims=2, 可能还要区分哪个偏振
+    #    这里先演示只用第一个偏振 (pol_idx=0)
+    pol_idx = 0
+    
+    # 取第 0 步, [0, :, pol_idx]
+    # 这得到的 shape = (freqs,)
+    h_0 = h_casual[0, :, pol_idx]  # complex64
+    
+    # 3) 如果想做简单截断或 zero-pad => 只取前 taps 点
+    #    例如 shape[0] = taps
+    #    若 taps 和 freqs 是相同数值，这里可以直接 h_0[:taps]
+    h_0 = h_0[:taps]
+    
+    # 4) 强制转换 dtype, 并返回
+    return h_0.astype(dtype)
+
+
+def half_dispersion_init(
+    rng,
+    shape,
+    dtype=jnp.complex64,
+    sample_rate=32e9,
+    span_length=80e3,
+    spans=1,
+    steps_per_span=1,
+    virtual_spans=None,
+    launch_power=0.,
+    polmux=True,
+):
+    """
+    将 fiber_length 视为半步 => 只要在 dbp_params 里让 'span_length' 减半
+    或者把 spans=0.5 之类 (但是 spans 必须是整数),
+    因此更直接的方法 => 直接  span_length/2 传进去
+    """
+    half_span = span_length / 2.0
+    
+    freqs = shape[0]
+    h_casual, phi = dbp_params(
+        sample_rate=sample_rate,
+        span_length=half_span,  # 核心: 只用 1/2
+        spans=spans,
+        freqs=freqs,
+        launch_power=launch_power,
+        steps_per_span=steps_per_span,
+        virtual_spans=virtual_spans,
+        domain='time',
+        polmux=polmux,
+        step_method="uniform"
+    )
+    pol_idx = 0
+    h_0 = h_casual[0, :, pol_idx]
+    h_0 = h_0[:freqs]
+    return h_0.astype(dtype)
+
 def conv1d(
-    scope: Scope,
+    scope,
     signal,
     taps=31,
     rtap=None,
     mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
-
+    kernel_init=full_dispersion_init,  # 改成 full_dispersion_init
+    conv_fn=None  # xop.convolve or your own
+):
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
+    # ...
+    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+    # 这里 h 就是从 dbp_params 中取出的时域滤波器, shape=(taps,)
+
+    x = conv_fn(x, h, mode=mode)  # ...
     return Signal(x, t)
-
-
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -495,6 +604,25 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp(
     scope: Scope,
     signal,
@@ -502,18 +630,44 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    d_init=delta,
-    n_init=gauss):
+    # 半步色散的初始化函数(替换掉 delta/gauss等)
+    d_init_half=half_dispersion_init,
+    # 非线性滤波器初始化(原先是 gauss)
+    n_init=gauss
+):
+    """
+    对称分步(Strang Splitting) DBP:
+      每步 = 半步D + N + 半步D
+    """
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
 
+    # 构造“半步”色散操作 => conv1d(..., kernel_init=d_init_half)
+    # vmap 包裹, 保持跟原逻辑相同
+    dconv_half = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init_half))
+
+    for i in range(steps):
+        # --- 1) half-step D ---
+        x, td = scope.child(dconv_half, name=f'DConv_half_start_{i}')(Signal(x, t))
+
+        # --- 2) 非线性补偿 (N) ---
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 应用相位: jnp.exp(1j * c)
+        x = jnp.exp(1j * c) * x[
+            tN.start - td.start :
+            x.shape[0] + (tN.stop - td.stop)
+        ]
+
+        # --- 3) half-step D ---
+        x, td2 = scope.child(dconv_half, name=f'DConv_half_end_{i}')(Signal(x, tN))
+
+        # 这里的 td2 就是经过两次D与一次N后的时间信息
+        t = td2
+
+    return Signal(x, t)
 
 
 # def fdbp(
