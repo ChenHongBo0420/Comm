@@ -204,22 +204,22 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
-# def conv1d(
-#     scope: Scope,
-#     signal,
-#     taps=31,
-#     rtap=None,
-#     mode='valid',
-#     kernel_init=delta,
-#     conv_fn = xop.convolve):
+def conv1d(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn = xop.convolve):
 
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-#     h = scope.param('kernel',
-#                      kernel_init,
-#                      (taps,), np.complex64)
-#     x = conv_fn(x, h, mode=mode)
-#     return Signal(x, t)
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel',
+                     kernel_init,
+                     (taps,), np.complex64)
+    x = conv_fn(x, h, mode=mode)
+    return Signal(x, t)
 
 def full_dispersion_init(
     rng,
@@ -315,22 +315,6 @@ def half_dispersion_init(
     h_0 = h_0[:freqs]
     return h_0.astype(dtype)
 
-def conv1d(
-    scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=full_dispersion_init,  # 改成 full_dispersion_init
-    conv_fn=None  # xop.convolve or your own
-):
-    x, t = signal
-    # ...
-    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
-    # 这里 h 就是从 dbp_params 中取出的时域滤波器, shape=(taps,)
-
-    x = conv_fn(x, h, mode=mode)  # ...
-    return Signal(x, t)
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
