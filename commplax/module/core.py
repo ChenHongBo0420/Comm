@@ -253,25 +253,7 @@ def time_dispersion(key, shape, dtype=jnp.complex64):
     h = h / (norm_factor + 1e-12)
     
     return h.astype(dtype)
-      
-def conv1d1(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
-
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
-
-    return Signal(x, t)   
-
+    
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -292,21 +274,6 @@ def mimoconv1d(
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
       
-def mimoconv1d1(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    dims=2,
-    mode='valid',
-    kernel_init=zeros,
-    conv_fn=xop.convolve):
-
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
-    y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
-    return Signal(y, t)
       
 def mimofoeaf(scope: Scope,
               signal,
@@ -708,7 +675,7 @@ def fdbp1(
     n_init=gauss):
     
     x, t = signal
-    dconv = vmap(wpartial(conv1d1, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
@@ -721,7 +688,7 @@ def fdbp1(
         weights = jax.nn.softmax(ixpm_alpha)
         # 计算加权和
         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d1, name='NConv1_%d' % i)(
+        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
         # 更新信号 x
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
