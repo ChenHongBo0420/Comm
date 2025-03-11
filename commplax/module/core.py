@@ -221,6 +221,39 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
       
+def time_dispersion(key, shape, dtype=jnp.complex64):
+    """
+    在时域中构造一个包含二阶/三阶色散相位的卷积核，用于初始化。
+    注：这里的各物理数值仅演示用，可自行修改。
+    """
+
+    taps = shape[0]
+    # （1）构造时间轴。以中心为 0，单位采样间隔设为 1（您可根据符号率等自行修改）。
+    t_mid = (taps - 1) / 2
+    t = jnp.arange(taps) - t_mid
+    
+    # （2）定义一些示例性的系数，用来模拟二阶/三阶色散。
+    #     您可以把它们与实际光纤的 beta2 / beta3 / fiber_length 做对应。
+    alpha2 = 1e-4   # 演示用的二阶相位系数
+    alpha3 = 5e-6   # 演示用的三阶相位系数
+    
+    # （3）构造一个简单的高斯包络，避免脉冲响应无限延伸
+    sigma = taps / 6.0  # 让高斯主瓣覆盖大约 6 sigma
+    envelope = jnp.exp(-0.5 * (t**2) / (sigma**2))
+    
+    # （4）叠加相位啁啾：exp(-j( alpha2 * t^2 + alpha3 * t^3 ))
+    #     注意是负号，代表要做"补偿"作用
+    phase = jnp.exp(-1j * (alpha2 * t**2 + alpha3 * t**3))
+    
+    # （5）合成卷积核
+    h = envelope * phase
+    
+    # （6）可选：简单归一化，防止过大或过小
+    norm_factor = jnp.sqrt(jnp.sum(jnp.abs(h)**2))
+    h = h / (norm_factor + 1e-12)
+    
+    return h.astype(dtype)
+      
 def conv1d1(
     scope: Scope,
     signal,
@@ -571,23 +604,16 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    d_init=delta,
+    d_init=time_dispersion,
     n_init=gauss):
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        avg_pool1 = jnp.max(x, axis=0, keepdims=True)
-        attention1 = jnp.tanh(avg_pool1)
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        avg_pool2 = jnp.max(x, axis=0, keepdims=True)
-        attention2 = jnp.tanh(avg_pool2)
-        attention1 = attention1 * attention2
-        attention1 = jnp.tile(attention1, (x.shape[0], 1))
-        x = attention1 * x
     return Signal(x, t)
       
 # def fdbp(
