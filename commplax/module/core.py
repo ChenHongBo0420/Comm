@@ -228,43 +228,50 @@ def multi_conv1d(
     taps=31,
     rtap=None,
     mode='valid',
-    # 保留这个以兼容外部 init / partial 调用
-    kernel_init=delta,
-    n_kernels=2,
-    # 若您想给每个卷积核传不同的 init，可以通过 kernel_inits
-    kernel_inits=None,
+    kernel_init=delta,     # 与原 conv1d 保持一致，可兼容外部默认调用
+    n_kernels=2,           # 想用几条卷积核
+    kernel_inits=None,     # 若想对每条卷积核使用不同init，则传进此列表
     conv_fn=xop.convolve,
+    agg_mode='mean',       # 'mean' or 'max' 或自定义
 ):
     """
-    使用多条可训练卷积核分别对输入信号进行卷积，将各路输出在通道维度拼接。
-    不进行相加，避免不同通道的干扰叠加。
+    多条卷积核并行处理输入x，再对多路输出做聚合（'mean'或'max'）。
+    返回单通道聚合结果，而非相加或拼接。
     """
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
-    # 若外部没给 kernel_inits，就让全部卷积核使用同一个 kernel_init
+    # 如果外部没有指定 kernel_inits，就让所有卷积核都用同一个 kernel_init
     if kernel_inits is None:
         kernel_inits = [kernel_init] * n_kernels
 
-    # 假设 x.shape = (num_samples, num_channels)
-    # 例如单偏振 num_channels=1，双偏振 num_channels=2，等等
-
+    # 存放多路输出
     outputs = []
     for i in range(n_kernels):
-        # 每个卷积核都有自己独立的 param
         h_i = scope.param(
             f'kernel_{i}',
             kernel_inits[i],
             (taps,),
             np.complex64
         )
-        y_i = conv_fn(x, h_i, mode=mode)   # shape同 x
+        y_i = conv_fn(x, h_i, mode=mode)   # 形状与 x 相同
         outputs.append(y_i)
-    
-    # 不相加，而是拼接在最后一维（channel 维度）
-    # 若 x 原本 (N, C)，则输出 (N, C*n_kernels)
-    out = jnp.concatenate(outputs, axis=-1)
-    return Signal(out, t)
+
+    # 将 [y0, y1, ..., y_{n-1}] 堆叠到一起: 得到 (n_kernels, N, C)
+    # 例如 x 原本 (N, C)，则 stack 后 shape = (n_kernels, N, C)
+    y_stack = jnp.stack(outputs, axis=0)
+
+    if agg_mode == 'mean':
+        # 对 n_kernels 这个维度做平均 => (N, C)
+        y_agg = jnp.mean(y_stack, axis=0)
+    elif agg_mode == 'max':
+        # 对 n_kernels 这个维度做最大值 => (N, C)
+        y_agg = jnp.max(y_stack, axis=0)
+    else:
+        raise ValueError(f"Unknown agg_mode={agg_mode}, expected 'mean' or 'max'")
+
+    return Signal(y_agg, t)
+
 
 
 def kernel_initializer(rng, shape):
