@@ -222,57 +222,6 @@ def conv1d(
     return Signal(x, t)
 
 
-def multi_conv1d(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,     # 与原 conv1d 保持一致，可兼容外部默认调用
-    n_kernels=2,           # 想用几条卷积核
-    kernel_inits=None,     # 若想对每条卷积核使用不同init，则传进此列表
-    conv_fn=xop.convolve,
-    agg_mode='max',       # 'mean' or 'max' 或自定义
-):
-    """
-    多条卷积核并行处理输入x，再对多路输出做聚合（'mean'或'max'）。
-    返回单通道聚合结果，而非相加或拼接。
-    """
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    
-    # 如果外部没有指定 kernel_inits，就让所有卷积核都用同一个 kernel_init
-    if kernel_inits is None:
-        kernel_inits = [kernel_init] * n_kernels
-
-    # 存放多路输出
-    outputs = []
-    for i in range(n_kernels):
-        h_i = scope.param(
-            f'kernel_{i}',
-            kernel_inits[i],
-            (taps,),
-            np.complex64
-        )
-        y_i = conv_fn(x, h_i, mode=mode)   # 形状与 x 相同
-        outputs.append(y_i)
-
-    # 将 [y0, y1, ..., y_{n-1}] 堆叠到一起: 得到 (n_kernels, N, C)
-    # 例如 x 原本 (N, C)，则 stack 后 shape = (n_kernels, N, C)
-    y_stack = jnp.stack(outputs, axis=0)
-
-    if agg_mode == 'mean':
-        # 对 n_kernels 这个维度做平均 => (N, C)
-        y_agg = jnp.mean(y_stack, axis=0)
-    elif agg_mode == 'max':
-        # 对 n_kernels 这个维度做最大值 => (N, C)
-        y_agg = jnp.max(y_stack, axis=0)
-    else:
-        raise ValueError(f"Unknown agg_mode={agg_mode}, expected 'mean' or 'max'")
-
-    return Signal(y_agg, t)
-
-
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -546,25 +495,6 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
 def fdbp(
     scope: Scope,
     signal,
@@ -573,39 +503,17 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    n_kernels=2,
-    kernel_inits=None
-):
-    """
-    使用多卷积核的色散补偿 + 非线性补偿(DBP)。
-    """
+    n_init=gauss):
     x, t = signal
-    
-    # 注意：我们用 multi_conv1d 而不是 conv1d
-    #      并且在 wpartial 里把 n_kernels, kernel_inits 等传进去
-    dconv = vmap(
-        wpartial(multi_conv1d,
-                 taps=dtaps,
-                 n_kernels=n_kernels,        # 多核个数
-                 kernel_inits=kernel_inits,  # 各核的初始化
-                 kernel_init=d_init)         # 兼容一下, 但实际主要用 kernel_inits
-    )
-    
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        # 1) 色散补偿(多核并行卷积 + 相加)
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-
-        # 2) 非线性补偿
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 3) 相位旋转
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    
     return Signal(x, t)
+
 
 
 # def fdbp(
