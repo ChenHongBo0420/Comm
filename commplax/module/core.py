@@ -643,7 +643,7 @@ def fdbp(
 
     # 构造“半步”色散操作 => conv1d(..., kernel_init=d_init_half)
     # vmap 包裹, 保持跟原逻辑相同
-    dconv_half = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init_half))
+    dconv_half = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
     for i in range(steps):
         # --- 1) half-step D ---
