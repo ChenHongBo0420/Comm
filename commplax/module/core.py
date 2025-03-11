@@ -232,7 +232,7 @@ def multi_conv1d(
     n_kernels=2,           # 想用几条卷积核
     kernel_inits=None,     # 若想对每条卷积核使用不同init，则传进此列表
     conv_fn=xop.convolve,
-    agg_mode='mean',       # 'mean' or 'max' 或自定义
+    agg_mode='max',       # 'mean' or 'max' 或自定义
 ):
     """
     多条卷积核并行处理输入x，再对多路输出做聚合（'mean'或'max'）。
