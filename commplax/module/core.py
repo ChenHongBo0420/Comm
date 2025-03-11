@@ -227,9 +227,13 @@ def multi_conv1d(
     taps=31,
     rtap=None,
     mode='valid',
-    n_kernels=2,                # 需要几个卷积核
-    kernel_inits=None,          # 每个卷积核的初始化函数列表（可为空则用同样的默认）
-    conv_fn=xop.convolve
+    # 保留这个以兼容外部调用
+    kernel_init=delta,
+    # 用于并行卷积核的数量
+    n_kernels=2,
+    # 若希望对每个卷积核使用不同初始化函数，可传这个
+    kernel_inits=None,
+    conv_fn=xop.convolve,
 ):
     """
     在同一次调用里，使用多个卷积核对输入信号做并行卷积，然后将结果相加。
@@ -237,28 +241,24 @@ def multi_conv1d(
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
+    # 若外面并没有显式传 'kernel_inits'，就用 [kernel_init] * n_kernels
     if kernel_inits is None:
-        # 如果没有给定初始化函数列表，就全部用 delta 或者您喜欢的默认
-        kernel_inits = [delta] * n_kernels
+        kernel_inits = [kernel_init] * n_kernels
     
-    # 收集每个卷积核的输出
     outputs = []
     for i in range(n_kernels):
-        # 定义每个卷积核参数
+        # 每个子卷积核都有一个独立的 param
         h_i = scope.param(
-            f'kernel_{i}',                    # 参数名区分
-            kernel_inits[i],                  # 初始化函数
-            (taps,),                          # 形状是一维
+            f'kernel_{i}',
+            kernel_inits[i],
+            (taps,),
             np.complex64
         )
-        # 对 x 做卷积
         y_i = conv_fn(x, h_i, mode=mode)
         outputs.append(y_i)
     
-    # 将多路输出进行相加 (也可以做拼接、加权等等)
-    y_sum = jnp.zeros_like(outputs[0])
-    for y_i in outputs:
-        y_sum = y_sum + y_i
+    # 把多个核的输出相加(或其他组合方式)
+    y_sum = sum(outputs)
 
     return Signal(y_sum, t)
 
