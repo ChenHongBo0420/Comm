@@ -221,46 +221,51 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
 
+
 def multi_conv1d(
     scope: Scope,
     signal,
     taps=31,
     rtap=None,
     mode='valid',
-    # 保留这个以兼容外部调用
+    # 保留这个以兼容外部 init / partial 调用
     kernel_init=delta,
-    # 用于并行卷积核的数量
     n_kernels=2,
-    # 若希望对每个卷积核使用不同初始化函数，可传这个
+    # 若您想给每个卷积核传不同的 init，可以通过 kernel_inits
     kernel_inits=None,
     conv_fn=xop.convolve,
 ):
     """
-    在同一次调用里，使用多个卷积核对输入信号做并行卷积，然后将结果相加。
+    使用多条可训练卷积核分别对输入信号进行卷积，将各路输出在通道维度拼接。
+    不进行相加，避免不同通道的干扰叠加。
     """
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
-    # 若外面并没有显式传 'kernel_inits'，就用 [kernel_init] * n_kernels
+    # 若外部没给 kernel_inits，就让全部卷积核使用同一个 kernel_init
     if kernel_inits is None:
         kernel_inits = [kernel_init] * n_kernels
-    
+
+    # 假设 x.shape = (num_samples, num_channels)
+    # 例如单偏振 num_channels=1，双偏振 num_channels=2，等等
+
     outputs = []
     for i in range(n_kernels):
-        # 每个子卷积核都有一个独立的 param
+        # 每个卷积核都有自己独立的 param
         h_i = scope.param(
             f'kernel_{i}',
             kernel_inits[i],
             (taps,),
             np.complex64
         )
-        y_i = conv_fn(x, h_i, mode=mode)
+        y_i = conv_fn(x, h_i, mode=mode)   # shape同 x
         outputs.append(y_i)
     
-    # 把多个核的输出相加(或其他组合方式)
-    y_sum = sum(outputs)
+    # 不相加，而是拼接在最后一维（channel 维度）
+    # 若 x 原本 (N, C)，则输出 (N, C*n_kernels)
+    out = jnp.concatenate(outputs, axis=-1)
+    return Signal(out, t)
 
-    return Signal(y_sum, t)
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
