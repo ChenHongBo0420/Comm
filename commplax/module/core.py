@@ -631,7 +631,7 @@ def fdbp(
     ntaps=41,
     sps=2,
     # 半步色散的初始化函数(替换掉 delta/gauss等)
-    d_init_half=half_dispersion_init,
+    d_init =half_dispersion_init,
     # 非线性滤波器初始化(原先是 gauss)
     n_init=gauss
 ):
