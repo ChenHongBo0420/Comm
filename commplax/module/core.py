@@ -220,40 +220,47 @@ def conv1d(
                      (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
-      
-def time_dispersion(key, shape, dtype=jnp.complex64):
-    """
-    在时域中构造一个包含二阶/三阶色散相位的卷积核，用于初始化。
-    注：这里的各物理数值仅演示用，可自行修改。
-    """
 
-    taps = shape[0]
-    # （1）构造时间轴。以中心为 0，单位采样间隔设为 1（您可根据符号率等自行修改）。
-    t_mid = (taps - 1) / 2
-    t = jnp.arange(taps) - t_mid
+def multi_conv1d(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    n_kernels=2,                # 需要几个卷积核
+    kernel_inits=None,          # 每个卷积核的初始化函数列表（可为空则用同样的默认）
+    conv_fn=xop.convolve
+):
+    """
+    在同一次调用里，使用多个卷积核对输入信号做并行卷积，然后将结果相加。
+    """
+    x, t = signal
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
-    # （2）定义一些示例性的系数，用来模拟二阶/三阶色散。
-    #     您可以把它们与实际光纤的 beta2 / beta3 / fiber_length 做对应。
-    alpha2 = 1e-4   # 演示用的二阶相位系数
-    alpha3 = 5e-6   # 演示用的三阶相位系数
+    if kernel_inits is None:
+        # 如果没有给定初始化函数列表，就全部用 delta 或者您喜欢的默认
+        kernel_inits = [delta] * n_kernels
     
-    # （3）构造一个简单的高斯包络，避免脉冲响应无限延伸
-    sigma = taps / 6.0  # 让高斯主瓣覆盖大约 6 sigma
-    envelope = jnp.exp(-0.5 * (t**2) / (sigma**2))
+    # 收集每个卷积核的输出
+    outputs = []
+    for i in range(n_kernels):
+        # 定义每个卷积核参数
+        h_i = scope.param(
+            f'kernel_{i}',                    # 参数名区分
+            kernel_inits[i],                  # 初始化函数
+            (taps,),                          # 形状是一维
+            np.complex64
+        )
+        # 对 x 做卷积
+        y_i = conv_fn(x, h_i, mode=mode)
+        outputs.append(y_i)
     
-    # （4）叠加相位啁啾：exp(-j( alpha2 * t^2 + alpha3 * t^3 ))
-    #     注意是负号，代表要做"补偿"作用
-    phase = jnp.exp(-1j * (alpha2 * t**2 + alpha3 * t**3))
-    
-    # （5）合成卷积核
-    h = envelope * phase
-    
-    # （6）可选：简单归一化，防止过大或过小
-    norm_factor = jnp.sqrt(jnp.sum(jnp.abs(h)**2))
-    h = h / (norm_factor + 1e-12)
-    
-    return h.astype(dtype)
-    
+    # 将多路输出进行相加 (也可以做拼接、加权等等)
+    y_sum = jnp.zeros_like(outputs[0])
+    for y_i in outputs:
+        y_sum = y_sum + y_i
+
+    return Signal(y_sum, t)
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -423,24 +430,6 @@ def mimoaf1(
     state.value = (af_step, af_stats)
     return Signal(y, t)
       
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0])
-#     return Signal(x, t)
 
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
@@ -571,18 +560,42 @@ def fdbp(
     dtaps=261,
     ntaps=41,
     sps=2,
-    d_init=time_dispersion,
-    n_init=gauss):
+    d_init=delta,
+    n_init=gauss,
+    n_kernels=2,
+    kernel_inits=None
+):
+    """
+    使用多卷积核的色散补偿 + 非线性补偿(DBP)。
+    """
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    # 注意：我们用 multi_conv1d 而不是 conv1d
+    #      并且在 wpartial 里把 n_kernels, kernel_inits 等传进去
+    dconv = vmap(
+        wpartial(multi_conv1d,
+                 taps=dtaps,
+                 n_kernels=n_kernels,        # 多核个数
+                 kernel_inits=kernel_inits,  # 各核的初始化
+                 kernel_init=d_init)         # 兼容一下, 但实际主要用 kernel_inits
+    )
+    
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
+        # 1) 色散补偿(多核并行卷积 + 相加)
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+
+        # 2) 非线性补偿
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 3) 相位旋转
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    
     return Signal(x, t)
-      
+
+
 # def fdbp(
 #     scope: Scope,
 #     signal,
