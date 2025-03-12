@@ -515,7 +515,7 @@ from jax.nn.initializers import orthogonal, zeros
 #     return Signal(x, t)
 
 
-def residual_mlp_2ch(scope: Scope, signal: Signal, hidden_dim=32):
+def residual_mlp_2ch(scope: Scope, signal: Signal, hidden_dim=2):
     """
     residual MLP for shape (N,2) -> (N,2).
     Each time-step has 2 features, the MLP can learn separate corrections.
@@ -556,7 +556,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=32,
+    hidden_dim=2,
     use_alpha=True,
 ):
     x, t = signal
