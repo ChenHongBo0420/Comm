@@ -227,42 +227,48 @@ def conv1d(
     taps=31,
     rtap=None,
     stride=1,
-    mode='valid',
     kernel_init=delta,
-    conv_fn = xop.convolve
+    conv_fn = xop.convolve,
+    mode='valid'
 ):
     """
-    用一个最简 "注意力" 机制替代卷积:
-      1) Framing: 形如 (F, taps)
-      2) Score = (x_frames * w)
-      3) alpha = softmax(score)
-      4) y_frame = sum_k( alpha_k * x_frames_k )
-      5) 'valid' -> shape (F, ) output
+    用线性注意力思想替代原先softmax注意力：
+      1) 对输入做frame => (F, taps)
+      2) score = elu(x_frames * w) + 1
+      3) 累加分母 sumK = sum_k( score ), 分子 sumKV = sum_k(score * x_frames)
+      4) y_frames = sumKV / sumK
+      5) 根据 conv1d_t 更新时间信息 new_t
     """
+    # 1) Framing
     x, t = signal
-    # 1) framing
     x_frames = xop.frame(x, taps, stride)  # shape (F, taps)
     F = x_frames.shape[0]
 
-    # 2) 定义一个 param: w, shape=(taps,). 仅需少数 params
+    # 2) 可训练 param: w, shape=(taps,)
     w = scope.param(
         'attn_w',
         jax.nn.initializers.zeros,  # 或 normal, etc.
         (taps,),
         jnp.float32
     )
-    # 计算分数: score[i, k] = w[k] * x_frames[i, k]
+    # 计算score => phi(x) = elu(x)+1
+    # 这里让score[i,k] = elu( x_frames[i,k] * w[k] ) + 1
     # shape (F, taps)
-    score = x_frames * w  # 这里做 elementwise, i行, taps列
+    raw_score = x_frames * w
+    score = jax.nn.elu(raw_score) + 1.0
 
-    # 3) 注意力
-    alpha = jax.nn.softmax(score, axis=-1)  # shape (F, taps)
+    # 3) 分母 + 分子
+    # sumK[i] = sum_{k}(score[i,k])
+    # sumKV[i]= sum_{k}(score[i,k] * x_frames[i,k])
+    sumK  = jnp.sum(score, axis=-1)            # shape (F,)
+    sumKV = jnp.sum(score * x_frames, axis=-1) # shape (F,)
 
-    # 4) 聚合
-    y_frames = jnp.sum(alpha * x_frames, axis=-1)  # shape (F, )
+    # 4) 计算输出 => y_frames = sumKV / sumK
+    #   + eps防止除0
+    eps = 1e-6
+    y_frames = sumKV / (sumK + eps)  # shape (F,)
 
     # 5) 更新时域信息
-    #    参考您 conv1d 中的 SigTime update: conv1d_t(t, taps, rtap, stride, mode)
     new_t = scope.variable('const', 't', conv1d_t, t, taps, rtap, stride, mode).value
 
     return Signal(y_frames, new_t)
