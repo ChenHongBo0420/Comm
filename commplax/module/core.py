@@ -600,39 +600,56 @@ from jax.nn.initializers import orthogonal, zeros
 
 #     return Signal(x, t)
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
-    """
-    对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
-    再用 MLP => (N,) residual
-    """
+# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+#     """
+#     对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
+#     再用 MLP => (N,) residual
+#     """
+#     x, t = signal
+#     # x shape => (N,2) or (N,C), ...
+    
+#     # 1) reduce across channel: e.g. mean => shape = (N,)
+#     #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
+#     x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
+    
+#     N = x_scalar.shape[0]
+#     # 2) reshape => (N,1)
+#     x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
+    
+#     # 3) define param for 2-layer MLP
+#     W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
+#     b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
+#     W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
+#     b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
+
+#     # 4) hidden => (N, hidden_dim)
+#     h = jnp.dot(x_2d, W1) + b1
+#     h = jax.nn.elu(h)  # or elu, gelu
+#     # 5) out => shape (N,1)
+#     out = jnp.dot(h, W2) + b2
+
+#     # 6) flatten => (N,)
+#     out_1d = out.squeeze(axis=-1)
+
+#     return out_1d, t
+
+def residual_mlp(scope: Scope, signal: Signal):
+    # x shape: (N,2) => assume real parted amplitude^2 or I/Q parted
     x, t = signal
-    # x shape => (N,2) or (N,C), ...
-    
-    # 1) reduce across channel: e.g. mean => shape = (N,)
-    #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
-    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
-    
-    N = x_scalar.shape[0]
-    # 2) reshape => (N,1)
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
-    
-    # 3) define param for 2-layer MLP
-    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
-    b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
-    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
-    b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
+    x = x.astype(jnp.float32)
+    N, C = x.shape
+    # hidden_dim=2 (for minimal overhead)
+    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (C, 2), jnp.float32)
+    b1 = scope.param('b1', nn.initializers.zeros, (2,), jnp.float32)
+    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (2, C), jnp.float32)
+    b2 = scope.param('b2', nn.initializers.zeros, (C,), jnp.float32)
 
-    # 4) hidden => (N, hidden_dim)
-    h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.elu(h)  # or elu, gelu
-    # 5) out => shape (N,1)
+    h = jnp.dot(x, W1) + b1
+    h = jax.nn.relu(h)
     out = jnp.dot(h, W2) + b2
+    return out, t  # shape=(N,2)
 
-    # 6) flatten => (N,)
-    out_1d = out.squeeze(axis=-1)
 
-    return out_1d, t
-  
 def fdbp(
     scope: Scope,
     signal,
