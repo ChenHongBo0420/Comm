@@ -204,23 +204,87 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+#     return Signal(x, t)
+
 def conv1d(
     scope: Scope,
     signal,
     taps=31,
-    rtap=None,
+    stride=1,
     mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
-
+    # 简化：用可训练的投影，或者直接全局可训练向量
+    # 这里演示 simplest case: 每个patch先做 1个线性变换 (query)
+    # 也可多头, keys, queries, etc. 简化就单头
+):
+    """
+    用注意力来替代 1D 卷积加权求和：
+    1) 将输入 x 做 frame (窗口大小=taps, 步幅=stride)
+    2) 对每个帧 compute attention weights
+    3) 求和后, deframe or 直接 reshape => (N, )
+    """
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
-    return Signal(x, t)
+    N = x.shape[0]
+    # 1. framing: shape => (frames, taps)
+    #  commplax.xop.frame(x, frame_length, frame_step)
+    #  这里 frame_length=taps, step=stride
+    x_frames = xop.frame(x, taps, stride)  # shape (F, taps)
+    F = x_frames.shape[0]  # number of frames
 
+    # 2. 计算注意力:
+    #    下面演示 simplest approach: alpha_i = softmax( Q_i ), Q_i= MLP or linear on x_frames
+    #    - 先 define a param W, shape=(taps,) => 使 Q= x_frames * W elementwise or some param
+    #    - 也可 define Wq/Wk, etc. 这里非常简化
+
+    W = scope.param('attention_weights', jax.nn.initializers.normal(stddev=0.01), (taps,), jnp.float32)
+    # Q_i = x_frames[:, k] * W[k]  => shape (F, taps)
+    Q = x_frames.real * W  # or do real, or if complex => separate real/imag ?
+
+    # alpha_i = softmax(Q_i) row by row
+    alpha = softmax(Q, axis=-1)  # shape (F, taps)
+
+    # 3. Weighted sum => y_frames[i] = sum_k alpha[i,k] * x_frames[i,k]
+    y_frames = jnp.sum(alpha * x_frames, axis=-1)  # shape (F, )
+
+    # 4. deframe => 反卷积 or just shape =>  (F, ) =>  If stride=1, F= N - taps + 1
+    #   commplax.xop.frame: in 'valid' mode => out length= F= n//step - something
+    #   Simplest:  we treat y_frames as output. If stride=1, length= N-taps+1
+    #   Rebuild shape => (some_, ) or do "time" indexing.  We'll do simplest "valid"
+    #   so output length= F
+    #   If you want the same dimension as x, might pad or do "same" alignment
+
+    #  这里和 conv1d_t logic => we can sync with t
+    #  for demonstration, let's just define new length= F
+    #  => new x: shape (F, )
+    #  => time shift t ?
+
+    # shape (F,) => (N') where N' = ?
+
+    # Update SigTime
+    #  conv1d_t  => SigTime: (start, stop, sps)
+    #  We'll mimic approach: same approach as your conv1d => use conv1d_t
+    from commplax.module.core import conv1d_t
+    new_t = scope.variable('const', 't', conv1d_t, t, taps, (taps-1)//2, stride, mode).value
+
+    #  final y => shape (F, )
+    y = y_frames
+
+    return Signal(y, new_t)
+  
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
