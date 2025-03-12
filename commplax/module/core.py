@@ -257,7 +257,7 @@ def conv1d(
     Q = x_frames.real * W  # or do real, or if complex => separate real/imag ?
 
     # alpha_i = softmax(Q_i) row by row
-    alpha = softmax(Q, axis=-1)  # shape (F, taps)
+    alpha = jnp.softmax(Q, axis=-1)  # shape (F, taps)
 
     # 3. Weighted sum => y_frames[i] = sum_k alpha[i,k] * x_frames[i,k]
     y_frames = jnp.sum(alpha * x_frames, axis=-1)  # shape (F, )
