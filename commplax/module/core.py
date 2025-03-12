@@ -221,7 +221,7 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
 #     x = conv_fn(x, h, mode=mode)
 #     return Signal(x, t)
 
-def conv1d_linear_attention(
+def conv1d(
     scope: Scope,
     signal: Signal,
     taps=31,
