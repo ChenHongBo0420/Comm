@@ -633,7 +633,7 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 
     return out_1d, t
 
-
+from jax import debug
 def fdbp(
     scope: Scope,
     signal,
@@ -644,7 +644,7 @@ def fdbp(
     d_init=delta,
     n_init=gauss,
     hidden_dim=2,
-    use_alpha=None,
+    use_alpha=True,
 ):
     """
     保持原 fdbp(D->N)结构:
@@ -661,7 +661,7 @@ def fdbp(
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
-
+    debug.print("alpha = {}", alpha)
     for i in range(steps):
         # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
