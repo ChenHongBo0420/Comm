@@ -204,74 +204,23 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
-# def conv1d(
-#     scope: Scope,
-#     signal,
-#     taps=31,
-#     rtap=None,
-#     mode='valid',
-#     kernel_init=delta,
-#     conv_fn = xop.convolve):
-
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-#     h = scope.param('kernel',
-#                      kernel_init,
-#                      (taps,), np.complex64)
-#     x = conv_fn(x, h, mode=mode)
-#     return Signal(x, t)
-
 def conv1d(
     scope: Scope,
-    signal: Signal,
+    signal,
     taps=31,
     rtap=None,
-    stride=1,
+    mode='valid',
     kernel_init=delta,
-    conv_fn = xop.convolve,
-    mode='valid'
-):
-    """
-    用线性注意力思想替代原先softmax注意力：
-      1) 对输入做frame => (F, taps)
-      2) score = elu(x_frames * w) + 1
-      3) 累加分母 sumK = sum_k( score ), 分子 sumKV = sum_k(score * x_frames)
-      4) y_frames = sumKV / sumK
-      5) 根据 conv1d_t 更新时间信息 new_t
-    """
-    # 1) Framing
+    conv_fn = xop.convolve):
+
     x, t = signal
-    x_frames = xop.frame(x, taps, stride)  # shape (F, taps)
-    F = x_frames.shape[0]
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    h = scope.param('kernel',
+                     kernel_init,
+                     (taps,), np.complex64)
+    x = conv_fn(x, h, mode=mode)
+    return Signal(x, t)
 
-    # 2) 可训练 param: w, shape=(taps,)
-    w = scope.param(
-        'attn_w',
-        jax.nn.initializers.zeros,  # 或 normal, etc.
-        (taps,),
-        jnp.float32
-    )
-    # 计算score => phi(x) = elu(x)+1
-    # 这里让score[i,k] = elu( x_frames[i,k] * w[k] ) + 1
-    # shape (F, taps)
-    raw_score = x_frames * w
-    score = jax.nn.elu(raw_score) + 1.0
-
-    # 3) 分母 + 分子
-    # sumK[i] = sum_{k}(score[i,k])
-    # sumKV[i]= sum_{k}(score[i,k] * x_frames[i,k])
-    sumK  = jnp.sum(score, axis=-1)            # shape (F,)
-    sumKV = jnp.sum(score * x_frames, axis=-1) # shape (F,)
-
-    # 4) 计算输出 => y_frames = sumKV / sumK
-    #   + eps防止除0
-    eps = 1e-6
-    y_frames = sumKV / (sumK + eps)  # shape (F,)
-
-    # 5) 更新时域信息
-    new_t = scope.variable('const', 't', conv1d_t, t, taps, rtap, stride, mode).value
-
-    return Signal(y_frames, new_t)
   
   
 def kernel_initializer(rng, shape):
@@ -563,6 +512,101 @@ def fdbp(
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
+
+
+def residual_linear_attention(scope: Scope, signal: Signal, taps=31, stride=1, mode='valid'):
+    """
+    对 signal.val (real array, shape=N) 做线性注意力 => return (residual, new_t)
+    例子：使用“scan式”线性注意力(避免大 framing)
+    """
+    x, t = signal
+    # 1) param w => shape=(taps,)
+    w = scope.param('attn_w', nn.initializers.zeros, (taps,), jnp.float32)
+    
+    # 2) scan over x => rolling buffer
+    def step_fn(carry, x_new):
+        (buf, idx) = carry
+        new_buf = jnp.concatenate([buf[1:], jnp.array([x_new])])
+        raw_score = new_buf * w
+        score = jax.nn.elu(raw_score) + 1.0
+        sumK = jnp.sum(score)
+        sumKV= jnp.sum(score*new_buf)
+        y = sumKV / (sumK + 1e-6)
+        return (new_buf, idx+1), y
+
+    init_buf = jnp.zeros((taps,), dtype=x.dtype)
+    init_carry = (init_buf, 0)
+    (carry_final, ys) = jax.lax.scan(step_fn, init_carry, x)
+    # ys shape => (N,), 其中前 (taps-1)点无效
+    # valid => 取后 (N - taps +1)
+    valid_y = ys[taps-1:]
+    
+    # new t
+    new_t = scope.variable('const', 't', conv1d_t, t, taps, (taps-1)//2, stride, mode).value
+
+    return valid_y, new_t
+
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
+    use_alpha=True
+):
+    """
+    每步 = 
+      1) 色散补偿 (dconv)
+      2) 非线性相位 (mimoconv1d)
+      3) 线性注意力 residual => 添加到 x
+    
+    Args:
+      - use_alpha: 是否对 residual 加可训练缩放
+    """
+    x, t = signal
+    
+    # A) 构建色散补偿dconv
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    # B) 可训练缩放 alpha (可选)
+    if use_alpha:
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+    else:
+        alpha = 1.0
+
+    for i in range(steps):
+        # 1) 色散 D
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+
+        # 2) 非线性 N
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 更新 x => e^{j c(t)}
+        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+
+        # 3) residual linear attention (对 x_new 幅度平方 做线性注意力)
+        #    --> 需要定义 residual_linear_attention 函数
+        #    这函数返回 (residual_val, new_time)
+        res_val, t_res = scope.child(residual_linear_attention, name=f'ResAttn_{i}')(
+            Signal(jnp.abs(x_new)**2, tN)
+        )
+        
+        # 合并
+        # 如果 x_new 是 complex => 可以把 res_val 当成 real, 并相加
+        # 也可先 cast to complex
+        res_val_cplx = res_val.astype(x_new.dtype)
+        x_new = x_new + alpha * res_val_cplx
+
+        # 更新 x,t
+        x, t = x_new, t_res
+
     return Signal(x, t)
 
 # def fdbp(
