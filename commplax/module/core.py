@@ -644,7 +644,7 @@ def fdbp(
     d_init=delta,
     n_init=gauss,
     hidden_dim=2,
-    use_alpha=True,
+    use_alpha=None,
 ):
     """
     保持原 fdbp(D->N)结构:
@@ -684,7 +684,7 @@ def fdbp(
         # res_val => (N_new,)
         # cast to complex, or interpret as real
         # 这里示例 "在幅度上+res"
-        x_new += alpha * res_val
+        # x_new += alpha * res_val
         # 不分real/imag => 全部 real offset => x_new + alpha * res
         # 只要 x_new是complex => convert
         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
