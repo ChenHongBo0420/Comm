@@ -256,7 +256,7 @@ def conv1d(
     score = x_frames * w  # 这里做 elementwise, i行, taps列
 
     # 3) 注意力
-    alpha = softmax(score, axis=-1)  # shape (F, taps)
+    alpha = jax.nn.softmax(score, axis=-1)  # shape (F, taps)
 
     # 4) 聚合
     y_frames = jnp.sum(alpha * x_frames, axis=-1)  # shape (F, )
