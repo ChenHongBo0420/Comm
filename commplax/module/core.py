@@ -517,31 +517,36 @@ from jax.nn.initializers import orthogonal, zeros
 
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=32):
     """
-    对 1D 输入 x(t)=|X|^2 做一个小 MLP，输出与 x 同长度的一维向量作为残差
+    对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
+    再用 MLP => (N,) residual
     """
     x, t = signal
-    N = x.shape[0]
-    # param: W1, b1; W2, b2
-    # W1 => shape (1, hidden_dim), b1 => shape (hidden_dim,)
-    # W2 => shape (hidden_dim, 1), b2 => shape (1,)
+    # x shape => (N,2) or (N,C), ...
+    
+    # 1) reduce across channel: e.g. mean => shape = (N,)
+    #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
+    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
+    
+    N = x_scalar.shape[0]
+    # 2) reshape => (N,1)
+    x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
+    
+    # 3) define param for 2-layer MLP
     W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
     b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
     W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
     b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
 
-    # reshape x => (N,1)
-    x_2d = x.reshape(N,1).astype(jnp.float32)
-    
-    # hidden => (N, hidden_dim)
+    # 4) hidden => (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
     h = jax.nn.relu(h)  # or elu, gelu
-    
-    # out => (N, 1)
+
+    # 5) out => shape (N,1)
     out = jnp.dot(h, W2) + b2
-    
-    # flatten => (N,)
+
+    # 6) flatten => (N,)
     out_1d = out.squeeze(axis=-1)
-    
+
     return out_1d, t
   
 def fdbp(
