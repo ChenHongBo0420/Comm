@@ -603,7 +603,8 @@ def fdbp(
         # 不分real/imag => 全部 real offset => x_new + alpha * res
         # 只要 x_new是complex => convert
         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        x_new = x_new + alpha*res_val_cplx
+        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+        x_new = x_new + alpha * res_val_cplx_2d 
         
         # update x,t
         x, t = x_new, t_res
