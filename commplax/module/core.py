@@ -624,8 +624,7 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 
     # 4) hidden => (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
-    # h = jax.nn.relu(h)  # or elu, gelu
-    h = jnp.tanh(h)
+    h = jax.nn.elu(h)  # or elu, gelu
     # 5) out => shape (N,1)
     out = jnp.dot(h, W2) + b2
 
