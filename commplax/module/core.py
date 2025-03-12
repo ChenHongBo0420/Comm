@@ -515,39 +515,37 @@ from jax.nn.initializers import orthogonal, zeros
 #     return Signal(x, t)
 
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=32):
+def residual_mlp_2ch(scope: Scope, signal: Signal, hidden_dim=32):
     """
-    对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
-    再用 MLP => (N,) residual
+    residual MLP for shape (N,2) -> (N,2).
+    Each time-step has 2 features, the MLP can learn separate corrections.
     """
     x, t = signal
-    # x shape => (N,2) or (N,C), ...
-    
-    # 1) reduce across channel: e.g. mean => shape = (N,)
-    #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
-    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
-    
-    N = x_scalar.shape[0]
-    # 2) reshape => (N,1)
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
-    
-    # 3) define param for 2-layer MLP
-    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
+    # x shape => (N,2)
+    x = x.astype(jnp.float32)
+
+    N, C = x.shape
+    assert C == 2, "residual_mlp_2ch is designed for 2 channels"
+
+    # -- define param for 2-layer MLP
+    # 1) (2->hidden_dim)
+    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (C, hidden_dim), jnp.float32)
     b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
-    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
-    b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
 
-    # 4) hidden => (N, hidden_dim)
-    h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.relu(h)  # or elu, gelu
+    # 2) (hidden_dim->2)
+    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, C), jnp.float32)
+    b2 = scope.param('b2', nn.initializers.zeros, (C,), jnp.float32)
 
-    # 5) out => shape (N,1)
+    # forward pass
+    # shape => (N, hidden_dim)
+    h = jnp.dot(x, W1) + b1  # (N, hidden_dim)
+    h = jax.nn.relu(h)
+
+    # out => (N,2)
     out = jnp.dot(h, W2) + b2
 
-    # 6) flatten => (N,)
-    out_1d = out.squeeze(axis=-1)
+    return out, t
 
-    return out_1d, t
   
 def fdbp(
     scope: Scope,
@@ -561,55 +559,47 @@ def fdbp(
     hidden_dim=32,
     use_alpha=True,
 ):
-    """
-    保持原 fdbp(D->N)结构:
-      1) D
-      2) N
-      + 3) residual MLP => out shape=(N,) and add to x
-    """
     x, t = signal
-    # 1) 色散
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # 可选: 对res加个可训练缩放
     if use_alpha:
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
 
     for i in range(steps):
-        # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+        # --- (A) D
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+
+        # --- (B) N
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
             Signal(jnp.abs(x)**2, td),
             taps=ntaps,
             kernel_init=n_init
         )
-        # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        
-        # --- (C) residual MLP
-        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResMLP_{i}')(
+        # apply phase
+        x_new = jnp.exp(1j*c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+
+        # x_new shape => (N,2) presumably
+        # --- (C) residual MLP for 2 channels
+        # Let's feed x_new's amplitude^2 => (N,2):
+        # or maybe feed real/imag => see below
+        # for amplitude^2: (N,) => to keep it 2ch, do x_new => (N,2) => jnp.abs(x_new)**2 ???
+
+        # if x_new is complex shape(N,2)? abs => shape(N,2) => real
+        res_val, t_res = scope.child(residual_mlp_2ch, name=f'ResMLP_{i}')(
             Signal(jnp.abs(x_new)**2, tN),
             hidden_dim=hidden_dim
         )
-        # res_val => (N_new,)
-        # cast to complex, or interpret as real
-        # 这里示例 "在幅度上+res"
-        #   => x_new += alpha * res_val
-        # 不分real/imag => 全部 real offset => x_new + alpha * res
-        # 只要 x_new是complex => convert
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-        x_new = x_new + alpha * res_val_cplx_2d 
-        
-        # update x,t
+        # res_val => (N,2)
+
+        # add
+        x_new = x_new + alpha*res_val.astype(x_new.dtype)
+
         x, t = x_new, t_res
 
     return Signal(x, t)
+
 
 
 # def fdbp(
