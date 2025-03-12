@@ -495,58 +495,55 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
 
 
-def residual_linear_attention(scope: Scope, signal: Signal, taps=31, stride=1, mode='valid'):
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=32):
     """
-    对 signal.val (real array, shape=N) 做线性注意力 => return (residual, new_t)
-    例子：使用“scan式”线性注意力(避免大 framing)
+    对 1D 输入 x(t)=|X|^2 做一个小 MLP，输出与 x 同长度的一维向量作为残差
     """
     x, t = signal
-    # 1) param w => shape=(taps,)
-    w = scope.param('attn_w', nn.initializers.zeros, (taps,), jnp.float32)
+    N = x.shape[0]
+    # param: W1, b1; W2, b2
+    # W1 => shape (1, hidden_dim), b1 => shape (hidden_dim,)
+    # W2 => shape (hidden_dim, 1), b2 => shape (1,)
+    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
+    b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
+    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
+    b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
+
+    # reshape x => (N,1)
+    x_2d = x.reshape(N,1).astype(jnp.float32)
     
-    # 2) scan over x => rolling buffer
-    def step_fn(carry, x_new):
-        (buf, idx) = carry
-        new_buf = jnp.concatenate([buf[1:], jnp.array([x_new])])
-        raw_score = new_buf * w
-        score = jax.nn.elu(raw_score) + 1.0
-        sumK = jnp.sum(score)
-        sumKV= jnp.sum(score*new_buf)
-        y = sumKV / (sumK + 1e-6)
-        return (new_buf, idx+1), y
-
-    init_buf = jnp.zeros((taps,), dtype=x.dtype)
-    init_carry = (init_buf, 0)
-    (carry_final, ys) = jax.lax.scan(step_fn, init_carry, x)
-    # ys shape => (N,), 其中前 (taps-1)点无效
-    # valid => 取后 (N - taps +1)
-    valid_y = ys[taps-1:]
+    # hidden => (N, hidden_dim)
+    h = jnp.dot(x_2d, W1) + b1
+    h = jax.nn.relu(h)  # or elu, gelu
     
-    # new t
-    new_t = scope.variable('const', 't', conv1d_t, t, taps, (taps-1)//2, stride, mode).value
-
-    return valid_y, new_t
-
+    # out => (N, 1)
+    out = jnp.dot(h, W2) + b2
+    
+    # flatten => (N,)
+    out_1d = out.squeeze(axis=-1)
+    
+    return out_1d, t
+  
 def fdbp(
     scope: Scope,
     signal,
@@ -556,58 +553,58 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    use_alpha=True
+    hidden_dim=32,
+    use_alpha=True,
 ):
     """
-    每步 = 
-      1) 色散补偿 (dconv)
-      2) 非线性相位 (mimoconv1d)
-      3) 线性注意力 residual => 添加到 x
-    
-    Args:
-      - use_alpha: 是否对 residual 加可训练缩放
+    保持原 fdbp(D->N)结构:
+      1) D
+      2) N
+      + 3) residual MLP => out shape=(N,) and add to x
     """
     x, t = signal
-    
-    # A) 构建色散补偿dconv
+    # 1) 色散
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # B) 可训练缩放 alpha (可选)
+
+    # 可选: 对res加个可训练缩放
     if use_alpha:
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
 
     for i in range(steps):
-        # 1) 色散 D
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-
-        # 2) 非线性 N
-        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+        # --- (A) 色散补偿 (D)
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
+        # --- (B) 非线性补偿 (N)
+        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
             Signal(jnp.abs(x)**2, td),
             taps=ntaps,
             kernel_init=n_init
         )
-        # 更新 x => e^{j c(t)}
+        # 应用相位: x_new = exp(j*c) * x[...]
         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-
-        # 3) residual linear attention (对 x_new 幅度平方 做线性注意力)
-        #    --> 需要定义 residual_linear_attention 函数
-        #    这函数返回 (residual_val, new_time)
-        res_val, t_res = scope.child(residual_linear_attention, name=f'ResAttn_{i}')(
-            Signal(jnp.abs(x_new)**2, tN)
-        )
         
-        # 合并
-        # 如果 x_new 是 complex => 可以把 res_val 当成 real, 并相加
-        # 也可先 cast to complex
-        res_val_cplx = res_val.astype(x_new.dtype)
-        x_new = x_new + alpha * res_val_cplx
-
-        # 更新 x,t
+        # --- (C) residual MLP
+        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+        res_val, t_res = scope.child(residual_mlp, name=f'ResMLP_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # res_val => (N_new,)
+        # cast to complex, or interpret as real
+        # 这里示例 "在幅度上+res"
+        #   => x_new += alpha * res_val
+        # 不分real/imag => 全部 real offset => x_new + alpha * res
+        # 只要 x_new是complex => convert
+        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+        x_new = x_new + alpha*res_val_cplx
+        
+        # update x,t
         x, t = x_new, t_res
 
     return Signal(x, t)
+
 
 # def fdbp(
 #     scope: Scope,
