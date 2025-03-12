@@ -600,7 +600,7 @@ from jax.nn.initializers import orthogonal, zeros
 
 #     return Signal(x, t)
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=1):
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
     对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
     再用 MLP => (N,) residual
@@ -624,8 +624,8 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=1):
 
     # 4) hidden => (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.relu(h)  # or elu, gelu
-
+    # h = jax.nn.relu(h)  # or elu, gelu
+    h = jnp.tanh(h)
     # 5) out => shape (N,1)
     out = jnp.dot(h, W2) + b2
 
@@ -643,7 +643,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=1,
+    hidden_dim=2,
     use_alpha=True,
 ):
     """
