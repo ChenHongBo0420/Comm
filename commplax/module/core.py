@@ -225,8 +225,10 @@ def conv1d(
     scope: Scope,
     signal,
     taps=31,
-    stride=1,
     mode='valid',
+    kernel_init=delta,
+    conv_fn = xop.convolve,
+    stride=1
     # 简化：用可训练的投影，或者直接全局可训练向量
     # 这里演示 simplest case: 每个patch先做 1个线性变换 (query)
     # 也可多头, keys, queries, etc. 简化就单头
