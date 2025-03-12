@@ -633,7 +633,7 @@ from jax.nn.initializers import orthogonal, zeros
 
 #     return out_1d, t
 
-def residual_mlp(scope: Scope, signal: Signal):
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     # x shape: (N,2) => assume real parted amplitude^2 or I/Q parted
     x, t = signal
     x = x.astype(jnp.float32)
