@@ -221,72 +221,57 @@ def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
 #     x = conv_fn(x, h, mode=mode)
 #     return Signal(x, t)
 
-def conv1d(
+def conv1d_linear_attention(
     scope: Scope,
     signal: Signal,
     taps=31,
     rtap=None,
+    stride=1,
     kernel_init=delta,
     conv_fn = xop.convolve,
-    stride=1,            # 暂时只支持 stride=1 简化处理
-    mode='valid',
-    eps=1e-6
+    mode='valid'
 ):
     """
-    基于“线性注意力 + 滚动窗口”的1D卷积:
-      - 不使用 xop.frame(), 避免构造 (N, taps) 大矩阵
-      - 通过 lax.scan 逐元素推进, 每步维护一个 buffer (长度=taps)
-      - 当 i >= (taps-1) 时输出 "有效"线性注意力结果
-
-    若输入长度=N => 输出形状= (N - taps + 1, )
+    用线性注意力思想替代原先softmax注意力：
+      1) 对输入做frame => (F, taps)
+      2) score = elu(x_frames * w) + 1
+      3) 累加分母 sumK = sum_k( score ), 分子 sumKV = sum_k(score * x_frames)
+      4) y_frames = sumKV / sumK
+      5) 根据 conv1d_t 更新时间信息 new_t
     """
+    # 1) Framing
     x, t = signal
-    N = x.shape[0]
+    x_frames = xop.frame(x, taps, stride)  # shape (F, taps)
+    F = x_frames.shape[0]
 
-    if N < taps:
-        # 如果输入长度比卷积核还短, valid模式下可直接空输出
-        return Signal(jnp.array([], dtype=x.dtype), t)
+    # 2) 可训练 param: w, shape=(taps,)
+    w = scope.param(
+        'attn_w',
+        jax.nn.initializers.zeros,  # 或 normal, etc.
+        (taps,),
+        jnp.float32
+    )
+    # 计算score => phi(x) = elu(x)+1
+    # 这里让score[i,k] = elu( x_frames[i,k] * w[k] ) + 1
+    # shape (F, taps)
+    raw_score = x_frames * w
+    score = jax.nn.elu(raw_score) + 1.0
 
-    # 可训练参数: w, shape=(taps,)
-    w = scope.param('attn_w',
-                    jax.nn.initializers.zeros,
-                    (taps,),
-                    jnp.float32)
+    # 3) 分母 + 分子
+    # sumK[i] = sum_{k}(score[i,k])
+    # sumKV[i]= sum_{k}(score[i,k] * x_frames[i,k])
+    sumK  = jnp.sum(score, axis=-1)            # shape (F,)
+    sumKV = jnp.sum(score * x_frames, axis=-1) # shape (F,)
 
-    # 定义一个 step 函数, 用 lax.scan 实现
-    # carry: (buffer, idx)
-    # x_new: 当前元素
-    def step_fn(carry, x_new):
-        (buf, i) = carry  # buf.shape= (taps,), i是当前索引
-        # 滚动: 把 buf[1:] 左移, 并在末尾插入 x_new
-        new_buf = jnp.concatenate([buf[1:], jnp.array([x_new])])
+    # 4) 计算输出 => y_frames = sumKV / sumK
+    #   + eps防止除0
+    eps = 1e-6
+    y_frames = sumKV / (sumK + eps)  # shape (F,)
 
-        # 做线性注意力 => score = elu(buf * w) + 1
-        raw_score = new_buf * w
-        score = jax.nn.elu(raw_score) + 1.0
-
-        sumK  = jnp.sum(score)
-        sumKV = jnp.sum(score * new_buf)
-        y = sumKV / (sumK + eps)
-
-        # 仅在 i >= (taps-1) 时, y才对应 valid输出, 否则只是“缓冲未填满”
-        return (new_buf, i+1), y
-
-    # 初始 buffer 先置 0, 长度=taps
-    init_buffer = jnp.zeros((taps,), dtype=x.dtype)
-    init_carry = (init_buffer, 0)
-
-    # 用 lax.scan 处理整条x
-    (final_carry, ys) = jax.lax.scan(step_fn, init_carry, x)
-    # ys.shape= (N, ), 其中前 (taps-1) 个是“缓冲不满”阶段, 后面的才 valid
-
-    # 对 'valid' 模式, 取 ys[taps-1:] => shape= (N - taps + 1,)
-    y_valid = ys[taps-1:]
-
-    # 更新 SigTime
+    # 5) 更新时域信息
     new_t = scope.variable('const', 't', conv1d_t, t, taps, rtap, stride, mode).value
 
-    return Signal(y_valid, new_t)
+    return Signal(y_frames, new_t)
   
   
 def kernel_initializer(rng, shape):
