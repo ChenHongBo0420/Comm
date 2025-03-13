@@ -559,37 +559,63 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 
 #     return out_1d, t
 
+def channel_attention(x, scope):
+    """
+    对输入 x (形状 (N, C), 复数) 计算通道注意力权重。
+    
+    步骤：
+      1. 将复数拆分成实部和虚部，堆叠后得到 (N, C, 2) 的张量；
+      2. 对每个通道做一个线性映射，输出一个标量得分；
+      3. 对所有通道的得分在最后一维上做 softmax，得到注意力权重。
+    """
+    # x: (N, C) 复数 -> 堆叠成 (N, C, 2)
+    x_stack = jnp.stack([jnp.real(x), jnp.imag(x)], axis=-1)  # shape (N, C, 2)
+    
+    # 定义参数：W_att 的形状 (2, 1)，b_att 的形状 (1,)
+    W_att = scope.param("W_att", nn.initializers.glorot_uniform(), (2, 1))
+    b_att = scope.param("b_att", nn.initializers.zeros, (1,))
+    
+    # 计算每个通道的得分：利用矩阵乘法 (N, C, 2) @ (2, 1) -> (N, C, 1)
+    scores = jnp.matmul(x_stack, W_att) + b_att  # shape (N, C, 1)
+    scores = scores.squeeze(axis=-1)             # shape (N, C)
+    
+    # softmax 得到注意力权重（实数），在通道维度上归一化
+    weights = jax.nn.softmax(scores, axis=-1)      # shape (N, C)
+    return weights
+
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
-    对多通道复数输入 x(t)（例如形状 (N, C)），直接将所有通道作为特征输入，
-    使用两层 MLP 生成 (N,) 复数 residual，而不对偏振态做均值或范数归约。
+    对多通道复数输入 x(t)（例如形状 (N, C)），先利用注意力机制对各通道进行加权融合，
+    再使用两层 MLP 生成 (N,) 复数 residual。
     """
-    x, t = signal
-    # 假设 x 的形状为 (N, C)
-    N, C = x.shape[0], x.shape[-1]
+    x, t = signal  # 假设 x 的形状为 (N, C)
+    # 确保输入为复数类型
+    x = x.astype(jnp.complex64)
     
-    # 直接转换为复数类型（如果不是的话）
-    x_2d = x.astype(jnp.complex64)  # shape (N, C)
+    # 1. 利用注意力机制对各通道进行加权融合
+    attn_weights = channel_attention(x, scope)  # shape (N, C)
+    x_fused = jnp.sum(x * attn_weights, axis=-1)  # shape (N,), 融合后的复数表示
+
+    # 2. 将融合后的输入 reshape 为 (N, 1)
+    N = x_fused.shape[0]
+    x_2d = x_fused.reshape(N, 1)
     
-    # 定义两层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
-    W1 = scope.param('W1', complex_glorot_uniform, (C, hidden_dim))
-    b1 = scope.param('b1',
-                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+    # 3. 定义两层 MLP 的参数（均为复数参数）
+    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+    b1 = scope.param('b1', lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
                      (hidden_dim,))
     W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
-    b2 = scope.param('b2',
-                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+    b2 = scope.param('b2', lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
                      (1,))
     
-    # 第一层全连接：输出形状 (N, hidden_dim)
+    # 4. 第一层全连接及激活：输出形状 (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.gelu(h)  # 使用 gelu 作为复数版激活函数（如果表现良好）
+    # 这里继续使用 gelu，实验表明在某些场景下 gelu 效果更好
+    h = jax.nn.gelu(h)
     
-    # 输出层：映射到 (N, 1)
+    # 5. 输出层映射到 (N, 1)
     out = jnp.dot(h, W2) + b2
-    
-    # squeeze 得到 (N,)
-    out_1d = out.squeeze(axis=-1)
+    out_1d = out.squeeze(axis=-1)  # 形状 (N,)
     
     return out_1d, t
 
