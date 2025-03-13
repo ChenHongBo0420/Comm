@@ -640,7 +640,7 @@ from typing import NamedTuple, Any
 from commplax import xcomm, xop
 
 
-def residual_cnn(scope: Scope, signal: Signal, hidden_channels=8):
+def residual_cnn(scope: Scope, signal: Signal, hidden_channels=2):
     """
     用一个最简单的双层1D CNN, 来对多通道输入x(t)做局部卷积,
     最终输出 (N,1) => squeeze => (N,).
@@ -704,7 +704,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=2,
+    hidden_channels=2,
     use_alpha=True,
 ):
     """
@@ -740,7 +740,7 @@ def fdbp(
         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
         res_val, t_res = scope.child(residual_cnn, name=f'ResCNN_{i}')(
             Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
+            hidden_channels=hidden_channels
         )
         # res_val => (N_new,)
         # cast to complex, or interpret as real
