@@ -530,8 +530,8 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     # x 的形状例如 (N, 2) 或 (N, C) 等
     
     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
-    x_scalar = jnp.max(x, axis=-1)  # shape=(N,), 复数
-    
+    # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+    x_scalar = jnp.linalg.norm(x, axis=-1)
     N = x_scalar.shape[0]
     # 2) reshape 成 (N,1)，并转换为复数数据类型
     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
