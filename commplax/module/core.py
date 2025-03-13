@@ -639,9 +639,6 @@ from flax.core import Scope
 from typing import NamedTuple, Any
 from commplax import xcomm, xop
 
-class Signal(NamedTuple):
-    val: jnp.ndarray
-    t: Any
 
 def residual_cnn(scope: Scope, signal: Signal, hidden_channels=2, kernel_size=3):
     """
