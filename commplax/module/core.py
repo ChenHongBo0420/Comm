@@ -658,7 +658,9 @@ def fdbp(
 
     # 可选: 对res加个可训练缩放
     if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+        # alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+        log_alpha = scope.param('log_alpha', nn.initializers.zeros, ())
+        alpha = jnp.exp(log_alpha) 
     else:
         alpha = 1.0
     debug.print("alpha = {}", alpha)
