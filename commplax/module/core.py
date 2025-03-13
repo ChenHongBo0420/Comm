@@ -521,23 +521,58 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
 
+# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+#     """
+#     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
+#     然后使用两层 MLP 生成 (N,) 复数 residual。
+#     """
+#     x, t = signal
+#     # x 的形状例如 (N, 2) 或 (N, C) 等
+    
+#     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
+#     x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+    
+#     N = x_scalar.shape[0]
+#     # 2) reshape 成 (N,1)，并转换为复数数据类型
+#     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
+    
+#     # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+#     W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+#     b1 = scope.param('b1',
+#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+#                      (hidden_dim,))
+#     W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+#     b2 = scope.param('b2',
+#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+#                      (1,))
+    
+#     # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+#     h = jnp.dot(x_2d, W1) + b1
+#     # 使用复数版激活函数，这里选用 tanh（也可以尝试其它适用于复数的激活）
+#     h = jax.nn.gelu(h)
+    
+#     # 5) 输出层：形状 (N,1)
+#     out = jnp.dot(h, W2) + b2
+
+#     # 6) squeeze 得到形状 (N,)
+#     out_1d = out.squeeze(axis=-1)
+
+#     return out_1d, t
+
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
-    对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
-    然后使用两层 MLP 生成 (N,) 复数 residual。
+    对多通道复数输入 x(t)（例如形状 (N, C)），直接将所有通道作为特征输入，
+    使用两层 MLP 生成 (N,) 复数 residual，而不对偏振态做均值或范数归约。
     """
     x, t = signal
-    # x 的形状例如 (N, 2) 或 (N, C) 等
+    # 假设 x 的形状为 (N, C)
+    N, C = x.shape[0], x.shape[-1]
     
-    # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
-    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+    # 直接转换为复数类型（如果不是的话）
+    x_2d = x.astype(jnp.complex64)  # shape (N, C)
     
-    N = x_scalar.shape[0]
-    # 2) reshape 成 (N,1)，并转换为复数数据类型
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
-    
-    # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
-    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+    # 定义两层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+    W1 = scope.param('W1', complex_glorot_uniform, (C, hidden_dim))
     b1 = scope.param('b1',
                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
                      (hidden_dim,))
@@ -546,17 +581,16 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
                      (1,))
     
-    # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+    # 第一层全连接：输出形状 (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
-    # 使用复数版激活函数，这里选用 tanh（也可以尝试其它适用于复数的激活）
-    h = jax.nn.gelu(h)
+    h = jax.nn.gelu(h)  # 使用 gelu 作为复数版激活函数（如果表现良好）
     
-    # 5) 输出层：形状 (N,1)
+    # 输出层：映射到 (N, 1)
     out = jnp.dot(h, W2) + b2
-
-    # 6) squeeze 得到形状 (N,)
+    
+    # squeeze 得到 (N,)
     out_1d = out.squeeze(axis=-1)
-
+    
     return out_1d, t
 
 
