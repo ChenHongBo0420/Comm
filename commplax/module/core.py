@@ -667,10 +667,10 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
     # 使用复数版激活函数，这里选用 tanh（也可以尝试其它适用于复数的激活）
-    h = jnp.tanh(h)
+    h = jnp.relu(h)
     
     # 5) 输出层：形状 (N,1)
-    out = jnp.dot(h, W2) + b2
+    out = jax.nn.gelu(h, W2) + b2
 
     # 6) squeeze 得到形状 (N,)
     out_1d = out.squeeze(axis=-1)
