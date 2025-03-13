@@ -521,7 +521,7 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=128):
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
     然后使用两层 MLP 生成 (N,) 复数 residual。
@@ -570,7 +570,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=128,
+    hidden_dim=2,
     use_alpha=True,
 ):
     """
