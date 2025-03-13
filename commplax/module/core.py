@@ -600,99 +600,39 @@ from jax.nn.initializers import orthogonal, zeros
 
 #     return Signal(x, t)
 
-# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
-#     """
-#     对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
-#     再用 MLP => (N,) residual
-#     """
-#     x, t = signal
-#     # x shape => (N,2) or (N,C), ...
-    
-#     # 1) reduce across channel: e.g. mean => shape = (N,)
-#     #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
-#     x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
-    
-#     N = x_scalar.shape[0]
-#     # 2) reshape => (N,1)
-#     x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
-    
-#     # 3) define param for 2-layer MLP
-#     W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
-#     b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
-#     W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
-#     b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
-
-#     # 4) hidden => (N, hidden_dim)
-#     h = jnp.dot(x_2d, W1) + b1
-#     h = jax.nn.elu(h)  # or elu, gelu
-#     # 5) out => shape (N,1)
-#     out = jnp.dot(h, W2) + b2
-
-#     # 6) flatten => (N,)
-#     out_1d = out.squeeze(axis=-1)
-
-#     return out_1d, t
-  
-import jax
-import jax.numpy as jnp
-from flax.core import Scope
-from typing import NamedTuple, Any
-from commplax import xcomm, xop
-
-
-def residual_cnn(scope: Scope, signal: Signal, hidden_channels=2):
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
-    用一个最简单的双层1D CNN, 来对多通道输入x(t)做局部卷积,
-    最终输出 (N,1) => squeeze => (N,).
-
-    steps:
-      1) x: shape (N, C)   e.g. (N,2)
-      2) first conv => shape (N, hidden_channels)
-      3) relu
-      4) second conv => shape (N, 1)
-      5) flatten => (N,)
-
-    returns: out_1d, t
+    对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
+    再用 MLP => (N,) residual
     """
     x, t = signal
-    x = x.astype(jnp.float32)  # ensure float
-    N, in_channels = x.shape
-    kernel_size = 3
-    # 1) define param for 2-layer conv
-    # conv1: kernel shape (kernel_size, in_channels, hidden_channels)
-    w1 = scope.param(
-        'w1',
-        jax.nn.initializers.glorot_uniform(),
-        (kernel_size, in_channels, hidden_channels),
-        jnp.float32
-    )
-    b1 = scope.param('b1', jax.nn.initializers.zeros, (hidden_channels,), jnp.float32)
+    # x shape => (N,2) or (N,C), ...
+    
+    # 1) reduce across channel: e.g. mean => shape = (N,)
+    #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
+    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
+    
+    N = x_scalar.shape[0]
+    # 2) reshape => (N,1)
+    x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
+    
+    # 3) define param for 2-layer MLP
+    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
+    b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
+    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
+    b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
 
-    # conv2: kernel shape (kernel_size, hidden_channels, 1)
-    w2 = scope.param(
-        'w2',
-        jax.nn.initializers.glorot_uniform(),
-        (kernel_size, hidden_channels, 1),
-        jnp.float32
-    )
-    b2 = scope.param('b2', jax.nn.initializers.zeros, (1,), jnp.float32)
+    # 4) hidden => (N, hidden_dim)
+    h = jnp.dot(x_2d, W1) + b1
+    h = jax.nn.elu(h)  # or elu, gelu
+    # 5) out => shape (N,1)
+    out = jnp.dot(h, W2) + b2
 
-    # 2) conv1
-    #   shape in => (N, in_channels), kernel => (k, in_channels, out_channels)
-    #   use xcomm.mimoconv => result => (N, out_channels)
-    #   mode='same' => 不改变长度 N
-    h1 = xcomm.mimoconv(x, w1, mode='same', conv=xop.convolve)  # shape (N, hidden_channels)
-    h1 = h1 + b1  # broadcast b1 => shape (hidden_channels,)
-    h1 = jax.nn.relu(h1)
-
-    # 3) conv2
-    h2 = xcomm.mimoconv(h1, w2, mode='same', conv=xop.convolve) # shape (N,1)
-    h2 = h2 + b2  # broadcast b2 => shape (1,)
-
-    # flatten => (N,)
-    out_1d = h2.squeeze(axis=-1)
+    # 6) flatten => (N,)
+    out_1d = out.squeeze(axis=-1)
 
     return out_1d, t
+
 
 from jax import debug
 def fdbp(
@@ -704,7 +644,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_channels=2,
+    hidden_dim=128,
     use_alpha=True,
 ):
     """
@@ -738,9 +678,9 @@ def fdbp(
         
         # --- (C) residual MLP
         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_cnn, name=f'ResCNN_{i}')(
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
             Signal(jnp.abs(x_new)**2, tN),
-            hidden_channels=hidden_channels
+            hidden_dim=hidden_dim
         )
         # res_val => (N_new,)
         # cast to complex, or interpret as real
