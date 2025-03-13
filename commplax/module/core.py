@@ -632,6 +632,70 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     out_1d = out.squeeze(axis=-1)
 
     return out_1d, t
+  
+import jax
+import jax.numpy as jnp
+from flax.core import Scope
+from typing import NamedTuple, Any
+from commplax import xcomm, xop
+
+class Signal(NamedTuple):
+    val: jnp.ndarray
+    t: Any
+
+def residual_cnn(scope: Scope, signal: Signal, hidden_channels=2, kernel_size=3):
+    """
+    用一个最简单的双层1D CNN, 来对多通道输入x(t)做局部卷积,
+    最终输出 (N,1) => squeeze => (N,).
+
+    steps:
+      1) x: shape (N, C)   e.g. (N,2)
+      2) first conv => shape (N, hidden_channels)
+      3) relu
+      4) second conv => shape (N, 1)
+      5) flatten => (N,)
+
+    returns: out_1d, t
+    """
+    x, t = signal
+    x = x.astype(jnp.float32)  # ensure float
+    N, in_channels = x.shape
+
+    # 1) define param for 2-layer conv
+    # conv1: kernel shape (kernel_size, in_channels, hidden_channels)
+    w1 = scope.param(
+        'w1',
+        jax.nn.initializers.glorot_uniform(),
+        (kernel_size, in_channels, hidden_channels),
+        jnp.float32
+    )
+    b1 = scope.param('b1', jax.nn.initializers.zeros, (hidden_channels,), jnp.float32)
+
+    # conv2: kernel shape (kernel_size, hidden_channels, 1)
+    w2 = scope.param(
+        'w2',
+        jax.nn.initializers.glorot_uniform(),
+        (kernel_size, hidden_channels, 1),
+        jnp.float32
+    )
+    b2 = scope.param('b2', jax.nn.initializers.zeros, (1,), jnp.float32)
+
+    # 2) conv1
+    #   shape in => (N, in_channels), kernel => (k, in_channels, out_channels)
+    #   use xcomm.mimoconv => result => (N, out_channels)
+    #   mode='same' => 不改变长度 N
+    h1 = xcomm.mimoconv(x, w1, mode='same', conv=xop.convolve)  # shape (N, hidden_channels)
+    h1 = h1 + b1  # broadcast b1 => shape (hidden_channels,)
+    h1 = jax.nn.relu(h1)
+
+    # 3) conv2
+    h2 = xcomm.mimoconv(h1, w2, mode='same', conv=xop.convolve) # shape (N,1)
+    h2 = h2 + b2  # broadcast b2 => shape (1,)
+
+    # flatten => (N,)
+    out_1d = h2.squeeze(axis=-1)
+
+    return out_1d, t
 
 from jax import debug
 def fdbp(
@@ -658,9 +722,7 @@ def fdbp(
 
     # 可选: 对res加个可训练缩放
     if use_alpha:
-        # alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-        log_alpha = scope.param('log_alpha', nn.initializers.zeros, ())
-        alpha = jnp.exp(log_alpha) 
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
     debug.print("alpha = {}", alpha)
@@ -679,7 +741,7 @@ def fdbp(
         
         # --- (C) residual MLP
         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResMLP_{i}')(
+        res_val, t_res = scope.child(residual_cnn, name=f'ResCNN_{i}')(
             Signal(jnp.abs(x_new)**2, tN),
             hidden_dim=hidden_dim
         )
