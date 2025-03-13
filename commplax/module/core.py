@@ -600,35 +600,79 @@ from jax.nn.initializers import orthogonal, zeros
 
 #     return Signal(x, t)
 
+# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+#     """
+#     对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
+#     再用 MLP => (N,) residual
+#     """
+#     x, t = signal
+#     # x shape => (N,2) or (N,C), ...
+    
+#     # 1) reduce across channel: e.g. mean => shape = (N,)
+#     #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
+#     x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
+    
+#     N = x_scalar.shape[0]
+#     # 2) reshape => (N,1)
+#     x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
+    
+#     # 3) define param for 2-layer MLP
+#     W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
+#     b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
+#     W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
+#     b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
+
+#     # 4) hidden => (N, hidden_dim)
+#     h = jnp.dot(x_2d, W1) + b1
+#     h = jax.nn.elu(h)  # or elu, gelu
+#     # 5) out => shape (N,1)
+#     out = jnp.dot(h, W2) + b2
+
+#     # 6) flatten => (N,)
+#     out_1d = out.squeeze(axis=-1)
+
+#     return out_1d, t
+
+def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
+    # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
+    real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+    imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+    return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
+
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
-    对多通道输入 x(t)，先做 mean/范数 => 得到 scalar per time-step，
-    再用 MLP => (N,) residual
+    对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
+    然后使用两层 MLP 生成 (N,) 复数 residual。
     """
     x, t = signal
-    # x shape => (N,2) or (N,C), ...
+    # x 的形状例如 (N, 2) 或 (N, C) 等
     
-    # 1) reduce across channel: e.g. mean => shape = (N,)
-    #   可用 jnp.mean, jnp.sum, jnp.linalg.norm,... 由您决定
-    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,)
+    # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
+    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
     
     N = x_scalar.shape[0]
-    # 2) reshape => (N,1)
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.float32)
+    # 2) reshape 成 (N,1)，并转换为复数数据类型
+    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
     
-    # 3) define param for 2-layer MLP
-    W1 = scope.param('W1', nn.initializers.glorot_uniform(), (1, hidden_dim), jnp.float32)
-    b1 = scope.param('b1', nn.initializers.zeros, (hidden_dim,), jnp.float32)
-    W2 = scope.param('W2', nn.initializers.glorot_uniform(), (hidden_dim, 1), jnp.float32)
-    b2 = scope.param('b2', nn.initializers.zeros, (1,), jnp.float32)
-
-    # 4) hidden => (N, hidden_dim)
+    # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+    b1 = scope.param('b1',
+                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+                     (hidden_dim,))
+    W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+    b2 = scope.param('b2',
+                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+                     (1,))
+    
+    # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
     h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.elu(h)  # or elu, gelu
-    # 5) out => shape (N,1)
+    # 使用复数版激活函数，这里选用 tanh（也可以尝试其它适用于复数的激活）
+    h = jnp.tanh(h)
+    
+    # 5) 输出层：形状 (N,1)
     out = jnp.dot(h, W2) + b2
 
-    # 6) flatten => (N,)
+    # 6) squeeze 得到形状 (N,)
     out_1d = out.squeeze(axis=-1)
 
     return out_1d, t
@@ -644,7 +688,7 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_dim=128,
+    hidden_dim=2,
     use_alpha=True,
 ):
     """
