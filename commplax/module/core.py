@@ -640,7 +640,7 @@ from typing import NamedTuple, Any
 from commplax import xcomm, xop
 
 
-def residual_cnn(scope: Scope, signal: Signal, hidden_dim=2):
+def residual_cnn(scope: Scope, signal: Signal, hidden_channels=8):
     """
     用一个最简单的双层1D CNN, 来对多通道输入x(t)做局部卷积,
     最终输出 (N,1) => squeeze => (N,).
@@ -657,13 +657,13 @@ def residual_cnn(scope: Scope, signal: Signal, hidden_dim=2):
     x, t = signal
     x = x.astype(jnp.float32)  # ensure float
     N, in_channels = x.shape
-
+    kernel_size = 3
     # 1) define param for 2-layer conv
     # conv1: kernel shape (kernel_size, in_channels, hidden_channels)
     w1 = scope.param(
         'w1',
         jax.nn.initializers.glorot_uniform(),
-        (3, in_channels, 2),
+        (kernel_size, in_channels, hidden_channels),
         jnp.float32
     )
     b1 = scope.param('b1', jax.nn.initializers.zeros, (hidden_channels,), jnp.float32)
@@ -672,7 +672,7 @@ def residual_cnn(scope: Scope, signal: Signal, hidden_dim=2):
     w2 = scope.param(
         'w2',
         jax.nn.initializers.glorot_uniform(),
-        (3, 2, 1),
+        (kernel_size, hidden_channels, 1),
         jnp.float32
     )
     b2 = scope.param('b2', jax.nn.initializers.zeros, (1,), jnp.float32)
