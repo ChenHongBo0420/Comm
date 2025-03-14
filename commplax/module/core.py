@@ -657,7 +657,7 @@ from jax import debug
 
 def fdbp(
     scope: Scope,
-    signal,
+    signal: Signal,
     steps=3,
     dtaps=261,
     ntaps=41,
@@ -668,14 +668,17 @@ def fdbp(
     use_alpha=True,
 ):
     """
-    保持原 FDBP (D->N) 结构，但对非线性补偿后再做乘法残差修正：
+    FDBP 修正流程：
       (A) 色散补偿 (D)
       (B) 非线性补偿 (N)
-      (C) residual MLP 输出形状 (N,2) 的残差，然后更新:
+      (C) residual MLP 生成 (N,2) 的残差，然后利用乘法残差进行修正：
           x_new = x_new * exp(α * (res_amp + 1j * res_phase))
+    
+    注意：这里要求 x_new 的形状为 (N, C)（多通道），
+          但我们对每个样本使用相同的乘法修正因子，因此将修正项扩展为 (N,1) 后广播。
     """
     x, t = signal
-    # (A) 色散补偿：对每步使用一个卷积
+    # (A) 色散补偿：采用 vmap 包装 conv1d 操作（假设 conv1d 已定义）
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     # 可选：对 residual 修正加上可训练缩放因子 alpha
@@ -695,11 +698,10 @@ def fdbp(
             taps=ntaps,
             kernel_init=n_init
         )
-        # 应用相位修正: x_new = exp(j * c) * x[...]
+        # 应用相位补偿: x_new = exp(1j * c) * x[...]，注意时间轴对齐
         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
         
-        # --- (C) residual MLP: 生成残差并进行乘法修正
-        # 输入为 |x_new|^2，输出 shape 为 (N_new, 2)
+        # --- (C) residual MLP: 输入为 |x_new|^2，输出形状为 (N_new, 2)
         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
             Signal(jnp.abs(x_new)**2, tN),
             hidden_dim=hidden_dim,
@@ -709,8 +711,9 @@ def fdbp(
         res_amp = res_val[:, 0]
         res_phase = res_val[:, 1]
         # 使用指数形式进行乘法残差更新:
-        # x_new = x_new * exp(α * (res_amp + 1j * res_phase))
-        x_new = x_new * jnp.exp(alpha * (res_amp + 1j * res_phase))
+        # 为了广播，将 multiplier 形状从 (N,) 扩展为 (N, 1)
+        multiplier = jnp.exp(alpha * (res_amp + 1j * res_phase))[:, None]
+        x_new = x_new * multiplier
         
         # 更新 x 和 t
         x, t = x_new, t_res
