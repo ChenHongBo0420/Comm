@@ -626,12 +626,16 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=4, output_dim=2):
     """
-    对输入 x(t)（通常为 |x|^2，形状 (N,)）进行一个实值 MLP 处理，
+    对输入 x(t)（通常为 |x|^2，形状应为 (N,)）进行一个实值 MLP 处理，
     生成形状 (N,2) 的残差，其中:
       - res[:, 0] 对应振幅修正，
       - res[:, 1] 对应相位修正。
+    如果输入维度大于 1，则先对最后一维做均值归约。
     """
     x, t = signal
+    # 如果 x 不是标量特征（即 shape 为 (N, C)），先做降维
+    if x.ndim > 1:
+        x = jnp.mean(x, axis=-1)
     N = x.shape[0]
     # 将标量特征 reshape 为 (N,1)
     x_2d = x.reshape(N, 1)
@@ -647,6 +651,7 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=4, output_dim=2):
     h = jax.nn.gelu(h)
     res = jnp.dot(h, W2) + b2
     return res, t
+
 
 from jax import debug
 
