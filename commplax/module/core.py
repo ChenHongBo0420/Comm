@@ -588,7 +588,7 @@ def fdbp(
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
-    debug.print("alpha = {}", alpha)
+    # debug.print("alpha = {}", alpha)
     for i in range(steps):
         # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
