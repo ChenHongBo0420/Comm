@@ -495,24 +495,24 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -624,49 +624,49 @@ from jax import debug
 #     return Signal(x, t)
 
 
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss,
-#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
-# ):
-#     """
-#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-#     以减少误差累积，提升整体补偿性能。
-#     """
-#     x, t = signal
-#     # 初始化自适应相位缩放因子 gamma
-#     gamma = 1.0
-#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
+    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+):
+    """
+    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+    以减少误差累积，提升整体补偿性能。
+    """
+    x, t = signal
+    # 初始化自适应相位缩放因子 gamma
+    gamma = 1.0
+    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-#     for i in range(steps):
-#         # 执行局部色散补偿步骤
-#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-#         # 执行非线性补偿步骤：计算相位校正 c
-#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    for i in range(steps):
+        # 执行局部色散补偿步骤
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        # 执行非线性补偿步骤：计算相位校正 c
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
-#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-#         # 这里的 error 定义可以根据实际需求进行设计
-#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
-#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
-#         error = power_after - power_before
+        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+        # 这里的 error 定义可以根据实际需求进行设计
+        power_before = jnp.mean(jnp.square(jnp.abs(x)))
+        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+        error = power_after - power_before
         
-#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-#         # 注意：根据实际误差定义，可能需要调整符号
-#         gamma = gamma - mu * error
+        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+        # 注意：根据实际误差定义，可能需要调整符号
+        gamma = gamma - mu * error
         
-#         # 将更新后的信号作为下一步输入
-#         x = x_new
-#     return Signal(x, t)
+        # 将更新后的信号作为下一步输入
+        x = x_new
+    return Signal(x, t)
 
 
 # def fdbp1(
