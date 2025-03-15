@@ -643,7 +643,7 @@ def fdbp(
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     # 将 gamma 定义为可训练参数，初始值设为 1.0
-    gamma = scope.param('gamma', lambda key, shape, dtype: jnp.array(1.0, dtype=dtype), ())
+    gamma = scope.param('gamma', nn.initializers.ones, ())
     
     for i in range(steps):
         # --- (A) 色散补偿 (D)
