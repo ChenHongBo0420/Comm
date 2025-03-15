@@ -644,7 +644,7 @@ def fdbp(
     
     # 将 gamma 定义为可训练参数，初始值设为 1.0
     gamma = scope.param('gamma', nn.initializers.ones, ())
-    
+    debug.print("gamma = {}", gamma)
     for i in range(steps):
         # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
@@ -654,7 +654,7 @@ def fdbp(
             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         # 直接使用 trainable gamma 进行相位补偿
         x = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        debug.print("gamma = {}", gamma)
+        
     return Signal(x, t)
 
   
