@@ -561,69 +561,6 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 
 
 from jax import debug
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss,
-#     hidden_dim=2,
-#     use_alpha=True,
-# ):
-#     """
-#     保持原 fdbp(D->N)结构:
-#       1) D
-#       2) N
-#       + 3) residual MLP => out shape=(N,) and add to x
-#     """
-#     x, t = signal
-#     # 1) 色散
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-#     # 可选: 对res加个可训练缩放
-#     if use_alpha:
-#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-#     else:
-#         alpha = 1.0
-#     # debug.print("alpha = {}", alpha)
-#     for i in range(steps):
-#         # --- (A) 色散补偿 (D)
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-#         # --- (B) 非线性补偿 (N)
-#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-#             Signal(jnp.abs(x)**2, td),
-#             taps=ntaps,
-#             kernel_init=n_init
-#         )
-#         # 应用相位: x_new = exp(j*c) * x[...]
-#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        
-#         # --- (C) residual MLP
-#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-#             Signal(jnp.abs(x_new)**2, tN),
-#             hidden_dim=hidden_dim
-#         )
-#         # res_val => (N_new,)
-#         # cast to complex, or interpret as real
-#         # 这里示例 "在幅度上+res"
-#         # x_new += alpha * res_val
-#         # 不分real/imag => 全部 real offset => x_new + alpha * res
-#         # 只要 x_new是complex => convert
-#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-#         x_new = x_new + alpha * res_val_cplx_2d 
-        
-#         # update x,t
-#         x, t = x_new, t_res
-
-#     return Signal(x, t)
-
-
 def fdbp(
     scope: Scope,
     signal,
@@ -633,29 +570,92 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
+    hidden_dim=2,
+    use_alpha=True,
 ):
     """
-    梯度更新的 DBP：在每一步补偿中，将相位补偿的缩放因子 gamma 定义为可训练参数，
-    由整体损失通过反向传播自动更新，而不是采用手动的 LMS 更新。
+    保持原 fdbp(D->N)结构:
+      1) D
+      2) N
+      + 3) residual MLP => out shape=(N,) and add to x
     """
     x, t = signal
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    # 1) 色散
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 将 gamma 定义为可训练参数，初始值设为 1.0
-    gamma = scope.param('gamma', nn.initializers.zeros, ())
-    
+
+    # 可选: 对res加个可训练缩放
+    if use_alpha:
+        alpha = scope.param('res_alpha', nn.initializers.ones, ())
+    else:
+        alpha = 1.0
+    debug.print("alpha = {}", alpha)
     for i in range(steps):
         # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
         # --- (B) 非线性补偿 (N)
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 直接使用 trainable gamma 进行相位补偿
-        x = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    debug.print("gamma = {}", gamma)    
+        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 应用相位: x_new = exp(j*c) * x[...]
+        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        
+        # --- (C) residual MLP
+        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # res_val => (N_new,)
+        # cast to complex, or interpret as real
+        # 这里示例 "在幅度上+res"
+        # x_new += alpha * res_val
+        # 不分real/imag => 全部 real offset => x_new + alpha * res
+        # 只要 x_new是complex => convert
+        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+        x_new = x_new + alpha * res_val_cplx_2d 
+        
+        # update x,t
+        x, t = x_new, t_res
+
     return Signal(x, t)
+
+
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+# ):
+#     """
+#     梯度更新的 DBP：在每一步补偿中，将相位补偿的缩放因子 gamma 定义为可训练参数，
+#     由整体损失通过反向传播自动更新，而不是采用手动的 LMS 更新。
+#     """
+#     x, t = signal
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # 将 gamma 定义为可训练参数，初始值设为 1.0
+#     gamma = scope.param('gamma', nn.initializers.zeros, ())
+    
+#     for i in range(steps):
+#         # --- (A) 色散补偿 (D)
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        
+#         # --- (B) 非线性补偿 (N)
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 直接使用 trainable gamma 进行相位补偿
+#         x = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     debug.print("gamma = {}", gamma)    
+#     return Signal(x, t)
 
   
 # def fdbp(
