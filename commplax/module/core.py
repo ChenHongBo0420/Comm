@@ -683,8 +683,8 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    hidden_size_ssm1=2,  # 第一层 SSM 隐藏单元数
-    hidden_size_ssm2=2,  # 第二层 SSM 隐藏单元数
+    hidden_size_ssm1=16,  # 第一层 SSM 隐藏单元数
+    hidden_size_ssm2=16,  # 第二层 SSM 隐藏单元数
     use_alpha=True,
 ):
     """
