@@ -634,66 +634,53 @@ def fdbp(
     n_init=gauss,
     hidden_dim=2,
     use_alpha=True,
-    mu_alpha=0.0001  # 学习率，用于 LMS 更新 alpha
 ):
     """
-    保持原 fdbp(D->N)结构:
-      1) 色散补偿 (D)
-      2) 非线性补偿 (N)
-      3) residual MLP => 输出形状 (N,) 并加到 x 上
-    此外，alpha 使用 LMS 更新规则自适应调整。
+    保持原 fdbp(D->N)结构，但将 gamma 和 alpha 都作为可训练参数，
+    通过梯度下降来更新它们，从而统一优化整个模型。
     """
     x, t = signal
-    # 色散补偿部分：局部卷积
+    # 色散补偿：构造局部卷积函数
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-    # 可选：初始 alpha，注意如果你希望 alpha 能自适应更新，
-    # 可以选择不把它当成固定参数，而是在每个 step 内更新。
+    # 将 gamma 作为 trainable parameter 定义，初始值为 1.0
+    gamma = scope.param('gamma', 
+                        lambda key, shape, dtype=jnp.float32: jnp.array(1.0, dtype=dtype), ())
+    
+    # 如果使用 alpha，则定义为可训练参数
     if use_alpha:
-        # 这里将 alpha 作为一个初始值，可以通过 scope.param 初始化
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
 
+    # forward propagation: 每一步都利用 gamma 和 alpha 来对信号进行调整
     for i in range(steps):
         # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         
-        # --- (B) 非线性补偿 (N)
+        # --- (B) 非线性补偿 (N) 使用 gamma 进行相位校正
         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
             Signal(jnp.abs(x)**2, td),
             taps=ntaps,
             kernel_init=n_init
         )
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        # 这里直接用 trainable 的 gamma 去缩放相位
+        x_nonlinear = jnp.exp(1j * gamma * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
         
-        # --- (C) residual MLP
+        # --- (C) residual MLP：对 |x_nonlinear|^2 做 MLP 得到 residual，并加到信号上
         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
+            Signal(jnp.abs(x_nonlinear)**2, tN),
             hidden_dim=hidden_dim
         )
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]  # 形状 (N,1)
+        res_val_cplx = jnp.asarray(res_val, x_nonlinear.dtype)
+        res_val_cplx_2d = res_val_cplx[:, None]  # 调整为 (N,1)
+        x_new = x_nonlinear + alpha * res_val_cplx_2d
         
-        # 在添加 residual 之前，先计算 x_new 的平均功率
-        power_before_res = jnp.mean(jnp.square(jnp.abs(x_new)))
-        
-        # 更新 x_new：添加 residual
-        x_new_updated = x_new + alpha * res_val_cplx_2d
-        
-        # 计算 residual 添加之后的平均功率
-        power_after_res = jnp.mean(jnp.square(jnp.abs(x_new_updated)))
-        
-        # 定义误差，例如功率变化（你也可以根据具体需求设计其它误差）
-        error_alpha = power_after_res - power_before_res
-        
-        # 用 LMS 规则更新 alpha
-        alpha = alpha - mu_alpha * error_alpha
-        
-        # 更新信号及时间，继续下一步
-        x, t = x_new_updated, t_res
+        # 更新信号和时间
+        x, t = x_new, t_res
 
     return Signal(x, t)
+
 
   
 # def fdbp(
