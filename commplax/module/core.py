@@ -585,9 +585,10 @@ def fdbp(
 
     # 可选: 对res加个可训练缩放
     if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.ones, ())
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
+    gamma = scope.param('gamma', nn.initializers.ones, ())
     # debug.print("alpha = {}", alpha)
     for i in range(steps):
         # --- (A) 色散补偿 (D)
@@ -600,8 +601,8 @@ def fdbp(
             kernel_init=n_init
         )
         # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        
+        # x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        x_new = jnp.exp(1j * gamma * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
         # --- (C) residual MLP
         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
@@ -620,7 +621,6 @@ def fdbp(
         
         # update x,t
         x, t = x_new, t_res
-    debug.print("alpha = {}", alpha)
     return Signal(x, t)
 
 
@@ -643,7 +643,7 @@ def fdbp(
 #     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
 #     # 将 gamma 定义为可训练参数，初始值设为 1.0
-#     gamma = scope.param('gamma', nn.initializers.zeros, ())
+#     gamma = scope.param('gamma', nn.initializers.ones, ())
     
 #     for i in range(steps):
 #         # --- (A) 色散补偿 (D)
