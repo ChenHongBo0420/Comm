@@ -623,7 +623,6 @@ from jax import debug
 
 #     return Signal(x, t)
 
-
 def fdbp(
     scope: Scope,
     signal,
@@ -633,40 +632,110 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+    hidden_dim=2,
+    use_alpha=True,
+    mu=0.0001  # 学习率，用于 LMS 更新 gamma
 ):
     """
-    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-    以减少误差累积，提升整体补偿性能。
+    保持原 fdbp(D->N)结构:
+      1) 色散补偿 (D)
+      2) 非线性补偿 (N) —— 在此基础上增加自适应相位补偿因子 gamma
+      3) residual MLP => 输出形状 (N,) 并加到 x 上
     """
     x, t = signal
+    # 1) 色散补偿的局部卷积
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    # 可选: 对 residual 添加可训练缩放参数 alpha
+    if use_alpha:
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+    else:
+        alpha = 1.0
+
     # 初始化自适应相位缩放因子 gamma
     gamma = 1.0
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
+
     for i in range(steps):
-        # 执行局部色散补偿步骤
+        # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 执行非线性补偿步骤：计算相位校正 c
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         
-        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-        # 这里的 error 定义可以根据实际需求进行设计
+        # --- (B) 非线性补偿 (N) with adaptive gamma
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 应用相位补偿：使用自适应因子 gamma
+        x_nonlinear = jnp.exp(1j * gamma * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        
+        # 计算误差：例如使用相位补偿前后的平均功率差异
         power_before = jnp.mean(jnp.square(jnp.abs(x)))
-        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+        power_after = jnp.mean(jnp.square(jnp.abs(x_nonlinear)))
         error = power_after - power_before
-        
-        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-        # 注意：根据实际误差定义，可能需要调整符号
+        # LMS 更新规则更新 gamma
         gamma = gamma - mu * error
+
+        # 将自适应相位补偿后的信号作为基础
+        x_new = x_nonlinear
         
-        # 将更新后的信号作为下一步输入
-        x = x_new
+        # --- (C) residual MLP：对 |x_new|^2 做 MLP 得到 residual，并加到 x_new 上
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # 转换 residual 为与 x_new 相同的数据类型，并 reshape 为 (N,1)
+        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+        res_val_cplx_2d = res_val_cplx[:, None]    # 形状 (N,1)
+        x_new = x_new + alpha * res_val_cplx_2d 
+        
+        # 更新信号及时间
+        x, t = x_new, t_res
+
     return Signal(x, t)
+  
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+# ):
+#     """
+#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+#     以减少误差累积，提升整体补偿性能。
+#     """
+#     x, t = signal
+#     # 初始化自适应相位缩放因子 gamma
+#     gamma = 1.0
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     for i in range(steps):
+#         # 执行局部色散补偿步骤
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#         # 执行非线性补偿步骤：计算相位校正 c
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+#         # 这里的 error 定义可以根据实际需求进行设计
+#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
+#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+#         error = power_after - power_before
+        
+#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+#         # 注意：根据实际误差定义，可能需要调整符号
+#         gamma = gamma - mu * error
+        
+#         # 将更新后的信号作为下一步输入
+#         x = x_new
+#     return Signal(x, t)
 
 
 # def fdbp1(
