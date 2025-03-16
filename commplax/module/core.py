@@ -686,7 +686,7 @@ def fdbp(
     res_val_cplx = jnp.asarray(res_val, x.dtype)
     res_val_cplx_2d = res_val_cplx[:, None]
     x_new = x + alpha * res_val_cplx_2d
-    
+    debug.print("alpha = {}", alpha)
     return Signal(x_new, t_res)
 
 
