@@ -778,9 +778,37 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
+# def fanin_mean(scope, inputs):
+#     val = sum(signal.val for signal in inputs) / len(inputs)
+#     t = inputs[0].t  # 假设所有的 t 都相同
+#     return Signal(val, t)
+  
 def fanin_mean(scope, inputs):
-    val = sum(signal.val for signal in inputs) / len(inputs)
-    t = inputs[0].t  # 假设所有的 t 都相同
+    """
+    inputs: [branch_signal, trunk_signal]
+      - branch_signal.val: 全局特征 (例如形状 [batch_size, feature_dim])
+      - trunk_signal.val:  局部特征 (例如形状 [batch_size, feature_dim])
+    返回: DeepONet 风格的融合结果 Signal
+    """
+    assert len(inputs) == 2, "fanin_deeponet 需要正好两个输入: [branch_signal, trunk_signal]"
+    branch_signal, trunk_signal = inputs
+
+    # 1. 分别取出 val
+    branch_val = branch_signal.val  # shape: [batch_size, p]
+    trunk_val = trunk_signal.val    # shape: [batch_size, p]
+    
+    # 2. 做点乘 (element-wise 或者沿最后一维求和)
+    #    DeepONet 中一般是矩阵乘法 branch_out @ trunk_out.T，
+    #    但在批量化场景里可以简化为对每个样本做向量点积:
+    val = jnp.sum(branch_val * trunk_val, axis=-1, keepdims=True)
+    # val 形状 [batch_size, 1]
+
+    # 3. 加一个可训练偏置
+    bias = scope.param('bias', nn.initializers.zeros, (1,))
+    val = val + bias  # 广播到 [batch_size, 1]
+
+    # 4. 输出 Signal
+    t = branch_signal.t  # 或 trunk_signal.t，看你的业务需求
     return Signal(val, t)
 
 def fanin_concat(scope, inputs, axis=-1):
