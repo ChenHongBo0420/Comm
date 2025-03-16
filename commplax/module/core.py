@@ -786,30 +786,29 @@ def fanin_sum(scope, inputs):
 def fanin_mean(scope, inputs):
     """
     inputs: [branch_signal, trunk_signal]
-      - branch_signal.val: 全局特征 (例如形状 [batch_size, feature_dim])
-      - trunk_signal.val:  局部特征 (例如形状 [batch_size, feature_dim])
-    返回: DeepONet 风格的融合结果 Signal
+      - branch_signal.val: 全局特征, 形状为 [batch_size, p]
+      - trunk_signal.val:  局部特征, 形状为 [num_points, p]
+    返回: DeepONet 风格的融合结果 Signal, 形状为 [batch_size, num_points]
     """
     assert len(inputs) == 2, "fanin_deeponet 需要正好两个输入: [branch_signal, trunk_signal]"
     branch_signal, trunk_signal = inputs
 
-    # 1. 分别取出 val
-    branch_val = branch_signal.val  # shape: [batch_size, p]
-    trunk_val = trunk_signal.val    # shape: [batch_size, p]
-    
-    # 2. 做点乘 (element-wise 或者沿最后一维求和)
-    #    DeepONet 中一般是矩阵乘法 branch_out @ trunk_out.T，
-    #    但在批量化场景里可以简化为对每个样本做向量点积:
-    val = jnp.sum(branch_val * trunk_val, axis=-1, keepdims=True)
-    # val 形状 [batch_size, 1]
+    branch_val = branch_signal.val  # 形状: [batch_size, p]
+    trunk_val = trunk_signal.val    # 形状: [num_points, p]
 
-    # 3. 加一个可训练偏置
-    bias = scope.param('bias', nn.initializers.zeros, (1,))
-    val = val + bias  # 广播到 [batch_size, 1]
+    # 通过矩阵乘法实现内积融合:
+    # 计算 branch_val 与 trunk_val.T 的矩阵乘法,
+    # 得到形状为 [batch_size, num_points] 的结果
+    val = jnp.dot(branch_val, trunk_val.T)
 
-    # 4. 输出 Signal
-    t = branch_signal.t  # 或 trunk_signal.t，看你的业务需求
+    # 加上一个可训练偏置（形状设为 [1, 1]，便于广播）
+    bias = scope.param('bias', nn.initializers.zeros, (1, 1))
+    val = val + bias
+
+    # 选择合适的时间信息 t，假设两者一致
+    t = branch_signal.t  
     return Signal(val, t)
+
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
