@@ -560,70 +560,10 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 
 
 
-# from jax import debug
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss,
-#     hidden_dim=2,
-#     use_alpha=True,
-# ):
-#     """
-#     保持原 fdbp(D->N)结构:
-#       1) D
-#       2) N
-#       + 3) residual MLP => out shape=(N,) and add to x
-#     """
-#     x, t = signal
-#     # 1) 色散
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-#     # 可选: 对res加个可训练缩放
-#     if use_alpha:
-#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-#     else:
-#         alpha = 1.0
-#     # debug.print("alpha = {}", alpha)
-#     for i in range(steps):
-#         # --- (A) 色散补偿 (D)
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-#         # --- (B) 非线性补偿 (N)
-#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-#             Signal(jnp.abs(x)**2, td),
-#             taps=ntaps,
-#             kernel_init=n_init
-#         )
-#         # 应用相位: x_new = exp(j*c) * x[...]
-#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-#         # --- (C) residual MLP
-#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-#             Signal(jnp.abs(x_new)**2, tN),
-#             hidden_dim=hidden_dim
-#         )
-#         # res_val => (N_new,)
-#         # cast to complex, or interpret as real
-#         # 这里示例 "在幅度上+res"
-#         # x_new += alpha * res_val
-#         # 不分real/imag => 全部 real offset => x_new + alpha * res
-#         # 只要 x_new是complex => convert
-#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-#         x_new = x_new + alpha * res_val_cplx_2d 
-        
-#         # update x,t
-#         x, t = x_new, t_res
-#     return Signal(x, t)
-
+from jax import debug
 def fdbp(
     scope: Scope,
-    signal: Signal,
+    signal,
     steps=3,
     dtaps=261,
     ntaps=41,
@@ -635,52 +575,112 @@ def fdbp(
 ):
     """
     保持原 fdbp(D->N)结构:
-      1) D: 色散补偿
-      2) N: 非线性补偿
-      3) residual MLP (NN部分) —— 在所有步骤结束后调用一次，
-         生成 residual（形状为 (N,)），并加到最终信号上。
-
-    这样 NN 部分相对独立，只对 DBP 整个输出进行一次校正。
+      1) D
+      2) N
+      + 3) residual MLP => out shape=(N,) and add to x
     """
     x, t = signal
-    # 1) 色散补偿：构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    # 1) 色散
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # 可选: 对 residual 加个可训练缩放参数 alpha
+    # 可选: 对res加个可训练缩放
     if use_alpha:
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
-
-    # 执行多步 DBP 补偿
+    # debug.print("alpha = {}", alpha)
     for i in range(steps):
         # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
         # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
             Signal(jnp.abs(x)**2, td),
             taps=ntaps,
             kernel_init=n_init
         )
-        # 应用相位补偿: x_new = exp(j * c) * x[...]
+        # 应用相位: x_new = exp(j*c) * x[...]
         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        # --- (C) residual MLP
+        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # res_val => (N_new,)
+        # cast to complex, or interpret as real
+        # 这里示例 "在幅度上+res"
+        # x_new += alpha * res_val
+        # 不分real/imag => 全部 real offset => x_new + alpha * res
+        # 只要 x_new是complex => convert
+        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+        x_new = x_new + alpha * res_val_cplx_2d 
         
-        # 更新 x,t 到下一步
-        x, t = x_new, tN
+        # update x,t
+        x, t = x_new, t_res
+    return Signal(x, t)
 
-    # --- (C) 在所有步骤结束后，调用 residual MLP 一次
-    res_val, t_res = scope.child(residual_mlp, name='ResCNN_final')(
-        Signal(jnp.abs(x)**2, t),
-        hidden_dim=hidden_dim
-    )
-    # 将 residual 转换为复数，并调整形状为 (N, 1)
-    res_val_cplx = jnp.asarray(res_val, x.dtype)
-    res_val_cplx_2d = res_val_cplx[:, None]
-    # 最终输出信号加上 NN 校正
-    x_new = x + alpha * res_val_cplx_2d
+# def fdbp(
+#     scope: Scope,
+#     signal: Signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     保持原 fdbp(D->N)结构:
+#       1) D: 色散补偿
+#       2) N: 非线性补偿
+#       3) residual MLP (NN部分) —— 在所有步骤结束后调用一次，
+#          生成 residual（形状为 (N,)），并加到最终信号上。
 
-    return Signal(x_new, t_res)
+#     这样 NN 部分相对独立，只对 DBP 整个输出进行一次校正。
+#     """
+#     x, t = signal
+#     # 1) 色散补偿：构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+#     # 可选: 对 residual 加个可训练缩放参数 alpha
+#     if use_alpha:
+#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+#     else:
+#         alpha = 1.0
+
+#     # 执行多步 DBP 补偿
+#     for i in range(steps):
+#         # --- (A) 色散补偿 (D)
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        
+#         # --- (B) 非线性补偿 (N)
+#         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td),
+#             taps=ntaps,
+#             kernel_init=n_init
+#         )
+#         # 应用相位补偿: x_new = exp(j * c) * x[...]
+#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        
+#         # 更新 x,t 到下一步
+#         x, t = x_new, tN
+
+#     # --- (C) 在所有步骤结束后，调用 residual MLP 一次
+#     res_val, t_res = scope.child(residual_mlp, name='ResCNN_final')(
+#         Signal(jnp.abs(x)**2, t),
+#         hidden_dim=hidden_dim
+#     )
+#     # 将 residual 转换为复数，并调整形状为 (N, 1)
+#     res_val_cplx = jnp.asarray(res_val, x.dtype)
+#     res_val_cplx_2d = res_val_cplx[:, None]
+#     # 最终输出信号加上 NN 校正
+#     x_new = x + alpha * res_val_cplx_2d
+
+#     return Signal(x_new, t_res)
 
 # def fdbp(
 #     scope: Scope,
