@@ -620,102 +620,35 @@ from jax.nn.initializers import orthogonal, zeros
 #         # update x,t
 #         x, t = x_new, t_res
 #     return Signal(x, t)
-
-# def fdbp(
-#     scope: Scope,
-#     signal: Signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss,
-#     hidden_dim=2,
-#     use_alpha=True,
-# ):
-#     """
-#     保持原 fdbp(D->N)结构:
-#       1) D: 色散补偿
-#       2) N: 非线性补偿
-#       3) residual MLP (NN部分) —— 在所有步骤结束后调用一次，
-#          生成 residual（形状为 (N,)），并加到最终信号上。
-
-#     这样 NN 部分相对独立，只对 DBP 整个输出进行一次校正。
-#     """
-#     x, t = signal
-#     # 1) 色散补偿：构造局部时域卷积函数（通过 vmap 包裹 conv1d）
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-#     # 可选: 对 residual 加个可训练缩放参数 alpha
-#     if use_alpha:
-#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-#     else:
-#         alpha = 1.0
-
-#     # 执行多步 DBP 补偿
-#     for i in range(steps):
-#         # --- (A) 色散补偿 (D)
-#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        
-#         # --- (B) 非线性补偿 (N)
-#         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-#             Signal(jnp.abs(x)**2, td),
-#             taps=ntaps,
-#             kernel_init=n_init
-#         )
-#         # 应用相位补偿: x_new = exp(j * c) * x[...]
-#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        
-#         # 更新 x,t 到下一步
-#         x, t = x_new, tN
-
-#     # --- (C) 在所有步骤结束后，调用 residual MLP 一次
-#     res_val, t_res = scope.child(residual_mlp, name='ResCNN_final')(
-#         Signal(jnp.abs(x)**2, t),
-#         hidden_dim=hidden_dim
-#     )
-#     # 将 residual 转换为复数，并调整形状为 (N, 1)
-#     res_val_cplx = jnp.asarray(res_val, x.dtype)
-#     res_val_cplx_2d = res_val_cplx[:, None]
-#     # 最终输出信号加上 NN 校正
-#     x_new = x + alpha * res_val_cplx_2d
-
-#     return Signal(x_new, t_res)
-
 def fdbp(
     scope: Scope,
-    signal,
+    signal: Signal,
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
     d_init=delta,
     n_init=gauss,
+    hidden_dim=2,
 ):
     """
-    梯度更新的 DBP：在每一步补偿中，将相位补偿的缩放因子 gamma 定义为可训练参数，
-    由整体损失通过反向传播自动更新，而不是采用手动的 LMS 更新。
+    保持原 fdbp(D->N) 的接口，但仅使用 NN 模块（residual_mlp）进行全局校正，
+    不再包含 DBP 补偿部分，也移除了 alpha 分支（直接将 residual 加到输入上）。
     """
     x, t = signal
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 将 gamma 定义为可训练参数，初始值设为 1.0
-    gamma = scope.param('gamma', nn.initializers.ones, ())
-    
-    for i in range(steps):
-        # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        
-        # --- (B) 非线性补偿 (N)
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 直接使用 trainable gamma 进行相位补偿
-        x = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    debug.print("gamma = {}", gamma)    
-    return Signal(x, t)
+    # 直接调用 residual_mlp 对输入信号的幅值平方进行处理，
+    # 生成形状 (N,) 的 residual 校正量
+    res_val, t_res = scope.child(residual_mlp, name='ResCNN')(
+        Signal(jnp.abs(x)**2, t),
+        hidden_dim=hidden_dim
+    )
+    # 将 NN 输出转换为复数，并调整为 (N, 1) 后直接加到原始信号上
+    res_val_cplx = jnp.asarray(res_val, x.dtype)
+    res_val_cplx_2d = res_val_cplx[:, None]
+    x_new = x + res_val_cplx_2d
+    return Signal(x_new, t_res)
 
-  
+
 # def fdbp(
 #     scope: Scope,
 #     signal,
