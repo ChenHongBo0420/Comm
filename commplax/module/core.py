@@ -799,7 +799,7 @@ def fanin_mean(scope, inputs):
     # 通过矩阵乘法实现内积融合:
     # 计算 branch_val 与 trunk_val.T 的矩阵乘法,
     # 得到形状为 [batch_size, num_points] 的结果
-    val = jnp.dot(branch_val, trunk_val.T)
+    val = jnp.dot(branch_val, trunk_val)
 
     # 加上一个可训练偏置（形状设为 [1, 1]，便于广播）
     bias = scope.param('bias', nn.initializers.zeros, (1, 1))
