@@ -620,33 +620,69 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 #         # update x,t
 #         x, t = x_new, t_res
 #     return Signal(x, t)
+def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
+    # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
+    real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+    imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+    return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
+
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+    """
+    作为 NN encoder，对输入的复数信号 x(t) 进行编码，
+    输出每个时间步一个复数 residual，形状为 (N,)，不做幅值平方处理。
+    
+    假设输入 x 的形状为 (N, C)，输出 (N,)，其中 C 表示信号的通道数。
+    """
+    x, t = signal  # 假设 x shape 为 (N, C)
+    N, C = x.shape
+
+    # 定义两层全连接网络
+    W1 = scope.param('W1', complex_glorot_uniform, (C, hidden_dim))
+    b1 = scope.param('b1', lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64), (hidden_dim,))
+    W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+    b2 = scope.param('b2', lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64), (1,))
+    
+    h = jnp.dot(x, W1) + b1          # shape (N, hidden_dim)
+    h = jax.nn.gelu(h)
+    out = jnp.dot(h, W2) + b2         # shape (N, 1)
+    out_1d = out.squeeze(axis=-1)     # shape (N,)
+    
+    return out_1d, t
+
+from jax import debug
 def fdbp(
     scope: Scope,
     signal: Signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss,
+    steps=3,           # 保持接口参数，但这里不会使用
+    dtaps=261,         # 同上
+    ntaps=41,          # 同上
+    sps=2,             # 同上
+    d_init=delta,      # 同上
+    n_init=gauss,      # 同上
     hidden_dim=2,
 ):
     """
-    保持原 fdbp(D->N) 的接口，但仅使用 NN 模块（residual_mlp）进行全局校正，
-    不再包含 DBP 补偿部分，也移除了 alpha 分支（直接将 residual 加到输入上）。
+    保持原 fdbp 接口，但仅使用 NN encoder 对输入信号进行全局校正，
+    不再进行 DBP 的色散/非线性补偿，也不对输入做幅值平方处理。
+    
+    即将输入信号直接作为 encoder 的输入，生成 residual，
+    然后将该 residual 加到原始信号上得到校正后的输出。
     """
     x, t = signal
-    # 直接调用 residual_mlp 对输入信号的幅值平方进行处理，
-    # 生成形状 (N,) 的 residual 校正量
-    res_val, t_res = scope.child(residual_mlp, name='ResCNN')(
-        Signal(jnp.abs(x)**2, t),
+
+    # 直接调用 residual_mlp 作为 NN encoder，输入信号保持原样
+    res_val, t_res = scope.child(residual_mlp, name='ResEncoder')(
+        Signal(x, t),
         hidden_dim=hidden_dim
     )
-    # 将 NN 输出转换为复数，并调整为 (N, 1) 后直接加到原始信号上
+    
+    # 将 NN 输出转换为复数（若尚未为复数）并调整为 (N,1) 后直接加到原始信号上
     res_val_cplx = jnp.asarray(res_val, x.dtype)
     res_val_cplx_2d = res_val_cplx[:, None]
     x_new = x + res_val_cplx_2d
+    
     return Signal(x_new, t_res)
+
 
 
 # def fdbp(
