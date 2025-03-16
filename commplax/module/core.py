@@ -495,24 +495,24 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
 
 
 # def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -682,38 +682,38 @@ def fdbp(
 
 #     return Signal(x_new, t_res)
 
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss,
-# ):
-#     """
-#     梯度更新的 DBP：在每一步补偿中，将相位补偿的缩放因子 gamma 定义为可训练参数，
-#     由整体损失通过反向传播自动更新，而不是采用手动的 LMS 更新。
-#     """
-#     x, t = signal
-#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
+):
+    """
+    梯度更新的 DBP：在每一步补偿中，将相位补偿的缩放因子 gamma 定义为可训练参数，
+    由整体损失通过反向传播自动更新，而不是采用手动的 LMS 更新。
+    """
+    x, t = signal
+    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-#     # 将 gamma 定义为可训练参数，初始值设为 1.0
-#     gamma = scope.param('gamma', nn.initializers.ones, ())
+    # 将 gamma 定义为可训练参数，初始值设为 1.0
+    gamma = scope.param('gamma', nn.initializers.ones, ())
     
-#     for i in range(steps):
-#         # --- (A) 色散补偿 (D)
-#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+    for i in range(steps):
+        # --- (A) 色散补偿 (D)
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         
-#         # --- (B) 非线性补偿 (N)
-#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-#         # 直接使用 trainable gamma 进行相位补偿
-#         x = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     debug.print("gamma = {}", gamma)    
-#     return Signal(x, t)
+        # --- (B) 非线性补偿 (N)
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+        # 直接使用 trainable gamma 进行相位补偿
+        x = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    debug.print("gamma = {}", gamma)    
+    return Signal(x, t)
 
   
 # def fdbp(
