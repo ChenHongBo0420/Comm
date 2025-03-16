@@ -672,9 +672,7 @@ def fdbp(
 
     # 定义 α 缩放参数，使用较小的初始值（例如 0.1）
     if use_alpha:
-        alpha = scope.param('res_alpha', 
-                              lambda key, shape, dtype: 0.1 * jnp.ones(shape, dtype=dtype),
-                              ())
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
     else:
         alpha = 1.0
 
