@@ -515,48 +515,48 @@ from jax.nn.initializers import orthogonal, zeros
 #     return Signal(x, t)
 
 
-# def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
-#     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
-#     real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
-#     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
-#     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
+def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
+    # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
+    real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+    imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+    return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
 
-# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
-#     """
-#     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
-#     然后使用两层 MLP 生成 (N,) 复数 residual。
-#     """
-#     x, t = signal
-#     # x 的形状例如 (N, 2) 或 (N, C) 等
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+    """
+    对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
+    然后使用两层 MLP 生成 (N,) 复数 residual。
+    """
+    x, t = signal
+    # x 的形状例如 (N, 2) 或 (N, C) 等
     
-#     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
-#     # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
-#     x_scalar = jnp.linalg.norm(x, axis=-1)
-#     N = x_scalar.shape[0]
-#     # 2) reshape 成 (N,1)，并转换为复数数据类型
-#     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
+    # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
+    # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+    x_scalar = jnp.linalg.norm(x, axis=-1)
+    N = x_scalar.shape[0]
+    # 2) reshape 成 (N,1)，并转换为复数数据类型
+    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
     
-#     # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
-#     W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
-#     b1 = scope.param('b1',
-#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-#                      (hidden_dim,))
-#     W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
-#     b2 = scope.param('b2',
-#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-#                      (1,))
+    # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+    b1 = scope.param('b1',
+                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+                     (hidden_dim,))
+    W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+    b2 = scope.param('b2',
+                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+                     (1,))
     
-#     # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
-#     h = jnp.dot(x_2d, W1) + b1
-#     h = jax.nn.gelu(h)
+    # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+    h = jnp.dot(x_2d, W1) + b1
+    h = jax.nn.gelu(h)
     
-#     # 5) 输出层：形状 (N,1)
-#     out = jnp.dot(h, W2) + b2
+    # 5) 输出层：形状 (N,1)
+    out = jnp.dot(h, W2) + b2
 
-#     # 6) squeeze 得到形状 (N,)
-#     out_1d = out.squeeze(axis=-1)
+    # 6) squeeze 得到形状 (N,)
+    out_1d = out.squeeze(axis=-1)
 
-#     return out_1d, t
+    return out_1d, t
 
 
 
