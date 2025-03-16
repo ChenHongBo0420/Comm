@@ -805,7 +805,7 @@ def fanin_mean(scope, inputs):
     branch_signal, trunk_signal = inputs
 
     # 逐元素相乘，然后在最后一维求和，得到每个样本的融合结果
-    val = jnp.sum(branch_signal.val * trunk_signal.val, axis=-1, keepdims=True)
+    val = sum(branch_signal.val * trunk_signal.val)
     
     # 加上一个可训练的偏置参数，形状设为 (1,)
     bias = scope.param('bias', nn.initializers.zeros, (1,))
