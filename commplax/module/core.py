@@ -653,35 +653,44 @@ from jax import debug
 def fdbp(
     scope: Scope,
     signal: Signal,
-    steps=3,           # 保持接口参数，但这里不会使用
-    dtaps=261,         # 同上
-    ntaps=41,          # 同上
-    sps=2,             # 同上
-    d_init=delta,      # 同上
-    n_init=gauss,      # 同上
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
     hidden_dim=2,
+    use_alpha=True,
 ):
     """
     保持原 fdbp 接口，但仅使用 NN encoder 对输入信号进行全局校正，
-    不再进行 DBP 的色散/非线性补偿，也不对输入做幅值平方处理。
+    并通过可训练的缩放参数 α 控制 residual 的幅值，避免输出数值过大。
     
-    即将输入信号直接作为 encoder 的输入，生成 residual，
-    然后将该 residual 加到原始信号上得到校正后的输出。
+    这里 DBP 的物理补偿部分被移除，仅保留 NN encoder 部分。
     """
     x, t = signal
 
-    # 直接调用 residual_mlp 作为 NN encoder，输入信号保持原样
+    # 定义 α 缩放参数，使用较小的初始值（例如 0.1）
+    if use_alpha:
+        alpha = scope.param('res_alpha', 
+                              lambda key, shape, dtype: 0.1 * jnp.ones(shape, dtype=dtype),
+                              ())
+    else:
+        alpha = 1.0
+
+    # 直接调用 residual_mlp 作为 NN encoder，对输入信号进行编码
     res_val, t_res = scope.child(residual_mlp, name='ResEncoder')(
         Signal(x, t),
         hidden_dim=hidden_dim
     )
     
-    # 将 NN 输出转换为复数（若尚未为复数）并调整为 (N,1) 后直接加到原始信号上
+    # 将 NN 输出转换为复数（若尚未为复数），并调整为 (N,1) 后加上 α 缩放后，与原始信号相加
     res_val_cplx = jnp.asarray(res_val, x.dtype)
     res_val_cplx_2d = res_val_cplx[:, None]
-    x_new = x + res_val_cplx_2d
+    x_new = x + alpha * res_val_cplx_2d
     
     return Signal(x_new, t_res)
+
 
 
 
