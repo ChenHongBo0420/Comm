@@ -778,41 +778,9 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
-# def fanin_mean(scope, inputs):
-#     val = sum(signal.val for signal in inputs) / len(inputs)
-#     t = inputs[0].t  # 假设所有的 t 都相同
-#     return Signal(val, t)
-  
 def fanin_mean(scope, inputs):
-    """
-    使用 DeepONet 风格的点乘融合操作，假设两个输入信号维度一致。
-    
-    参数:
-      scope: 用于参数注册的作用域。
-      inputs: 列表 [branch_signal, trunk_signal]，
-              其中每个 Signal 对象的 val 形状均为 [batch_size, p]，
-              t 表示相同的时间或其他对齐信息。
-              
-    操作:
-      1. 对两个信号的 val 逐元素相乘。
-      2. 沿最后一维求和，得到形状为 [batch_size, 1] 的结果（即每个样本的点乘结果）。
-      3. 加上一个可训练的偏置。
-      
-    返回:
-      Signal 对象，其 val 为融合结果，t 为原信号的 t。
-    """
-    assert len(inputs) == 2, "fanin_deeponet 需要正好两个输入: [branch_signal, trunk_signal]"
-    branch_signal, trunk_signal = inputs
-
-    # 逐元素相乘，然后在最后一维求和，得到每个样本的融合结果
-    val = sum(branch_signal.val * trunk_signal.val)
-    
-    # 加上一个可训练的偏置参数，形状设为 (1,)
-    bias = scope.param('bias', nn.initializers.zeros, (1,))
-    val = val + bias
-
-    # 假设所有信号的 t 属性一致，取第一个信号的 t
-    t = branch_signal.t
+    val = sum(signal.val for signal in inputs) / len(inputs)
+    t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
 
 
