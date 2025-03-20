@@ -521,22 +521,66 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+#     """
+#     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
+#     然后使用两层 MLP 生成 (N,) 复数 residual。
+#     """
+#     x, t = signal
+#     # x 的形状例如 (N, 2) 或 (N, C) 等
+    
+#     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
+#     x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+#     # x_scalar = jnp.linalg.norm(x, axis=-1)
+#     N = x_scalar.shape[0]
+#     # 2) reshape 成 (N,1)，并转换为复数数据类型
+#     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
+    
+#     # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+#     W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+#     b1 = scope.param('b1',
+#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+#                      (hidden_dim,))
+#     W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+#     b2 = scope.param('b2',
+#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+#                      (1,))
+    
+#     # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+#     h = jnp.dot(x_2d, W1) + b1
+#     h = jax.nn.gelu(h)
+    
+#     # 5) 输出层：形状 (N,1)
+#     out = jnp.dot(h, W2) + b2
+
+#     # 6) squeeze 得到形状 (N,)
+#     out_1d = out.squeeze(axis=-1)
+
+#     return out_1d, t
+  
+def soft_threshold(z, threshold, eps=1e-6):
+    """
+    对复数 z 进行软阈值化：
+    如果 |z| 大于阈值，则收缩 z 的模长，否则置零。
+    """
+    mag = jnp.abs(z)
+    scale = jnp.maximum(mag - threshold, 0) / (mag + eps)
+    return scale * z
+
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2, threshold=0.1):
     """
     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
-    然后使用两层 MLP 生成 (N,) 复数 residual。
+    然后使用两层 MLP 生成 (N,) 复数 residual，并对输出进行软阈值化，
+    以增强结果的稀疏性或降噪效果。
     """
     x, t = signal
-    # x 的形状例如 (N, 2) 或 (N, C) 等
-    
-    # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
-    x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
-    # x_scalar = jnp.linalg.norm(x, axis=-1)
+    # 1) 沿通道维度做范数操作，得到标量 (也可以换成均值：jnp.mean(x, axis=-1))
+    x_scalar = jnp.linalg.norm(x, axis=-1)
     N = x_scalar.shape[0]
     # 2) reshape 成 (N,1)，并转换为复数数据类型
     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
     
-    # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+    # 3) 定义两层 MLP 的参数，参数数据类型均为 jnp.complex64
     W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
     b1 = scope.param('b1',
                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
@@ -546,17 +590,19 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
                      (1,))
     
-    # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+    # 4) 第一层全连接 + 激活函数
     h = jnp.dot(x_2d, W1) + b1
     h = jax.nn.gelu(h)
     
-    # 5) 输出层：形状 (N,1)
+    # 5) 输出层
     out = jnp.dot(h, W2) + b2
-
-    # 6) squeeze 得到形状 (N,)
+    # squeeze 得到形状 (N,)
     out_1d = out.squeeze(axis=-1)
 
-    return out_1d, t
+    # 6) 对输出进行软阈值化
+    out_soft = soft_threshold(out_1d, threshold)
+    
+    return out_soft, t
 
 from jax import debug
 def fdbp(
