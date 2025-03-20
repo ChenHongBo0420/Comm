@@ -514,6 +514,39 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    rho=0.5,  # 分割比参数，0 < ρ < 1
+    d_init=delta,
+    n_init=gauss
+):
+    x, t = signal
+    # dconv 的定义保持不变，但在调用时传入步长比例参数
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+    for i in range(steps):
+        # 第一部分线性补偿：占整个步长的 (1 - ρ)
+        x, td = scope.child(dconv, name=f'DConv_pre_{i}')(
+            Signal(x, t), step_fraction=(1 - rho)
+        )
+        
+        # 非线性补偿：计算信号的非线性相位旋转
+        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init
+        )
+        x = jnp.exp(1j * c) * x  # 更新信号（此处可能还需要对索引做相应调整）
+        
+        # 第二部分线性补偿：占整个步长的 ρ
+        x, td = scope.child(dconv, name=f'DConv_post_{i}')(
+            Signal(x, t), step_fraction=rho
+        )
+    return Signal(x, t)
+
 
 # def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 #     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
