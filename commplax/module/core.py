@@ -526,26 +526,26 @@ def fdbp(
     n_init=gauss
 ):
     x, t = signal
-    # dconv 的定义保持不变，但在调用时传入步长比例参数
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     for i in range(steps):
         # 第一部分线性补偿：占整个步长的 (1 - ρ)
-        x, td = scope.child(dconv, name=f'DConv_pre_{i}')(
+        x, t = scope.child(dconv, name=f'DConv_pre_{i}')(
             Signal(x, t), step_fraction=(1 - rho)
         )
         
         # 非线性补偿：计算信号的非线性相位旋转
         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init
+            Signal(jnp.abs(x)**2, t), taps=ntaps, kernel_init=n_init
         )
-        x = jnp.exp(1j * c) * x  # 更新信号（此处可能还需要对索引做相应调整）
+        x = jnp.exp(1j * c) * x  # 用非线性相位更新信号
         
         # 第二部分线性补偿：占整个步长的 ρ
-        x, td = scope.child(dconv, name=f'DConv_post_{i}')(
+        x, t = scope.child(dconv, name=f'DConv_post_{i}')(
             Signal(x, t), step_fraction=rho
         )
     return Signal(x, t)
+
 
 
 # def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -775,36 +775,34 @@ def fdbp1(
     ntaps=41,
     sps=2,
     ixpm_window=7,  # IXPM 窗口大小
-    rho=0.5,       # 步长分割比参数，取值在 0 到 1 之间
+    rho=0.5,        # 步长分割比参数，取值范围 (0,1)
     d_init=delta,
     n_init=gauss):
     
     x, t = signal
-    # 定义线性卷积操作（色散补偿），这里假设 dconv 支持一个额外参数 step_fraction 表示步长比例
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
     
     for i in range(steps):
-        # 第一段线性补偿：对应整个步长中 (1–ρ) 的部分
-        x, td = scope.child(dconv, name='DConv1_pre_%d' % i)(Signal(x, t), step_fraction=(1 - rho))
+        # 第一段线性补偿：占整个步长中 (1–ρ) 的部分
+        x, t = scope.child(dconv, name=f'DConv1_pre_{i}')(Signal(x, t), step_fraction=(1 - rho))
         
-        # 计算 IXPM：先对信号幅度平方进行不同延时的 roll
+        # 计算 IXPM：先对当前 x 的幅度平方进行不同延时的 roll
         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
         # 用 softmax 得到归一化权重
         weights = jax.nn.softmax(ixpm_alpha)
-        # 加权求和，得到 IXPM 处理后的功率估计
+        # 计算加权和，得到 IXPM 后的功率估计
         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
         
-        # 非线性补偿：使用 IXPM 功率信息计算非线性相位旋转
-        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-        # 根据计算出的非线性相位更新信号 x（注意索引可能需要根据 td 进行调整）
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        # 非线性补偿：使用更新后的时间 t 计算非线性相位旋转 c
+        c, t = scope.child(mimoconv1d, name=f'NConv1_{i}')(Signal(ixpm_power, t), taps=ntaps, kernel_init=n_init)
+        # 更新信号 x，直接乘以非线性相位因子，确保 x 的形状与 t 保持一致
+        x = jnp.exp(1j * c) * x
         
-        # 第二段线性补偿：对应整个步长中 ρ 的部分
-        x, td = scope.child(dconv, name='DConv1_post_%d' % i)(Signal(x, t), step_fraction=rho)
+        # 第二段线性补偿：占整个步长中 ρ 的部分
+        x, t = scope.child(dconv, name=f'DConv1_post_{i}')(Signal(x, t), step_fraction=rho)
     
     return Signal(x, t)
 
