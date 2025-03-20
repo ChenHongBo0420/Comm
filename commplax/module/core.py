@@ -495,25 +495,6 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
-
 # def fdbp(
 #     scope: Scope,
 #     signal,
@@ -521,30 +502,66 @@ def fdbp(
 #     dtaps=261,
 #     ntaps=41,
 #     sps=2,
-#     rho=0.5,  # 分割比参数，0 < ρ < 1
 #     d_init=delta,
-#     n_init=gauss
-# ):
+#     n_init=gauss):
 #     x, t = signal
 #     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
 #     for i in range(steps):
-#         # 第一部分线性补偿：占整个步长的 (1 - ρ)
-#         x, t = scope.child(dconv, name=f'DConv_pre_{i}')(
-#             Signal(x, t), step_fraction=(1 - rho)
-#         )
-        
-#         # 非线性补偿：计算信号的非线性相位旋转
-#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-#             Signal(jnp.abs(x)**2, t), taps=ntaps, kernel_init=n_init
-#         )
-#         x = jnp.exp(1j * c) * x  # 用非线性相位更新信号
-        
-#         # 第二部分线性补偿：占整个步长的 ρ
-#         x, t = scope.child(dconv, name=f'DConv_post_{i}')(
-#             Signal(x, t), step_fraction=rho
-#         )
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
+
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    rho=0.5,  # 分割比参数，0 < ρ < 1
+    d_init=delta,
+    n_init=gauss
+):
+    """
+    使用带步长分割比 ρ 的数字反向传播 (fdbp)，并在每一步中根据返回的时域索引
+    对 x 做显式裁剪，避免形状不匹配。
+    """
+    x, t = signal
+    # 线性补偿卷积
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    for i in range(steps):
+        # 1) 前半段线性补偿: (1 - ρ)
+        x, td = scope.child(dconv, name=f'DConv_pre_{i}')(
+            Signal(x, t), step_fraction=(1 - rho)
+        )
+
+        # 2) 非线性补偿
+        #    c, t_nl 可能比 x, td 稍长或稍短，因此需用显式索引让 x 和 c 对齐
+        c, t_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init
+        )
+
+        # 利用 t_nl、td 来裁剪 x 使其与 c 匹配
+        x = x[t_nl.start - td.start : t_nl.stop - td.stop + x.shape[0]]
+        # 注意：若 t_nl.start < td.start，这里要确保不会出现负索引越界
+        # 若越界，可根据实际情况再做额外保护
+
+        # 乘以非线性相位因子，更新 x
+        x = jnp.exp(1j * c) * x
+        
+        # 将时间 t 更新为 t_nl，表示我们现在的 (x, t) 已同步
+        t = t_nl
+
+        # 3) 后半段线性补偿: ρ
+        x, t = scope.child(dconv, name=f'DConv_post_{i}')(
+            Signal(x, t), step_fraction=rho
+        )
+
+    return Signal(x, t)
 
 
 
@@ -736,37 +753,6 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp1(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    ixpm_window=7,  # IXPM 窗口大小
-    d_init=delta,
-    n_init=gauss):
-    
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-        # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-        # 用 softmax 得到归一化权重
-        weights = jax.nn.softmax(ixpm_alpha)
-        # 计算加权和
-        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-        # 更新信号 x
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
-
 # def fdbp1(
 #     scope: Scope,
 #     signal,
@@ -775,7 +761,6 @@ def fdbp1(
 #     ntaps=41,
 #     sps=2,
 #     ixpm_window=7,  # IXPM 窗口大小
-#     rho=0.5,        # 步长分割比参数，取值范围 (0,1)
 #     d_init=delta,
 #     n_init=gauss):
     
@@ -786,25 +771,67 @@ def fdbp1(
 #     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
     
 #     for i in range(steps):
-#         # 第一段线性补偿：占整个步长中 (1–ρ) 的部分
-#         x, t = scope.child(dconv, name=f'DConv1_pre_{i}')(Signal(x, t), step_fraction=(1 - rho))
-        
-#         # 计算 IXPM：先对当前 x 的幅度平方进行不同延时的 roll
+#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+#         # 对信号幅度平方进行 roll
 #         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
 #         # 用 softmax 得到归一化权重
 #         weights = jax.nn.softmax(ixpm_alpha)
-#         # 计算加权和，得到 IXPM 后的功率估计
+#         # 计算加权和
 #         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        
-#         # 非线性补偿：使用更新后的时间 t 计算非线性相位旋转 c
-#         c, t = scope.child(mimoconv1d, name=f'NConv1_{i}')(Signal(ixpm_power, t), taps=ntaps, kernel_init=n_init)
-#         # 更新信号 x，直接乘以非线性相位因子，确保 x 的形状与 t 保持一致
-#         x = jnp.exp(1j * c) * x
-        
-#         # 第二段线性补偿：占整个步长中 ρ 的部分
-#         x, t = scope.child(dconv, name=f'DConv1_post_{i}')(Signal(x, t), step_fraction=rho)
-    
+#         c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
+#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+#         # 更新信号 x
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
+
+def fdbp1(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    rho=0.5,  # 分割比参数，0 < ρ < 1
+    d_init=delta,
+    n_init=gauss
+):
+    """
+    使用带步长分割比 ρ 的数字反向传播 (fdbp)，并在每一步中根据返回的时域索引
+    对 x 做显式裁剪，避免形状不匹配。
+    """
+    x, t = signal
+    # 线性补偿卷积
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    for i in range(steps):
+        # 1) 前半段线性补偿: (1 - ρ)
+        x, td = scope.child(dconv, name=f'DConv_pre_{i}')(
+            Signal(x, t), step_fraction=(1 - rho)
+        )
+
+        # 2) 非线性补偿
+        #    c, t_nl 可能比 x, td 稍长或稍短，因此需用显式索引让 x 和 c 对齐
+        c, t_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init
+        )
+
+        # 利用 t_nl、td 来裁剪 x 使其与 c 匹配
+        x = x[t_nl.start - td.start : t_nl.stop - td.stop + x.shape[0]]
+        # 注意：若 t_nl.start < td.start，这里要确保不会出现负索引越界
+        # 若越界，可根据实际情况再做额外保护
+
+        # 乘以非线性相位因子，更新 x
+        x = jnp.exp(1j * c) * x
+        
+        # 将时间 t 更新为 t_nl，表示我们现在的 (x, t) 已同步
+        t = t_nl
+
+        # 3) 后半段线性补偿: ρ
+        x, t = scope.child(dconv, name=f'DConv_post_{i}')(
+            Signal(x, t), step_fraction=rho
+        )
+
+    return Signal(x, t)
 
 def identity(scope, inputs):
     return inputs
