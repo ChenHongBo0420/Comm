@@ -209,7 +209,7 @@ def conv1d(
     signal,
     taps=31,
     rtap=None,
-    mode='same',
+    mode='full',
     kernel_init=delta,
     conv_fn = xop.convolve):
 
@@ -232,7 +232,7 @@ def mimoconv1d(
     taps=31,
     rtap=None,
     dims=2,
-    mode='same',
+    mode='full',
     kernel_init=zeros,
     conv_fn=xop.convolve):
 
