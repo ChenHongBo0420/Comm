@@ -766,7 +766,8 @@ def fdbp(
 #         # 更新信号 x
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
-def fdbp1_with_rho(
+
+def fdbp1(
     scope: Scope,
     signal,
     steps=3,
