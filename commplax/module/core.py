@@ -495,24 +495,24 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -558,16 +558,16 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 
 #     return out_1d, t
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_size1=2, hidden_size2=2, output_dim=2):
+def residual_mlp(scope: Scope, signal: Signal, hidden_size=2, hidden_size2=2, output_dim=2):
     x, t = signal
     input_dim = x.shape[1]
     N = x.shape[0]
     Wxh1 = scope.param('Wxh1', orthogonal, (input_dim, hidden_size1))
-    Whh1 = scope.param('Whh1', orthogonal, (hidden_size1, hidden_size1))
-    Wxh2 = scope.param('Wxh2', orthogonal, (hidden_size1, hidden_size2))
+    Whh1 = scope.param('Whh1', orthogonal, (hidden_size, hidden_size1))
+    Wxh2 = scope.param('Wxh2', orthogonal, (hidden_size, hidden_size2))
     Whh2 = scope.param('Whh2', orthogonal, (hidden_size2, hidden_size2))
     Why = scope.param('Why', orthogonal, (hidden_size2, output_dim))
-    hidden_state1 = jnp.zeros((N, hidden_size1))
+    hidden_state1 = jnp.zeros((N, hidden_size))
     hidden_state2 = jnp.zeros((N, hidden_size2))
     hidden_state1 = jnp.dot(x, Wxh1) + jnp.dot(hidden_state1, Whh1)
     hidden_state1 = jax.nn.gelu(hidden_state1)
