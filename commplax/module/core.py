@@ -514,12 +514,60 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    rho=0.5,  # 分割比参数，0 < ρ < 1
+    d_init=delta,
+    n_init=gauss
+):
+    """
+    使用带步长分割比 ρ 的数字反向传播 (fdbp)，并在每一步中根据返回的时域索引
+    对 x 做显式裁剪，避免形状不匹配。
+    """
+    x, t = signal
+    # 线性补偿卷积
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
-    # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
-    real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
-    imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
-    return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
+    for i in range(steps):
+        # 1) 前半段线性补偿: (1 - ρ)
+        x, td = scope.child(dconv, name=f'DConv_pre_{i}')(
+            Signal(x, t), step_fraction=(1 - rho)
+        )
+
+        # 2) 非线性补偿
+        #    c, t_nl 可能比 x, td 稍长或稍短，因此需用显式索引让 x 和 c 对齐
+        c, t_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init
+        )
+
+        # 利用 t_nl、td 来裁剪 x 使其与 c 匹配
+        x = x[t_nl.start - td.start : t_nl.stop - td.stop + x.shape[0]]
+        # 注意：若 t_nl.start < td.start，这里要确保不会出现负索引越界
+        # 若越界，可根据实际情况再做额外保护
+
+        # 乘以非线性相位因子，更新 x
+        x = jnp.exp(1j * c) * x
+        
+        # 将时间 t 更新为 t_nl，表示我们现在的 (x, t) 已同步
+        t = t_nl
+
+        # 3) 后半段线性补偿: ρ
+        x, t = scope.child(dconv, name=f'DConv_post_{i}')(
+            Signal(x, t), step_fraction=rho
+        )
+
+    return Signal(x, t)
+
+# def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
+#     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
+#     real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+#     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+#     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
 
 # def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 #     """
@@ -557,113 +605,67 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 #     out_1d = out.squeeze(axis=-1)
 
 #     return out_1d, t
-  
-def soft_threshold(z, threshold, eps=1e-6):
-    """
-    对复数 z 进行软阈值化：
-    如果 |z| 大于阈值，则收缩 z 的模长，否则置零。
-    """
-    mag = jnp.abs(z)
-    scale = jnp.maximum(mag - threshold, 0) / (mag + eps)
-    return scale * z
 
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2, threshold=0.1):
-    """
-    对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
-    然后使用两层 MLP 生成 (N,) 复数 residual，并对输出进行软阈值化，
-    以增强结果的稀疏性或降噪效果。
-    """
-    x, t = signal
-    # 1) 沿通道维度做范数操作，得到标量 (也可以换成均值：jnp.mean(x, axis=-1))
-    x_scalar = jnp.linalg.norm(x, axis=-1)
-    N = x_scalar.shape[0]
-    # 2) reshape 成 (N,1)，并转换为复数数据类型
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
-    
-    # 3) 定义两层 MLP 的参数，参数数据类型均为 jnp.complex64
-    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
-    b1 = scope.param('b1',
-                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-                     (hidden_dim,))
-    W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
-    b2 = scope.param('b2',
-                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-                     (1,))
-    
-    # 4) 第一层全连接 + 激活函数
-    h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.gelu(h)
-    
-    # 5) 输出层
-    out = jnp.dot(h, W2) + b2
-    # squeeze 得到形状 (N,)
-    out_1d = out.squeeze(axis=-1)
+# from jax import debug
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     保持原 fdbp(D->N)结构:
+#       1) D
+#       2) N
+#       + 3) residual MLP => out shape=(N,) and add to x
+#     """
+#     x, t = signal
+#     # 1) 色散
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # 6) 对输出进行软阈值化
-    out_soft = soft_threshold(out_1d, threshold)
-    
-    return out_soft, t
-
-from jax import debug
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    保持原 fdbp(D->N)结构:
-      1) D
-      2) N
-      + 3) residual MLP => out shape=(N,) and add to x
-    """
-    x, t = signal
-    # 1) 色散
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-    # 可选: 对res加个可训练缩放
-    if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-    # debug.print("alpha = {}", alpha)
-    for i in range(steps):
-        # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#     # 可选: 对res加个可训练缩放
+#     if use_alpha:
+#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+#     else:
+#         alpha = 1.0
+#     # debug.print("alpha = {}", alpha)
+#     for i in range(steps):
+#         # --- (A) 色散补偿 (D)
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
-        # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        # --- (C) residual MLP
-        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        # res_val => (N_new,)
-        # cast to complex, or interpret as real
-        # 这里示例 "在幅度上+res"
-        # x_new += alpha * res_val
-        # 不分real/imag => 全部 real offset => x_new + alpha * res
-        # 只要 x_new是complex => convert
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-        x_new = x_new + alpha * res_val_cplx_2d 
+#         # --- (B) 非线性补偿 (N)
+#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+#             Signal(jnp.abs(x)**2, td),
+#             taps=ntaps,
+#             kernel_init=n_init
+#         )
+#         # 应用相位: x_new = exp(j*c) * x[...]
+#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+#         # --- (C) residual MLP
+#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+#             Signal(jnp.abs(x_new)**2, tN),
+#             hidden_dim=hidden_dim
+#         )
+#         # res_val => (N_new,)
+#         # cast to complex, or interpret as real
+#         # 这里示例 "在幅度上+res"
+#         # x_new += alpha * res_val
+#         # 不分real/imag => 全部 real offset => x_new + alpha * res
+#         # 只要 x_new是complex => convert
+#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+#         x_new = x_new + alpha * res_val_cplx_2d 
         
-        # update x,t
-        x, t = x_new, t_res
-    return Signal(x, t)
+#         # update x,t
+#         x, t = x_new, t_res
+#     return Signal(x, t)
 
 
 # def fdbp(
@@ -747,6 +749,37 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # IXPM 窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+#         # 对信号幅度平方进行 roll
+#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+#         # 用 softmax 得到归一化权重
+#         weights = jax.nn.softmax(ixpm_alpha)
+#         # 计算加权和
+#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+#         c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
+#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+#         # 更新信号 x
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp1(
     scope: Scope,
     signal,
@@ -754,30 +787,47 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,  # IXPM 窗口大小
+    rho=0.5,  # 分割比参数，0 < ρ < 1
     d_init=delta,
-    n_init=gauss):
-    
+    n_init=gauss
+):
+    """
+    使用带步长分割比 ρ 的数字反向传播 (fdbp)，并在每一步中根据返回的时域索引
+    对 x 做显式裁剪，避免形状不匹配。
+    """
     x, t = signal
+    # 线性补偿卷积
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-        # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-        # 用 softmax 得到归一化权重
-        weights = jax.nn.softmax(ixpm_alpha)
-        # 计算加权和
-        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-        # 更新信号 x
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
 
+    for i in range(steps):
+        # 1) 前半段线性补偿: (1 - ρ)
+        x, td = scope.child(dconv, name=f'DConv_pre_{i}')(
+            Signal(x, t), step_fraction=(1 - rho)
+        )
+
+        # 2) 非线性补偿
+        #    c, t_nl 可能比 x, td 稍长或稍短，因此需用显式索引让 x 和 c 对齐
+        c, t_nl = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init
+        )
+
+        # 利用 t_nl、td 来裁剪 x 使其与 c 匹配
+        x = x[t_nl.start - td.start : t_nl.stop - td.stop + x.shape[0]]
+        # 注意：若 t_nl.start < td.start，这里要确保不会出现负索引越界
+        # 若越界，可根据实际情况再做额外保护
+
+        # 乘以非线性相位因子，更新 x
+        x = jnp.exp(1j * c) * x
+        
+        # 将时间 t 更新为 t_nl，表示我们现在的 (x, t) 已同步
+        t = t_nl
+
+        # 3) 后半段线性补偿: ρ
+        x, t = scope.child(dconv, name=f'DConv_post_{i}')(
+            Signal(x, t), step_fraction=rho
+        )
+
+    return Signal(x, t)
 
 def identity(scope, inputs):
     return inputs
