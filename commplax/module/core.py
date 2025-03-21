@@ -561,7 +561,9 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     x, t = signal
     input_dim = x.shape[1]
-    N = x.shape[0]
+    x_scalar = jnp.linalg.norm(x, axis=-1)
+    N = x_scalar.shape[0]
+    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
     Wxh1 = scope.param('Wxh1', complex_glorot_uniform, (input_dim, hidden_dim))
     Whh1 = scope.param('Whh1', complex_glorot_uniform, (hidden_dim, hidden_dim))
     Wxh2 = scope.param('Wxh2', complex_glorot_uniform, (hidden_dim, hidden_dim))
@@ -569,11 +571,12 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     Why = scope.param('Why', complex_glorot_uniform, (hidden_dim, hidden_dim))
     hidden_state1 = jnp.zeros((N, hidden_dim))
     hidden_state2 = jnp.zeros((N, hidden_dim))
-    hidden_state1 = jnp.dot(x, Wxh1) + jnp.dot(hidden_state1, Whh1)
+    hidden_state1 = jnp.dot(x_2d, Wxh1) + jnp.dot(hidden_state1, Whh1)
     hidden_state1 = jax.nn.gelu(hidden_state1)
     hidden_state2 = jnp.dot(hidden_state1, Wxh2) + jnp.dot(hidden_state2, Whh2)
     hidden_state2 = jax.nn.gelu(hidden_state2)
-    output = jnp.dot(hidden_state2, Why)
+    out = jnp.dot(hidden_state2, Why)
+    out_1d = out.squeeze(axis=-1)
     return output, t
 
 
