@@ -231,9 +231,9 @@ def batchpowernorm1(scope, signal, init_alpha=1.0, momentum=0.999, mode='train')
     normed = signal.val / jnp.sqrt(mean)
 
     x = jnp.tanh(alpha * normed)
-    out = gamma * x + beta
+    x = gamma * x + beta
 
-    return out
+    return Signal(x, t)
 
 
 
