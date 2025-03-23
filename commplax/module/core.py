@@ -194,15 +194,38 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
   
-def batchpowernorm1(scope, signal, momentum=0.999, mode='train'):
-    running_mean = scope.variable('norm', 'running_mean',
-                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+def batchpowernorm1(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
+    C = signal.val.shape[-1]
+    
+    alpha = scope.param('alpha',
+                        shape=(),
+                        init_fn=lambda key: jnp.full((), init_alpha))
+    
+    gamma = scope.param('gamma',
+                        shape=(C,),
+                        init_fn=lambda key: jnp.ones((C,)))
+    
+    beta = scope.param('beta',
+                       shape=(C,),
+                       init_fn=lambda key: jnp.zeros((C,)))
+
+    running_mean = scope.variable(
+        'norm', 'running_mean',
+        lambda: jnp.ones(C)
+    )
+
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0) 
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
-    return signal / jnp.sqrt(mean)
+
+    normed = signal.val / jnp.sqrt(mean)
+    x = jnp.tanh(alpha * normed)
+    out = gamma * x + beta
+
+    return signal.replace(val=out)
+
 
 def conv1d(
     scope: Scope,
@@ -495,24 +518,24 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss):
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
 
 
 # def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -551,138 +574,7 @@ from jax.nn.initializers import orthogonal, zeros
 #     # 6) squeeze 得到形状 (N,)
 #     out_1d = out.squeeze(axis=-1)
 #     return out_1d, t
-
-class CrossAttention(nn.Module):
-    num_heads: int
-    qk_features: int
-    out_features: int
-    
-    @nn.compact
-    def __call__(self, x_q, x_kv, mask=None):
-        """
-        x_q: (batch, time_q, embed_dim)
-        x_kv: (batch, time_k, embed_dim)
-        """
-        attn = nn.MultiHeadDotProductAttention(
-            num_heads=self.num_heads,
-            dtype=x_q.dtype,
-            qkv_features=self.qk_features,
-            out_features=self.out_features
-        )(x_q, x_kv, x_kv, mask=mask)
-        return attn
-
-def cross_attention_module(scope, x_q, x_kv, 
-                           num_heads=1, qk_features=32, out_features=32):
-
-    # (1) Instantiate the module with your constructor arguments.
-    cross_attn_mod = CrossAttention(
-        num_heads=num_heads,
-        qk_features=qk_features,
-        out_features=out_features
-    )
-
-    # (2) Pass that module instance to scope.child, giving it a name.
-    cross_attn_fn = scope.child(cross_attn_mod, "CrossAttn")
-
-    # (3) Now call it with your actual input arrays.
-    attn_out = cross_attn_fn(x_q, x_kv)  # => an array of shape (batch, time_q, out_features)
-
-    return attn_out
-
-def embed_signal(scope: Scope, x: jnp.ndarray, embed_dim: int):
-    """
-    Simple linear embedding from complex or real input => R^embed_dim or C^embed_dim.
-    You could do: W: shape (in_dim, embed_dim)
-    """
-    # Suppose x has shape (N, C). Insert batch dimension => (1, N, C)
-    x_b = jnp.expand_dims(x, axis=0)
-
-    in_dim = x_b.shape[-1]
-    W = scope.param(
-        "W_embed",
-        nn.initializers.xavier_uniform(),
-        (in_dim, embed_dim)
-    )
-    b = scope.param("b_embed",
-                    nn.initializers.zeros,
-                    (embed_dim,))
-    # embed => shape (1, N, embed_dim)
-    x_emb = jnp.einsum("bnc,cd->bnd", x_b, W) + b
-    return x_emb
                              
-def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, hidden_dim=2,
-         embed_dim=32, use_alpha=True, sps=2, d_init=delta, n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    # etc...
-
-    if use_alpha:
-        alpha = scope.param("res_alpha", nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-    
-    for i in range(steps):
-        # --- (A) Dispersion
-        xD, tD = scope.child(dconv, name=f"DConv_{i}")(Signal(x, t))
-
-        # --- (B) Nonlinearity
-        xN, tN = scope.child(mimoconv1d, name=f"NConv_{i}")(
-            Signal(jnp.abs(xD)**2, tD),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # xN now shape (N, something)...
-
-        # --- (C) Cross-attention step
-        # 1) Expand dims to (batch=1, time=N, channels/emb=...)
-        xD_emb = jnp.expand_dims(xD, 0)  # shape (1, N_D, dim)
-        xN_emb = jnp.expand_dims(xN, 0)  # shape (1, N_N, dim)
-
-        # 2) Possibly apply a linear up‐projection to embed_dim
-        #    or do so in a child function, see below for example.
-        # For brevity, let's assume they're already shaped to embed_dim.
-
-        # 3) cross_attention_module call
-        x_attn = scope.child(cross_attention_module, name=f"Attn_{i}")(
-            x_q=xN_emb,
-            x_kv=xD_emb,
-            num_heads=1,
-            qk_features=embed_dim,
-            out_features=embed_dim
-        )
-        # x_attn is shape (1, N_N, embed_dim)
-
-        # 4) Project down to match xN's dimension
-        W_out = scope.param(
-            f"W_out_{i}",
-            nn.initializers.xavier_uniform(),
-            (embed_dim, xN.shape[-1])  # for example if xN.shape[-1] = 2
-        )
-        b_out = scope.param(
-            f"b_out_{i}",
-            nn.initializers.zeros,
-            (xN.shape[-1],)
-        )
-
-        # Do an einsum or jnp.dot
-        x_attn_out = jnp.einsum("bnd,dk->bnk", x_attn, W_out) + b_out
-        x_attn_out = x_attn_out[0]  # remove batch dim => shape (N_N, 2)
-
-        # e.g. residual combine
-        x_new = xN + alpha * x_attn_out
-
-        # Optionally add your residual_mlp
-        res_val, t_res = scope.child(residual_mlp, name=f"ResCNN_{i}")(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        x_new = x_new + alpha * res_val[:, None]
-
-        # update
-        x, t = x_new, t_res
-
-    return Signal(x, t)
-
 
 # from jax import debug
 # def fdbp(
