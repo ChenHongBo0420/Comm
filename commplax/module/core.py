@@ -552,10 +552,6 @@ from jax.nn.initializers import orthogonal, zeros
 #     out_1d = out.squeeze(axis=-1)
 #     return out_1d, t
 
-import jax.numpy as jnp
-import flax.linen as nn
-from typing import Tuple
-
 class CrossAttention(nn.Module):
     num_heads: int
     qk_features: int
