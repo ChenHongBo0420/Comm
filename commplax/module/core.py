@@ -557,20 +557,16 @@ import flax.linen as nn
 from typing import Tuple
 
 class CrossAttention(nn.Module):
-    """Cross-attention module: x_q attends to x_kv."""
     num_heads: int
     qk_features: int
     out_features: int
-
+    
     @nn.compact
     def __call__(self, x_q, x_kv, mask=None):
         """
-        x_q: shape (batch, time_q, dim)
-        x_kv: shape (batch, time_k, dim)
+        x_q: (batch, time_q, embed_dim)
+        x_kv: (batch, time_k, embed_dim)
         """
-        # If you only have (time, dim), you can insert a batch dimension of size 1
-        # e.g. x_q = x_q[None, ...], etc.
-
         attn = nn.MultiHeadDotProductAttention(
             num_heads=self.num_heads,
             dtype=x_q.dtype,
@@ -578,6 +574,24 @@ class CrossAttention(nn.Module):
             out_features=self.out_features
         )(x_q, x_kv, x_kv, mask=mask)
         return attn
+
+def cross_attention_module(scope, x_q, x_kv, 
+                           num_heads=1, qk_features=32, out_features=32):
+
+    # (1) Instantiate the module with your constructor arguments.
+    cross_attn_mod = CrossAttention(
+        num_heads=num_heads,
+        qk_features=qk_features,
+        out_features=out_features
+    )
+
+    # (2) Pass that module instance to scope.child, giving it a name.
+    cross_attn_fn = scope.child(cross_attn_mod, "CrossAttn")
+
+    # (3) Now call it with your actual input arrays.
+    attn_out = cross_attn_fn(x_q, x_kv)  # => an array of shape (batch, time_q, out_features)
+
+    return attn_out
 
 def embed_signal(scope: Scope, x: jnp.ndarray, embed_dim: int):
     """
@@ -599,107 +613,80 @@ def embed_signal(scope: Scope, x: jnp.ndarray, embed_dim: int):
     # embed => shape (1, N, embed_dim)
     x_emb = jnp.einsum("bnc,cd->bnd", x_b, W) + b
     return x_emb
-
-def cross_attention_module(scope: Scope,
-                           x_q: jnp.ndarray,
-                           x_kv: jnp.ndarray,
-                           num_heads=1,
-                           qk_features=32,
-                           out_features=32):
-    """
-    x_q: shape (1, N_q, embed_dim)
-    x_kv: shape (1, N_k, embed_dim)
-    """
-    # We can define a linen module inside a scope child:
-    attn_out = scope.child(
-        CrossAttention,
-        "CrossAttn"
-    )(x_q, x_kv)  # => shape (1, N_q, out_features)
-
-    return attn_out
                              
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    hidden_dim=2,
-    embed_dim=2,
-    use_alpha=True,
-    sps=2,
-    d_init=delta,
-    n_init=gauss
-):
+def fdbp(scope, signal, steps=3, dtaps=261, ntaps=41, hidden_dim=2,
+         embed_dim=32, use_alpha=True, sps=2, d_init=delta, n_init=gauss):
     x, t = signal
-    
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=delta))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # etc...
 
     if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+        alpha = scope.param("res_alpha", nn.initializers.zeros, ())
     else:
         alpha = 1.0
-
+    
     for i in range(steps):
-        # --- 1) Dispersion step
+        # --- (A) Dispersion
         xD, tD = scope.child(dconv, name=f"DConv_{i}")(Signal(x, t))
 
-        # --- 2) Nonlinearity step
+        # --- (B) Nonlinearity
         xN, tN = scope.child(mimoconv1d, name=f"NConv_{i}")(
             Signal(jnp.abs(xD)**2, tD),
             taps=ntaps,
-            kernel_init=gauss
+            kernel_init=n_init
         )
-        # e.g. xN = exp(j * something) * xD
+        # xN now shape (N, something)...
 
-        # ===> 3) CROSS-ATTENTION (D <-> N) <===
-        # We'll embed xD, xN to shape => (1, length, embed_dim)
-        xD_emb = scope.child(embed_signal, name=f"EmbedD_{i}")(xD, embed_dim)
-        xN_emb = scope.child(embed_signal, name=f"EmbedN_{i}")(xN, embed_dim)
+        # --- (C) Cross-attention step
+        # 1) Expand dims to (batch=1, time=N, channels/emb=...)
+        xD_emb = jnp.expand_dims(xD, 0)  # shape (1, N_D, dim)
+        xN_emb = jnp.expand_dims(xN, 0)  # shape (1, N_N, dim)
 
-        # Let xN be queries, xD be keys/values
+        # 2) Possibly apply a linear up‐projection to embed_dim
+        #    or do so in a child function, see below for example.
+        # For brevity, let's assume they're already shaped to embed_dim.
+
+        # 3) cross_attention_module call
         x_attn = scope.child(cross_attention_module, name=f"Attn_{i}")(
             x_q=xN_emb,
             x_kv=xD_emb,
-            num_heads=1,        # just an example
+            num_heads=1,
             qk_features=embed_dim,
             out_features=embed_dim
         )
-        # x_attn: shape (1, length_of_N, embed_dim)
+        # x_attn is shape (1, N_N, embed_dim)
 
-        # You can do a residual connection or feed-forward here.
-        # For example, project back to the original dimension (C=2).
-        # We'll do a simple linear down-projection:
+        # 4) Project down to match xN's dimension
         W_out = scope.param(
             f"W_out_{i}",
             nn.initializers.xavier_uniform(),
-            (embed_dim, xN.shape[-1])  # xN.shape[-1] might be 2 if you're working with 2 polarizations
+            (embed_dim, xN.shape[-1])  # for example if xN.shape[-1] = 2
         )
         b_out = scope.param(
             f"b_out_{i}",
             nn.initializers.zeros,
             (xN.shape[-1],)
         )
-        # (1, N, embed_dim) -> (1, N, 2)
-        x_attn_out = jnp.einsum("bnd,dk->bnk", x_attn, W_out) + b_out
-        # remove batch dim => shape (N, 2)
-        x_attn_out = x_attn_out[0]
 
-        # Combine xN + attention output in some way:
+        # Do an einsum or jnp.dot
+        x_attn_out = jnp.einsum("bnd,dk->bnk", x_attn, W_out) + b_out
+        x_attn_out = x_attn_out[0]  # remove batch dim => shape (N_N, 2)
+
+        # e.g. residual combine
         x_new = xN + alpha * x_attn_out
 
-        # Possibly also add your residual_mlp step:
+        # Optionally add your residual_mlp
         res_val, t_res = scope.child(residual_mlp, name=f"ResCNN_{i}")(
             Signal(jnp.abs(x_new)**2, tN),
             hidden_dim=hidden_dim
         )
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)  # shape (N,)
-        x_new = x_new + alpha * res_val_cplx[:, None]
+        x_new = x_new + alpha * res_val[:, None]
 
-        # update x,t
+        # update
         x, t = x_new, t_res
 
     return Signal(x, t)
+
 
 # from jax import debug
 # def fdbp(
