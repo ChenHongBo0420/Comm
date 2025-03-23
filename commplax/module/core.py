@@ -600,6 +600,9 @@ def fdbp(
     hidden_dim=2,
     embed_dim=2,
     use_alpha=True,
+    sps=2,
+    d_init=delta,
+    n_init=gauss
 ):
     x, t = signal
     
