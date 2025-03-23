@@ -233,7 +233,7 @@ def batchpowernorm1(scope, signal, init_alpha=1.0, momentum=0.999, mode='train')
     x = jnp.tanh(alpha * normed)
     out = gamma * x + beta
 
-    return signal.replace(val=out)
+    return out
 
 
 
