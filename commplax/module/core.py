@@ -184,55 +184,57 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-#     running_mean = scope.variable('norm', 'running_mean',
-#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-#     if mode == 'train':
-#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-#     else:
-#         mean = running_mean.value
-#     return signal / jnp.sqrt(mean)
-  
-def batchpowernorm(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
-    x, t = signal
-    C = signal.val.shape[-1]
-    
-    # 让 init_fn 接受 (rng, shape) 两个位置参数
-    alpha = scope.param(
-        'alpha',
-        init_fn=lambda rng, shape: jnp.full(shape, init_alpha),  
-        shape=(),
-    )
-    
-    gamma = scope.param(
-        'gamma',
-        init_fn=lambda rng, shape: jnp.ones(shape),
-        shape=(C,),
-    )
-
-    beta = scope.param(
-        'beta',
-        init_fn=lambda rng, shape: jnp.zeros(shape),
-        shape=(C,),
-    )
-
-    running_mean = scope.variable(
-        'norm',
-        'running_mean',
-        init_fn=lambda: jnp.ones((C,))
-    )
-
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+    alpha =  scope.variable('norm1', 'running_mean1',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+    running_mean = scope.variable('norm', 'running_mean',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
+    return alpha * (signal / jnp.sqrt(mean))
+  
+# def batchpowernorm(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
+#     x, t = signal
+#     C = signal.val.shape[-1]
+    
+#     # 让 init_fn 接受 (rng, shape) 两个位置参数
+#     alpha = scope.param(
+#         'alpha',
+#         init_fn=lambda rng, shape: jnp.full(shape, init_alpha),  
+#         shape=(),
+#     )
+    
+#     gamma = scope.param(
+#         'gamma',
+#         init_fn=lambda rng, shape: jnp.ones(shape),
+#         shape=(C,),
+#     )
 
-    # alpha * (signal.val / jnp.sqrt(mean))
-    # x = gamma * x + beta
+#     beta = scope.param(
+#         'beta',
+#         init_fn=lambda rng, shape: jnp.zeros(shape),
+#         shape=(C,),
+#     )
 
-    return alpha * (signal.val / jnp.sqrt(mean))
+#     running_mean = scope.variable(
+#         'norm',
+#         'running_mean',
+#         init_fn=lambda: jnp.ones((C,))
+#     )
+
+#     if mode == 'train':
+#         mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
+#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+#     else:
+#         mean = running_mean.value
+
+#     # alpha * (signal.val / jnp.sqrt(mean))
+#     # x = gamma * x + beta
+
+#     return alpha * (signal.val / jnp.sqrt(mean))
 
 
 
