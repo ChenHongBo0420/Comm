@@ -195,6 +195,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     return signal / jnp.sqrt(mean)
   
 def batchpowernorm1(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
+    x, t = signal
     C = signal.val.shape[-1]
     
     # 让 init_fn 接受 (rng, shape) 两个位置参数
