@@ -229,10 +229,10 @@ def batchpowernorm(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
     else:
         mean = running_mean.value
 
-    x = jax.nn.gelu(alpha * (signal.val / jnp.sqrt(mean)))
-    x = gamma * x + beta
+    # alpha * (signal.val / jnp.sqrt(mean))
+    # x = gamma * x + beta
 
-    return Signal(x, t)
+    return alpha * (signal.val / jnp.sqrt(mean))
 
 
 
