@@ -197,34 +197,44 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 def batchpowernorm1(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
     C = signal.val.shape[-1]
     
-    alpha = scope.param('alpha',
-                        shape=(),
-                        init_fn=lambda key: jnp.full((), init_alpha))
+    # 让 init_fn 接受 (rng, shape) 两个位置参数
+    alpha = scope.param(
+        'alpha',
+        init_fn=lambda rng, shape: jnp.full(shape, init_alpha),  
+        shape=(),
+    )
     
-    gamma = scope.param('gamma',
-                        shape=(C,),
-                        init_fn=lambda key: jnp.ones((C,)))
-    
-    beta = scope.param('beta',
-                       shape=(C,),
-                       init_fn=lambda key: jnp.zeros((C,)))
+    gamma = scope.param(
+        'gamma',
+        init_fn=lambda rng, shape: jnp.ones(shape),
+        shape=(C,),
+    )
+
+    beta = scope.param(
+        'beta',
+        init_fn=lambda rng, shape: jnp.zeros(shape),
+        shape=(C,),
+    )
 
     running_mean = scope.variable(
-        'norm', 'running_mean',
-        lambda: jnp.ones(C)
+        'norm',
+        'running_mean',
+        init_fn=lambda: jnp.ones((C,))
     )
 
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0) 
+        mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
 
     normed = signal.val / jnp.sqrt(mean)
+
     x = jnp.tanh(alpha * normed)
     out = gamma * x + beta
 
     return signal.replace(val=out)
+
 
 
 def conv1d(
