@@ -552,6 +552,33 @@ from jax.nn.initializers import orthogonal, zeros
 #     out_1d = out.squeeze(axis=-1)
 #     return out_1d, t
 
+import jax.numpy as jnp
+import flax.linen as nn
+from typing import Tuple
+
+class CrossAttention(nn.Module):
+    """Cross-attention module: x_q attends to x_kv."""
+    num_heads: int
+    qk_features: int
+    out_features: int
+
+    @nn.compact
+    def __call__(self, x_q, x_kv, mask=None):
+        """
+        x_q: shape (batch, time_q, dim)
+        x_kv: shape (batch, time_k, dim)
+        """
+        # If you only have (time, dim), you can insert a batch dimension of size 1
+        # e.g. x_q = x_q[None, ...], etc.
+
+        attn = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads,
+            dtype=x_q.dtype,
+            qkv_features=self.qk_features,
+            out_features=self.out_features
+        )(x_q, x_kv, x_kv, mask=mask)
+        return attn
+
 def embed_signal(scope: Scope, x: jnp.ndarray, embed_dim: int):
     """
     Simple linear embedding from complex or real input => R^embed_dim or C^embed_dim.
