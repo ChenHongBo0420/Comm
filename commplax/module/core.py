@@ -186,8 +186,8 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 
 def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     # alpha 是一个可训练的缩放参数，初始化为全 1
-    alpha = scope.variable('norm1', 'alpha',
-                             lambda *_: jnp.ones(signal.val.shape[-1]), ())
+    # alpha = scope.variable('norm1', 'alpha',
+    #                          lambda *_: jnp.ones(signal.val.shape[-1]), ())
     # running_mean 用于记录均值，初始化为 0 更符合通常做法
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: jnp.zeros(signal.val.shape[-1]), ())
@@ -197,7 +197,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
-    return alpha.value * (signal.val / jnp.sqrt(mean))
+    return signal.val / jnp.sqrt(mean)
 
   
 # def batchpowernorm(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
