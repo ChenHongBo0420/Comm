@@ -654,40 +654,43 @@ def fdbp(
     dtaps: int = 261,
     ntaps: int = 41,
     sps: int = 2,
-    ixpm_window: int = 7,   # 用于 fdbp1 里的IXPM窗口大小
+    ixpm_window: int = 7,           # 对 fdbp1 中 ixpm 的窗口大小
     d_init=delta,
     n_init=gauss,
-    name='fdbp2branches_mean'
+    name='fdbp2branches'
 ):
     """
-    在同一个函数内并行执行:
-      - fdbp: 忽略IXPM的补偿
-      - fdbp1: 考虑IXPM的补偿
-    并在每一步完成后，对两条输出做简单平均 (mean) 做桥接/融合，
-    然后将融合后的结果用作下一步的输入。
+    同时执行:
+      - fdbp: 忽略IXPM的补偿方式
+      - fdbp1: 带IXPM补偿
+    并在每一步(step)后做一次融合 (bridge)，再进入下一步。
 
     Args:
-      signal      :  输入信号 (Signal(val, t))
-      steps       :  迭代步数
-      dtaps       :  色散滤波器长度
-      ntaps       :  非线性滤波器长度
-      sps         :  样点/符号
-      ixpm_window :  fdbp1 中用于 roll 的窗口大小
-      d_init      :  色散滤波器初始化函数
-      n_init      :  非线性滤波器初始化函数
-      name        :  scope命名（可选）
-      
+      signal:  输入信号 (Signal(val, t))
+      steps :  总共迭代多少次(与原 fdbp/fdbp1 类似)
+      dtaps :  色散滤波器长度
+      ntaps :  非线性滤波器长度
+      ixpm_window: 在 fdbp1 中计算IXPM时的 roll 窗口
+      ... 其余参见 fdbp / fdbp1 说明
+
     Returns:
-      Signal(x_fused, t_fused) => 融合后的最终输出。
+      最终补偿后的 Signal。
     """
-    # 初始输入
     x_in, t_in = signal
 
-    # 分别构建“忽略IXPM”与“考虑IXPM”两条分支的色散滤波器
+    # 分别为“忽略IXPM的fdbp”和“考虑IXPM的fdbp1”各自准备一套卷积
+    # (可以共用也可以分开，这里演示显式分开以示区分)
     dconv_ignore = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     dconv_ixpm   = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # 初始状态：两条分支都从同一个 x_in, t_in 开始
+    # 用于 IXPM 加权的可训练参数
+    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window + 1,))
+
+    # 融合时的可训练权重 => 每步都使用同一个 alpha (示例)
+    # 如果想每步不同，可以定义 alpha_list = scope.param(... shape=(steps,) ) 再逐步取索引
+    bridge_alpha = scope.param('bridge_alpha', nn.initializers.zeros, ())
+
+    # 初始化两条分支的输入都为同一个 x_in
     x_ignore = x_in
     t_ignore = t_in
 
@@ -695,56 +698,45 @@ def fdbp(
     t_ixpm   = t_in
 
     for i in range(steps):
-        # ============= (A) 忽略IXPM的单步色散+非线性补偿 =============
-        # 色散补偿
-        x_ignore_conv, t_ignore_conv = scope.child(dconv_ignore, name=f"DConv_ignore_{i}")(
+        # --- (1) 忽略IXPM的单步 fdbp ---
+        x_ignore, t_ignore_new = scope.child(dconv_ignore, name=f"DConv_ignore_{i}")(
             Signal(x_ignore, t_ignore)
         )
-        # 非线性 (N)
+        # 做非线性补偿
         c_ignore, tN_ignore = scope.child(mimoconv1d, name=f"NConv_ignore_{i}")(
-            Signal(jnp.abs(x_ignore_conv)**2, t_ignore_conv),
-            taps=ntaps,
-            kernel_init=n_init
+            Signal(jnp.abs(x_ignore)**2, t_ignore_new),
+            taps=ntaps, kernel_init=n_init
         )
-        # 相位更新
-        x_ignore_new = jnp.exp(1j * c_ignore) * x_ignore_conv[
-            tN_ignore.start - t_ignore_conv.start : 
-            x_ignore_conv.shape[0] + (tN_ignore.stop - t_ignore_conv.stop)
+        x_ignore_new = jnp.exp(1j * c_ignore) * x_ignore[
+            tN_ignore.start - t_ignore_new.start : x_ignore.shape[0] + (tN_ignore.stop - t_ignore_new.stop)
         ]
 
-        # ============= (B) 带IXPM的单步色散+非线性补偿 =============
-        # 色散补偿
-        x_ixpm_conv, t_ixpm_conv = scope.child(dconv_ixpm, name=f"DConv_ixpm_{i}")(
+        # --- (2) 带IXPM的单步 fdbp1 ---
+        # 同样先做色散补偿
+        x_ixpm, t_ixpm_new = scope.child(dconv_ixpm, name=f"DConv_ixpm_{i}")(
             Signal(x_ixpm, t_ixpm)
         )
-
         # 计算IXPM加权和
-        ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window + 1,))
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x_ixpm_conv)**2, shift)
-            for shift in range(-ixpm_window, ixpm_window+1)
-        ]
+        # 先 roll abs(x_ixpm)^2
+        ixpm_samples = [jnp.roll(jnp.abs(x_ixpm)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
         weights = jax.nn.softmax(ixpm_alpha)
         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
 
-        # 非线性 (N)
+        # 做非线性补偿
         c_ixpm, tN_ixpm = scope.child(mimoconv1d, name=f"NConv_ixpm_{i}")(
-            Signal(ixpm_power, t_ixpm_conv),
-            taps=ntaps,
-            kernel_init=n_init
+            Signal(ixpm_power, t_ixpm_new),
+            taps=ntaps, kernel_init=n_init
         )
-        x_ixpm_new = jnp.exp(1j * c_ixpm) * x_ixpm_conv[
-            tN_ixpm.start - t_ixpm_conv.start : 
-            x_ixpm_conv.shape[0] + (tN_ixpm.stop - t_ixpm_conv.stop)
+        x_ixpm_new = jnp.exp(1j * c_ixpm) * x_ixpm[
+            tN_ixpm.start - t_ixpm_new.start : x_ixpm.shape[0] + (tN_ixpm.stop - t_ixpm_new.stop)
         ]
 
-        # 更新各自分支
+        # 更新各自分支的 (x, t)
         x_ignore, t_ignore = x_ignore_new, tN_ignore
         x_ixpm,   t_ixpm   = x_ixpm_new,   tN_ixpm
 
-        # ============= (C) 融合(bridge) =============
-        # 这里用简单 mean: x_fused = 0.5 * (x_ignore + x_ixpm)
-        # 若两路时长或 t 不同，需要插值，这里假设二者完全一致
+        # --- (3) 两路结果做可训练的加权融合 => 同步更新成同一个 x_fused ---
+        # 假设要求它们下一步起就“保持一致”，则把 x_ignore / x_ixpm 都赋值为融合结果
         x_fused = 0.5 * x_ignore + 0.5 * x_ixpm
         t_fused = t_ignore  # = t_ixpm, 假设它们相同
 
@@ -752,8 +744,9 @@ def fdbp(
         x_ignore, t_ignore = x_fused, t_fused
         x_ixpm,   t_ixpm   = x_fused, t_fused
 
-    # 最终输出
+    # 最终的输出就是融合后的 x_fused
     return Signal(x_fused, t_fused)
+
 
 # def fdbp(
 #     scope: Scope,
