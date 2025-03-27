@@ -647,7 +647,7 @@ from jax.nn.initializers import orthogonal, zeros
 #         x, t = x_new, t_res
 #     return Signal(x, t)
 
-def fdbp2branches(
+def fdbp(
     scope: Scope,
     signal: Signal,
     steps: int = 3,
