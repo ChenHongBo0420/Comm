@@ -737,7 +737,7 @@ def fdbp(
 
         # --- (3) 两路结果做可训练的加权融合 => 同步更新成同一个 x_fused ---
         # 假设要求它们下一步起就“保持一致”，则把 x_ignore / x_ixpm 都赋值为融合结果
-        x_fused = 0.5 * x_ignore + 0.5 * x_ixpm
+        x_fused = 0.4 * x_ignore + 0.6 * x_ixpm
         t_fused = t_ignore  # = t_ixpm, 假设它们相同
 
         # 同步更新 => 下一步大家都从 x_fused, t_fused 开始
