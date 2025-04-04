@@ -787,7 +787,7 @@ def fdbp(
         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
         # 注意：根据实际误差定义，可能需要调整符号
         gamma = gamma - mu * error
-        debug.print("gamma = {}", gamma)
+        # debug.print("gamma = {}", gamma)
         # 将更新后的信号作为下一步输入
         x = x_new
     
