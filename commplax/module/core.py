@@ -528,65 +528,6 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
-
-def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
-    # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
-    real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
-    imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
-    return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
-
-def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
-    """
-    对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
-    然后使用两层 MLP 生成 (N,) 复数 residual。
-    """
-    x, t = signal
-    # x 的形状例如 (N, 2) 或 (N, C) 等
-    # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
-    # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
-    x_scalar = jnp.linalg.norm(x, axis=-1)
-    N = x_scalar.shape[0]
-    # 2) reshape 成 (N,1)，并转换为复数数据类型
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
-    # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
-    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
-    b1 = scope.param('b1',
-                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-                     (hidden_dim,))
-    W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
-    b2 = scope.param('b2',
-                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-                     (1,))
-    # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
-    h = jnp.dot(x_2d, W1) + b1
-    h = jax.nn.gelu(h)
-    # 5) 输出层：形状 (N,1)
-    out = jnp.dot(h, W2) + b2
-    # 6) squeeze 得到形状 (N,)
-    out_1d = out.squeeze(axis=-1)
-    return out_1d, t
-                             
-
-from jax import debug
 def fdbp(
     scope: Scope,
     signal,
@@ -595,57 +536,116 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    保持原 fdbp(D->N)结构:
-      1) D
-      2) N
-      + 3) residual MLP => out shape=(N,) and add to x
-    """
+    n_init=gauss):
     x, t = signal
-    # 1) 色散
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-    # 可选: 对res加个可训练缩放
-    if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-    # debug.print("alpha = {}", alpha)
     for i in range(steps):
-        # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        # --- (C) residual MLP
-        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        # res_val => (N_new,)
-        # cast to complex, or interpret as real
-        # 这里示例 "在幅度上+res"
-        # x_new += alpha * res_val
-        # 不分real/imag => 全部 real offset => x_new + alpha * res
-        # 只要 x_new是complex => convert
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-        x_new = x_new + alpha * res_val_cplx_2d 
-        
-        # update x,t
-        x, t = x_new, t_res
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
+
+
+# def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
+#     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
+#     real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+#     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
+#     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
+
+# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+#     """
+#     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
+#     然后使用两层 MLP 生成 (N,) 复数 residual。
+#     """
+#     x, t = signal
+#     # x 的形状例如 (N, 2) 或 (N, C) 等
+#     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
+#     # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+#     x_scalar = jnp.linalg.norm(x, axis=-1)
+#     N = x_scalar.shape[0]
+#     # 2) reshape 成 (N,1)，并转换为复数数据类型
+#     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
+#     # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+#     W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+#     b1 = scope.param('b1',
+#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+#                      (hidden_dim,))
+#     W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+#     b2 = scope.param('b2',
+#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+#                      (1,))
+#     # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+#     h = jnp.dot(x_2d, W1) + b1
+#     h = jax.nn.gelu(h)
+#     # 5) 输出层：形状 (N,1)
+#     out = jnp.dot(h, W2) + b2
+#     # 6) squeeze 得到形状 (N,)
+#     out_1d = out.squeeze(axis=-1)
+#     return out_1d, t
+                             
+
+# from jax import debug
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     保持原 fdbp(D->N)结构:
+#       1) D
+#       2) N
+#       + 3) residual MLP => out shape=(N,) and add to x
+#     """
+#     x, t = signal
+#     # 1) 色散
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+#     # 可选: 对res加个可训练缩放
+#     if use_alpha:
+#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+#     else:
+#         alpha = 1.0
+#     # debug.print("alpha = {}", alpha)
+#     for i in range(steps):
+#         # --- (A) 色散补偿 (D)
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
+#         # --- (B) 非线性补偿 (N)
+#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+#             Signal(jnp.abs(x)**2, td),
+#             taps=ntaps,
+#             kernel_init=n_init
+#         )
+#         # 应用相位: x_new = exp(j*c) * x[...]
+#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+#         # --- (C) residual MLP
+#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+#             Signal(jnp.abs(x_new)**2, tN),
+#             hidden_dim=hidden_dim
+#         )
+#         # res_val => (N_new,)
+#         # cast to complex, or interpret as real
+#         # 这里示例 "在幅度上+res"
+#         # x_new += alpha * res_val
+#         # 不分real/imag => 全部 real offset => x_new + alpha * res
+#         # 只要 x_new是complex => convert
+#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+#         x_new = x_new + alpha * res_val_cplx_2d 
+        
+#         # update x,t
+#         x, t = x_new, t_res
+#     return Signal(x, t)
 
 # def fdbp(
 #     scope: Scope,
