@@ -76,8 +76,6 @@ FDBP = make_layer(core.fdbp)
 
 FDBP1 = make_layer(core.fdbp1)
 # BatchPowerNorm1 = make_layer(core.batchpowernorm1, mutable=('norm',))
-MIMOAF1 = make_layer(core.mimoaf1, mutable=('af_state',))
-MIMOFOEAf1 = make_layer(core.mimofoeaf1, mutable=('af_state',))
 SimpleFn = make_layer(core.simplefn)
 MIMOFOEAf = make_layer(core.mimofoeaf, mutable=('af_state',))
 Identity = make_layer(core.identity)
