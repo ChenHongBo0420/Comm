@@ -194,49 +194,6 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
-  
-# def batchpowernorm(scope, signal, init_alpha=1.0, momentum=0.999, mode='train'):
-#     x, t = signal
-#     C = signal.val.shape[-1]
-    
-#     # 让 init_fn 接受 (rng, shape) 两个位置参数
-#     alpha = scope.param(
-#         'alpha',
-#         init_fn=lambda rng, shape: jnp.full(shape, init_alpha),  
-#         shape=(),
-#     )
-    
-#     gamma = scope.param(
-#         'gamma',
-#         init_fn=lambda rng, shape: jnp.ones(shape),
-#         shape=(C,),
-#     )
-
-#     beta = scope.param(
-#         'beta',
-#         init_fn=lambda rng, shape: jnp.zeros(shape),
-#         shape=(C,),
-#     )
-
-#     running_mean = scope.variable(
-#         'norm',
-#         'running_mean',
-#         init_fn=lambda: jnp.ones((C,))
-#     )
-
-#     if mode == 'train':
-#         mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
-#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-#     else:
-#         mean = running_mean.value
-
-#     # alpha * (signal.val / jnp.sqrt(mean))
-#     # x = gamma * x + beta
-
-#     return alpha * (signal.val / jnp.sqrt(mean))
-
-
-
 def conv1d(
     scope: Scope,
     signal,
@@ -321,81 +278,8 @@ def mimofoeaf(scope: Scope,
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
 
-def mimofoeaf1(scope: Scope,
-              signal,
-              framesize=100,
-              w0=0,
-              train=False,
-              preslicer=lambda x: x,
-              foekwargs={},
-              mimofn=af.rde,
-              mimokwargs={},
-              mimoinitargs={}):
-
-    sps = 2
-    dims = 2
-    tx = signal.t
-    # MIMO
-    slisig = preslicer(signal)
-    auxsig = scope.child(mimoaf,
-                         mimofn=mimofn,
-                         train=train,
-                         mimokwargs=mimokwargs,
-                         mimoinitargs=mimoinitargs,
-                         name='MIMO4FOE')(slisig)
-    y, ty = auxsig # assume y is continuous in time
-    yf = xop.frame(y, framesize, framesize)
-
-    foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
-    state = scope.variable('af_state', 'framefoeaf',
-                           lambda *_: (0., 0, foe_init(w0)), ())
-    phi, af_step, af_stats = state.value
-
-    af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
-    wp = wf.reshape((-1, dims)).mean(axis=-1)
-    w = jnp.interp(jnp.arange(y.shape[0] * sps) / sps,
-                   jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2, wp) / sps
-    psi = phi + jnp.cumsum(w)
-    state.value = (psi[-1], af_step, af_stats)
-
-    # apply FOE to original input signal via linear extrapolation
-    psi_ext = jnp.concatenate([w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
-                               psi,
-                               w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]])
-
-    signal = signal * jnp.exp(-1j * psi_ext)[:, None]
-    return signal
                 
 def mimoaf(
-    scope: Scope,
-    signal,
-    taps=32,
-    rtap=None,
-    dims=2,
-    sps=2,
-    train=False,
-    mimofn=af.ddlms,
-    mimokwargs={},
-    mimoinitargs={}):
-
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-    x = xop.frame(x, taps, sps)
-    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-    state = scope.variable('af_state', 'mimoaf',
-                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-    truth_var = scope.variable('aux_inputs', 'truth',
-                               lambda *_: None, ())
-    truth = truth_var.value
-    if truth is not None:
-        truth = truth[t.start: truth.shape[0] + t.stop]
-    af_step, af_stats = state.value
-    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-    y = mimo_apply(af_weights, x)
-    state.value = (af_step, af_stats)
-    return Signal(y, t)
-      
-def mimoaf1(
     scope: Scope,
     signal,
     taps=32,
@@ -456,8 +340,8 @@ from jax.nn.initializers import orthogonal, glorot_uniform
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
     attention = jnp.tanh(avg_pool)
-    # attention = jnp.tile(attention, (x.shape[0], 1))
-    # x = x * attention
+    attention = jnp.tile(attention, (x.shape[0], 1))
+    x = x * attention
     return attention
 
 def complex_channel_attention(x):
@@ -829,6 +713,37 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # IXPM 窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+#         # 对信号幅度平方进行 roll
+#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+#         # 用 softmax 得到归一化权重
+#         weights = jax.nn.softmax(ixpm_alpha)
+#         # 计算加权和
+#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+#         c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
+#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+#         # 更新信号 x
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp1(
     scope: Scope,
     signal,
@@ -836,30 +751,18 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
     n_init=gauss):
-    
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-        # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-        # 用 softmax 得到归一化权重
-        weights = jax.nn.softmax(ixpm_alpha)
-        # 计算加权和
-        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-        # 更新信号 x
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
-
+      
 def identity(scope, inputs):
     return inputs
 
