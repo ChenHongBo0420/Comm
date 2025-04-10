@@ -444,7 +444,6 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     然后使用两层 MLP 生成 (N,) 复数 residual。
     """
     x, t = signal
-    x = complex_channel_attention(x)
     # x 的形状例如 (N, 2) 或 (N, C) 等
     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
     # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
