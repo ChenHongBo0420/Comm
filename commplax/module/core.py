@@ -679,41 +679,6 @@ def fdbp(
 #     return Signal(x, t)
 
 
-# def fdbp1(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
-#     d_init=delta,
-#     n_init=gauss):
-    
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-#     # input_dim = x.shape[1]
-#     # hidden_size = 2 
-#     # output_dim = x.shape[1]
-#     # x1 = x[:, 0]
-#     # x2 = x[:, 1]
-#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
-#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-#     # x = rnn_layer(x_updated)
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         ixpm_samples = [
-#             jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-#         ]
-#         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
 def fdbp1(
     scope: Scope,
     signal,
@@ -721,29 +686,34 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=7,  # IXPM 窗口大小
+    ixpm_window=3,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
     
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
+    # input_dim = x.shape[1]
+    # hidden_size = 2 
+    # output_dim = x.shape[1]
+    # x1 = x[:, 0]
+    # x2 = x[:, 1]
+    # x1_updated, x2_updated = weighted_interaction(x1, x2)
+    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+    # x = rnn_layer(x_updated)
     for i in range(steps):
-        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-        # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-        # 用 softmax 得到归一化权重
-        weights = jax.nn.softmax(ixpm_alpha)
-        # 计算加权和
-        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-        # 更新信号 x
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
+
 
     
 def identity(scope, inputs):
