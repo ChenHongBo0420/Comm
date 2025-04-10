@@ -278,38 +278,31 @@ def mimoconv1d(
 #     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
 #     return signal
 
-def mimofoeaf(scope: Scope,
-              signal: Signal,
-              framesize=100,
-              w0=0.0,            # 保持原先接口，不会再报 unexpected keyword arg
-              train=False,
-              preslicer=lambda x: x,
-              foekwargs={},      # 给 frame_cpr_kf 的额外参数
-              mimofn=af.rde,     # 给 mimoaf 的自适应函数(默认 RDE)
-              mimokwargs={},
-              mimoinitargs={},
-              learn_R=False,     # 如果想学习 R, 设为 True
-              learn_Q=False      # 如果想学习 Q, 设为 True
-              ):
+def mimofoeaf(
+    scope: Scope,
+    signal: Signal,
+    framesize=100,
+    w0=0.0,             # 保持原先的 w0 接口
+    train=False,
+    preslicer=lambda x: x,
+    foekwargs={},       # 给 frame_cpr_kf(...) 用的额外参数
+    mimofn=af.rde,      # 给 mimoaf 的自适应滤波函数
+    mimokwargs={},
+    mimoinitargs={},
+    learn_R=False,      # 是否让噪声协方差 R 成为可学习参数
+    learn_Q=False       # 是否让噪声协方差 Q 成为可学习参数
+):
     """
-    和原先 mimofoeaf 功能一致，但可在内部对 R, Q 做可学习处理。
-
-    Args:
-      scope: Flax Scope
-      signal: 输入信号 (Signal类型)
-      framesize: 分帧大小
-      w0: 初始载波频偏
-      train: 是否训练
-      preslicer: 预切片/预处理函数
-      foekwargs: 传给 frame_cpr_kf(...) 的额外参数
-      mimofn, mimokwargs, mimoinitargs: 用于 MIMO 自适应滤波
-      learn_R, learn_Q: 是否把噪声协方差 R, Q 声明为可学习参数
+    修正后：
+    - 不再出现 "array() got an unexpected keyword argument 'dims'"
+    - 仍可学习 R, Q, 并保留 w0
+    - 如果不想学习 R, Q => learn_R=False, learn_Q=False
     """
     sps = 2
     dims = 2
     tx = signal.t
 
-    # 1) 先做 MIMO 自适应滤波 => 得到 y
+    # (1) 先做 MIMO 自适应滤波
     slisig = preslicer(signal)
     auxsig = scope.child(mimoaf,
                          mimofn=mimofn,
@@ -319,13 +312,14 @@ def mimofoeaf(scope: Scope,
                          name='MIMO4FOE')(slisig)
     y, ty = auxsig
 
-    # 2) 分帧
-    yf = xop.frame(y, framesize, framesize)   # (N_frames, framesize, dims)
+    # (2) 分帧
+    yf = xop.frame(y, framesize, framesize)
 
-    # 3) 从 adaptive_filter.array(...) 取出 foe_init, foe_update
-    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, dims=dims)(**foekwargs)
+    # (3) 通过 af.array(...) 并在其返回的可调用上指定 dims=dims
+    #     这样就不会在 array() 函数本身传入 dims
+    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf)(dims=dims, **foekwargs)
 
-    # 4) 如果需要学习 R, Q，则声明 param；否则保持固定
+    # (4) 定义可学习的 R, Q(可选)
     if learn_R:
         R = scope.param(
             'R',
@@ -333,6 +327,7 @@ def mimofoeaf(scope: Scope,
             (dims, dims), jnp.float32
         )
     else:
+        # 不想学 => 一个固定值
         R = jnp.eye(dims, dtype=jnp.float32)*0.01
 
     if learn_Q:
@@ -344,41 +339,39 @@ def mimofoeaf(scope: Scope,
     else:
         Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
 
-    # 5) foe_init(w0) => 初始状态 (phi, some stats)
-    state_var = scope.variable('af_state', 'framefoeaf',
-                               lambda *_: (0.0, 0, foe_init(w0)), ())
-    phi, af_step, af_stats = state_var.value
+    # (5) foe_init(w0) => 初始状态
+    state = scope.variable('af_state', 'framefoeaf',
+                           lambda *_: (0.0, 0, foe_init(w0)), ())
+    phi, af_step, af_stats = state.value
 
-    # 6) 使用 partial 或内联，给 foe_update 传 R, Q, w0
-    def foe_update_with_params(af_stats, frame_data):
-        # 注意：原先 foe_update_orig(...) 的签名必须支持传 R, Q, w0，
-        # 如果官方不支持，可以自己在 frame_cpr_kf 里改成可接收 R, Q, w0
-        return foe_update_orig(af_stats, frame_data, R=R, Q=Q, w0=w0)
+    # (6) 用一个内联函数，把 R, Q, w0 传给 foe_update_orig
+    def foe_update_with_params(stats, frame_data):
+        return foe_update_orig(stats, frame_data, R=R, Q=Q, w0=w0)
 
-    # 7) 通过 af.iterate(...) 做多帧卡尔曼滤波
+    # (7) 调用 af.iterate(...)
     af_step, (af_stats, (wf, _)) = af.iterate(
-        foe_update_with_params,   # 这里显式用到 R, Q, w0
+        foe_update_with_params,
         af_step,
         af_stats,
         yf
     )
 
-    # 8) 处理 wf => 插值 => 累积相位 => 更新 state
+    # (8) 对 wf 做后处理 => w => psi
     wp = wf.reshape((-1, dims)).mean(axis=-1)  # (N_frames,)
     x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2
-    x_axis = jnp.arange(y.shape[0] * sps) / sps
+    x_axis = jnp.arange(y.shape[0] * sps)/sps
     w = jnp.interp(x_axis, x_wp, wp) / sps
     psi = phi + jnp.cumsum(w)
-    state_var.value = (psi[-1], af_step, af_stats)
+    state.value = (psi[-1], af_step, af_stats)
 
-    # 9) 对原输入信号做相位补偿
+    # (9) 线性外推并相位校正
     psi_ext = jnp.concatenate([
         w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
         psi,
         w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]
     ])
-    signal_out = signal * jnp.exp(-1j * psi_ext)[:, None]
-    return signal_out
+    out_signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+    return out_signal
                 
 def mimoaf(
     scope: Scope,
