@@ -444,6 +444,7 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     然后使用两层 MLP 生成 (N,) 复数 residual。
     """
     x, t = signal
+    x = complex_channel_attention(x)
     # x 的形状例如 (N, 2) 或 (N, C) 等
     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
     # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
@@ -713,37 +714,6 @@ def fdbp(
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-# def fdbp1(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     ixpm_window=7,  # IXPM 窗口大小
-#     d_init=delta,
-#     n_init=gauss):
-    
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
-    
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-#         # 对信号幅度平方进行 roll
-#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
-#         # 用 softmax 得到归一化权重
-#         weights = jax.nn.softmax(ixpm_alpha)
-#         # 计算加权和
-#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-#         c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
-#         # 更新信号 x
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
 def fdbp1(
     scope: Scope,
     signal,
@@ -753,71 +723,28 @@ def fdbp1(
     sps=2,
     ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
-    n_init=gauss,
-    hidden_dim=2,   # 新增：residual MLP 的隐藏层规模
-    use_alpha=True  # 新增：是否使用可训练的 residual 缩放系数
-):
-    """
-    在 fdbp1 中插入一个与 fdbp 类似的 residual MLP 结构, 实现对信号的幅度残差修正。
-    保持原有:
-      (A) 色散补偿 (D)
-      (B) 非线性补偿 (N)
-    同时添加:
-      (C) residual MLP => 对 |x_new|^2 进行小规模 MLP，输出与 x_new 尺寸匹配的残差并加回 x_new。
-    """
+    n_init=gauss):
+    
     x, t = signal
-
-    # 色散补偿卷积核: 先向量化映射 (vmap)，方便对多个频率分量并行操作
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-    # 如果需要对 residual 项加一个可训练的缩放系数 alpha
-    if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-
-    # 定义一个可训练参数 ixpm_alpha，形状为 (2 * ixpm_window + 1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2 * ixpm_window + 1,))
-
+    
+    # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
     for i in range(steps):
-        # --- (A) 色散补偿 (D)
         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
-
-        # --- (B1) 计算 IXPM 加权和
-        # 对信号幅度平方进行 roll，得到多个窗口内的 |x|^2
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
+        # 对信号幅度平方进行 roll
+        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
         # 用 softmax 得到归一化权重
         weights = jax.nn.softmax(ixpm_alpha)
         # 计算加权和
         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
-
-        # --- (B2) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv1_%d' % i)(
-            Signal(ixpm_power, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 更新信号相位: x_new = e^(j * c) * x[...]
-        # 这里原先的切片逻辑保留，用 tN 替换 td 后的新时间
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-
-        # --- (C) residual MLP
-        # 将 |x_new|^2 输入 MLP，得到与 x_new 尺寸匹配的残差
-        # 注意 residual_mlp 需自定义或从你已有的网络结构中引用
-        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        # 转成与 x_new 相同 dtype 的复数，并加到 x_new 上
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        x_new = x_new + alpha * res_val_cplx[:, None]  # (N,) -> 广播到 (N,1) 后加
-
-        # 更新 x, t
-        x, t = x_new, t_res
-
+        c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
+            Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+        # 更新信号 x
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
+
     
 def identity(scope, inputs):
     return inputs
