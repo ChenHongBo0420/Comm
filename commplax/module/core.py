@@ -278,118 +278,107 @@ def mimoconv1d(
 #     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
 #     return signal
 
-def mimofoeaf(
-    scope: Scope,
-    signal,
-    framesize=100,
-    w0_init=0.0,          # 用于初始化 w0 的默认值
-    train=False,
-    preslicer=lambda x: x,
-    foekwargs={},         # 传给 frame_cpr_kf 的关键词典
-    mimofn=None,          # 传给 mimoaf 的自适应滤波函数
-    mimokwargs={},        # 传给 mimoaf 的其他参数
-    mimoinitargs={}       # 传给 mimoaf 的初始化参数
-):
+def mimofoeaf(scope: Scope,
+              signal: Signal,
+              framesize=100,
+              w0=0.0,            # 保持原先接口，不会再报 unexpected keyword arg
+              train=False,
+              preslicer=lambda x: x,
+              foekwargs={},      # 给 frame_cpr_kf 的额外参数
+              mimofn=af.rde,     # 给 mimoaf 的自适应函数(默认 RDE)
+              mimokwargs={},
+              mimoinitargs={},
+              learn_R=False,     # 如果想学习 R, 设为 True
+              learn_Q=False      # 如果想学习 Q, 设为 True
+              ):
     """
-    一个示例：在 FOE 卡尔曼滤波部分，把 R, Q, w0 设为可学习参数，
-    仍使用 af.iterate(...) 在内部对多帧做迭代。
-    """
+    和原先 mimofoeaf 功能一致，但可在内部对 R, Q 做可学习处理。
 
-    # ------------------------------------------------
-    # (1) 可根据需要指定 sps / dims
+    Args:
+      scope: Flax Scope
+      signal: 输入信号 (Signal类型)
+      framesize: 分帧大小
+      w0: 初始载波频偏
+      train: 是否训练
+      preslicer: 预切片/预处理函数
+      foekwargs: 传给 frame_cpr_kf(...) 的额外参数
+      mimofn, mimokwargs, mimoinitargs: 用于 MIMO 自适应滤波
+      learn_R, learn_Q: 是否把噪声协方差 R, Q 声明为可学习参数
+    """
     sps = 2
     dims = 2
+    tx = signal.t
 
-    # (2) 先做 MIMO 自适应均衡
-    #     若你不需要此步骤，可注释掉
+    # 1) 先做 MIMO 自适应滤波 => 得到 y
     slisig = preslicer(signal)
-    if mimofn is None:
-        # 如果未指定 mimofn，这里用一个默认的 rde
-        from commplax import adaptive_filter as af
-        mimofn = af.rde
     auxsig = scope.child(mimoaf,
                          mimofn=mimofn,
                          train=train,
                          mimokwargs=mimokwargs,
                          mimoinitargs=mimoinitargs,
                          name='MIMO4FOE')(slisig)
-    y, ty = auxsig  # 输出均衡后信号 y
+    y, ty = auxsig
 
-    # (3) 分帧 => shape=(N_frames, framesize, dims)
-    from commplax import xop
-    yf = xop.frame(y, framesize, framesize)
-    N_frames = yf.shape[0]
+    # 2) 分帧
+    yf = xop.frame(y, framesize, framesize)   # (N_frames, framesize, dims)
 
-    # (4) 获取 foe_init, foe_update 函数
-    #     这里 dims=2 => 双偏振/IQ
-    from commplax import adaptive_filter as af
+    # 3) 从 adaptive_filter.array(...) 取出 foe_init, foe_update
     foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, dims=dims)(**foekwargs)
 
-    # (5) 声明一些想要学习的全局量：比如 R, Q, 以及 w0
-    #     R, Q 可以是矩阵，也可以是标量，看你在 foe_update 里怎么用
-    R = scope.param(
-        'R',                                     # param 名
-        lambda key, shape, dtype: jnp.eye(dims)*0.01,  # 初始化：一个简易对角矩阵
-        (dims, dims),                            # shape
-        jnp.float32
-    )
-    Q = scope.param(
-        'Q',
-        lambda key, shape, dtype: jnp.eye(dims)*1e-4,
-        (dims, dims),
-        jnp.float32
-    )
-    # w0 也做可学习：
-    w0 = scope.param(
-        'w0',
-        lambda key, shape, dtype: jnp.array(w0_init, dtype=dtype),
-        ()
-    )
+    # 4) 如果需要学习 R, Q，则声明 param；否则保持固定
+    if learn_R:
+        R = scope.param(
+            'R',
+            lambda key, shape, dtype: jnp.eye(dims, dtype=dtype)*0.01,
+            (dims, dims), jnp.float32
+        )
+    else:
+        R = jnp.eye(dims, dtype=jnp.float32)*0.01
 
-    # (6) 改造 foe_update，使其在内部能使用 R, Q, w0
+    if learn_Q:
+        Q = scope.param(
+            'Q',
+            lambda key, shape, dtype: jnp.eye(dims, dtype=dtype)*1e-4,
+            (dims, dims), jnp.float32
+        )
+    else:
+        Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
+
+    # 5) foe_init(w0) => 初始状态 (phi, some stats)
+    state_var = scope.variable('af_state', 'framefoeaf',
+                               lambda *_: (0.0, 0, foe_init(w0)), ())
+    phi, af_step, af_stats = state_var.value
+
+    # 6) 使用 partial 或内联，给 foe_update 传 R, Q, w0
     def foe_update_with_params(af_stats, frame_data):
-        # 这里相当于把 R, Q, w0 注入 foe_update_orig
-        # 你需要在 foe_update_orig(... R=R, Q=Q, w0=w0 ...) 的源码里去接收
-        # 具体要看 frame_cpr_kf 的实现
+        # 注意：原先 foe_update_orig(...) 的签名必须支持传 R, Q, w0，
+        # 如果官方不支持，可以自己在 frame_cpr_kf 里改成可接收 R, Q, w0
         return foe_update_orig(af_stats, frame_data, R=R, Q=Q, w0=w0)
 
-    # (7) 准备并读取 scope.variable('af_state', ...) => (phi, af_step, af_stats)
-    state = scope.variable('af_state', 'framefoeaf',
-                           lambda *_: (0., 0, foe_init(w0)), ())
-    phi, af_step, af_stats = state.value
-
-    # (8) 调用 af.iterate(...) 进行逐帧卡尔曼滤波
-    #     重点：我们把 foe_update_with_params 传进去 => 内部会用到 R, Q, w0
+    # 7) 通过 af.iterate(...) 做多帧卡尔曼滤波
     af_step, (af_stats, (wf, _)) = af.iterate(
-        foe_update_with_params,
+        foe_update_with_params,   # 这里显式用到 R, Q, w0
         af_step,
         af_stats,
         yf
     )
 
-    # (9) 处理 wf => wp => w => psi
-    wp = wf.reshape((-1, dims)).mean(axis=-1)  # => (N_frames,)
-    # 这里做插值
-    import jax.numpy as jnp
-    y_len = y.shape[0]
-    x_axis = jnp.arange(y_len * sps) / sps
+    # 8) 处理 wf => 插值 => 累积相位 => 更新 state
+    wp = wf.reshape((-1, dims)).mean(axis=-1)  # (N_frames,)
     x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2
+    x_axis = jnp.arange(y.shape[0] * sps) / sps
     w = jnp.interp(x_axis, x_wp, wp) / sps
     psi = phi + jnp.cumsum(w)
-    # 更新 state
-    state.value = (psi[-1], af_step, af_stats)
+    state_var.value = (psi[-1], af_step, af_stats)
 
-    # (10) 对原始信号做相位校正
-    #      先拼出 psi_ext
-    tx = signal.t
+    # 9) 对原输入信号做相位补偿
     psi_ext = jnp.concatenate([
         w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
         psi,
         w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]
     ])
-    # 乘上 e^{-j * psi_ext}
-    out_signal = signal * jnp.exp(-1j * psi_ext)[:, None]
-    return out_signal
+    signal_out = signal * jnp.exp(-1j * psi_ext)[:, None]
+    return signal_out
                 
 def mimoaf(
     scope: Scope,
