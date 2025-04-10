@@ -751,43 +751,74 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
+    ixpm_window=7,  # IXPM 窗口大小
     d_init=delta,
     n_init=gauss,
-    mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+    hidden_dim=2,   # 新增：residual MLP 的隐藏层规模
+    use_alpha=True  # 新增：是否使用可训练的 residual 缩放系数
 ):
     """
-    自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
-    以减少误差累积，提升整体补偿性能。
+    在 fdbp1 中插入一个与 fdbp 类似的 residual MLP 结构, 实现对信号的幅度残差修正。
+    保持原有:
+      (A) 色散补偿 (D)
+      (B) 非线性补偿 (N)
+    同时添加:
+      (C) residual MLP => 对 |x_new|^2 进行小规模 MLP，输出与 x_new 尺寸匹配的残差并加回 x_new。
     """
     x, t = signal
-    # 初始化自适应相位缩放因子 gamma
-    gamma = 1.0
-    # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+
+    # 色散补偿卷积核: 先向量化映射 (vmap)，方便对多个频率分量并行操作
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
+
+    # 如果需要对 residual 项加一个可训练的缩放系数 alpha
+    if use_alpha:
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+    else:
+        alpha = 1.0
+
+    # 定义一个可训练参数 ixpm_alpha，形状为 (2 * ixpm_window + 1,)
+    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2 * ixpm_window + 1,))
+
     for i in range(steps):
-        # 执行局部色散补偿步骤
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-        # 执行非线性补偿步骤：计算相位校正 c
-        c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-        # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
-        x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        
-        # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
-        # 这里的 error 定义可以根据实际需求进行设计
-        power_before = jnp.mean(jnp.square(jnp.abs(x)))
-        power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
-        error = power_after - power_before
-        
-        # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
-        # 注意：根据实际误差定义，可能需要调整符号
-        gamma = gamma - mu * error
-        # debug.print("gamma = {}", gamma)
-        # 将更新后的信号作为下一步输入
-        x = x_new
+        # --- (A) 色散补偿 (D)
+        x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+
+        # --- (B1) 计算 IXPM 加权和
+        # 对信号幅度平方进行 roll，得到多个窗口内的 |x|^2
+        ixpm_samples = [
+            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+        ]
+        # 用 softmax 得到归一化权重
+        weights = jax.nn.softmax(ixpm_alpha)
+        # 计算加权和
+        ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+
+        # --- (B2) 非线性补偿 (N)
+        c, tN = scope.child(mimoconv1d, name='NConv1_%d' % i)(
+            Signal(ixpm_power, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 更新信号相位: x_new = e^(j * c) * x[...]
+        # 这里原先的切片逻辑保留，用 tN 替换 td 后的新时间
+        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+
+        # --- (C) residual MLP
+        # 将 |x_new|^2 输入 MLP，得到与 x_new 尺寸匹配的残差
+        # 注意 residual_mlp 需自定义或从你已有的网络结构中引用
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # 转成与 x_new 相同 dtype 的复数，并加到 x_new 上
+        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+        x_new = x_new + alpha * res_val_cplx[:, None]  # (N,) -> 广播到 (N,1) 后加
+
+        # 更新 x, t
+        x, t = x_new, t_res
+
+    return Signal(x, t)
     
-    return Signal(x, t)      
 def identity(scope, inputs):
     return inputs
 
