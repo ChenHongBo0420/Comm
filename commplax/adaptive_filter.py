@@ -696,74 +696,86 @@ def frame_cpr_kf(
                                [0, 1e-9]]),
     R_init: Array = jnp.array([[1e-2, 0],
                                [0, 1e-3]]),
-    w0_init: float = 0.0,  # 初始频偏
+    w0_init: float = 0.0,  
     const: Array = comm.const("16QAM", norm=True),
     train: Union[bool, cxopt.Schedule] = False,
     akf: cxopt.Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
     alpha: float = 0.999
 ) -> AdaptiveFilter:
     """
-    Block-based estimator of carrier frequency offset using Kalman filter.
-    把 Q, R, w0 都纳入 state，以便在 update 中使用.
+    Block-based CFO Kalman filter. 
+    支持外部传入 (external_R, external_Q) 来替换内部 state, 从而实现端到端学习.
 
     Args:
-      Q_init: 初始Q
-      R_init: 初始R
-      w0_init: 初始频偏
-      const, train, akf, alpha: 与原先相同
+      Q_init, R_init: 卡尔曼初始Q,R
+      w0_init: 初始 freq
+      const, train, akf, alpha: 常规参数
     """
 
     train = cxopt.make_schedule(train)
     akf = cxopt.make_schedule(akf)
-    const = jnp.asarray(const)
+    const = jnp.asarray(const, dtype=jnp.complex64)
 
     def init(w0=None):
-        """init函数：接收 w0 覆盖 w0_init，返回 (z0, P0, Q, R)"""
+        """init => (z_c, P_c, Q, R)"""
         if w0 is None:
             w0 = w0_init
-        # z0=[phi, freq], freq=w0
-        z0 = jnp.array([[0.0], [w0]], dtype=jnp.float32)
-        P0 = jnp.zeros((2, 2), dtype=jnp.float32)
+        z0 = jnp.array([[0.0],[w0]], dtype=jnp.float32)
+        P0 = jnp.zeros((2,2), dtype=jnp.float32)
+        # 这里存入 Q_init, R_init 作为初始
         return (z0, P0, Q_init, R_init)
 
     def update(step_i, state, inp):
         """
-        update(i, state, inp)
-        state: (z_c, P_c, Q, R)
-        inp: (frame_data, truth_data?)  => frame_data shape=(framesize, dims)
+        update(step_i, state, inp) => (new_state, out)
+        state: (z_c, P_c, Q_internal, R_internal)
+        inp: (frame_data, external_R, external_Q, maybe truth)
+             - frame_data shape=(framesize, dims)
+             - external_R, external_Q => shape=(2,2) or whatever you need
         """
-        (z_c, P_c, Q, R) = state
-        y = inp[0]  # shape=(framesize,dims)
-        # truth = inp[1] if needed
+        (z_c, P_c, Q_int, R_int) = state
+        # 这里解包 inp
+        frame_data, ext_R, ext_Q = inp[0], inp[1], inp[2]  # 3个组成
 
-        N = y.shape[0]
+        # 覆盖 => 让卡尔曼公式真正使用 "外部" R,Q
+        # 若 ext_R, ext_Q=None 可以改成 jnp.where(...) or you can decide logic
+        Q = ext_Q
+        R = ext_R
+
+        N = frame_data.shape[0]
         A = jnp.array([[1, N],[0,1]], dtype=jnp.float32)
-        I = jnp.eye(2, dtype=jnp.float32)
-        n = jnp.arange(N, dtype=jnp.float32) - (N-1)/2
-
-        # 预测
         z_p = A @ z_c
         P_p = A @ P_c @ A.T + Q
 
-        # phi_p => shape(N,), y => shape(N, dims)
+        n = jnp.arange(N, dtype=jnp.float32)-(N-1)/2
         phi_p = z_p[0,0] + z_p[1,0]*n
-        # 做乘法 => (N,dims) * broadcast(N,1)
-        y_compensated = y * jnp.exp(-1j*phi_p[:,None])
+        # shape => frame_data: (N,dims)
+        # broadcast phi => (N,1)
+        s_p = frame_data * jnp.exp(-1j * phi_p[:,None])
 
-        # 这里省略判决与误差 e 计算, 只演示 shape
-        # ...
-        z_c_new = z_p
-        P_c_new = P_p
+        # 这里随便做个简单观测 e
+        sumsp = jnp.sum(s_p)
+        e = jnp.array([
+            [jnp.arctan2(sumsp.imag, sumsp.real)],
+            [0.0]
+        ], dtype=jnp.float32)
 
-        new_state = (z_c_new, P_c_new, Q, R)
-        # 产出 w_frame => shape (1,dims) or (N,dims)?
-        # 只做演示
-        w_frame = jnp.array([[z_p[1,0], 0]], dtype=jnp.float32)
+        # 卡尔曼增益
+        P_p_R = P_p + R
+        G = P_p @ jnp.linalg.pinv(P_p_R)
+        z_c_new = z_p + G @ e
+        P_c_new = (jnp.eye(2) - G) @ P_p
 
+        # 也可做 AKF => Q = alpha*Q + ...
+        # 这儿省略或加 => Q = jnp.where(akf(step_i), alpha*Q + ... , Q)
+
+        new_state = (z_c_new, P_c_new, Q_int, R_int)
+        # out: 形状 (1,dims)? 这里给 demo
+        w_frame = jnp.array([[z_c_new[1,0], 0.0]], dtype=jnp.float32)
         return new_state, w_frame
 
     def apply(params, frames):
-        # 这里你可写 vmap or for-loop
+        # frames shape => do as you want
         return frames
 
     return (init, update, apply)
