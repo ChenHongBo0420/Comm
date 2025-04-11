@@ -745,7 +745,8 @@ def frame_cpr_kf(
         n = jnp.arange(N, dtype=jnp.float32)
         phi_p = z_p[0,0] + z_p[1,0]*n
         # broadcast => (N,dims) * (N,1)
-        s_p = frame_data * jnp.exp(-1j * phi_p[:,None])
+        phi_3d = phi_p[:, None, None]
+        s_p = frame_data * jnp.exp(-1j * phi_3d[:,None])
 
         # 例如 compute e
         sp_sum = jnp.sum(s_p)
