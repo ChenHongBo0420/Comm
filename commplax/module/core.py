@@ -348,7 +348,8 @@ def mimofoeaf(
         frame_data = data_tuple[0]
         # 然后再调用原先 foe_update_orig(...) 
         # 注意 foe_update_orig 可能只接受 (old_state, frame_data, R, Q, w0) 
-        new_state, w_frame = foe_update_orig(old_state, frame_data, R=R, Q=Q, w0=w0)
+        # new_state, w_frame = foe_update_orig(old_state, frame_data, R=R, Q=Q, w0=w0)
+        new_state, w_frame = foe_update_orig(old_state, frame_data)
         # 返回和 update 相同格式 => (new_state, (some outputs))
         return new_state, (w_frame, None)
 
