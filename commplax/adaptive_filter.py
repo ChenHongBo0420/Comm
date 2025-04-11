@@ -752,7 +752,7 @@ def frame_cpr_kf(
 
         # 对帧做线性相位补偿, s_p = y * exp(-j*(phi_p + freq_p*n))
         phi_p = z_p[0, 0] + n * z_p[1, 0]
-        s_p = y * jnp.exp(-1j * phi_p)
+        s_p = y * jnp.exp(-1j * phi_p[:, None])
 
         # 判断: 如果 train(i)=True, 则用 x 作为参考，否则做硬判决
         d = jnp.where(
