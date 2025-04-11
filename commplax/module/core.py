@@ -464,24 +464,24 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss):
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    for i in range(steps):
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
