@@ -607,170 +607,89 @@ def ddlms(
     return AdaptiveFilter(init, update, apply)
 
 
-# @partial(adaptive_filter, trainable=True)
-# def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
-#                                        [0, 1e-9]]), # 1e-8 is better if akf is False
-#                  R: Array = jnp.array([[1e-2, 0],
-#                                        [0, 1e-3]]),
-#                  const: Array = comm.const("16QAM", norm=True),
-#                  train: Union[bool, Schedule] = False,
-#                  akf: Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
-#                  alpha: float = 0.999) -> AdaptiveFilter:
-#     """Block based estimator of carrier frequency offset
-
-#     frame-by-frame coarse carrier phsae recovery using Kalman filter, can tolerate 0.1 * baudrate
-#     frequency offset[1].
-    
-#     Args:
-#         Q: covariance matrix of observer noises
-#         R: covariance matrix of system noises
-#         const: reference constellation used in decison stage
-#         train: scheduler of training mode
-#         akf: scheduler of AKF
-#         alpha: smoothening factor used in AKF
-    
-#     Returns:
-#         A ``AdaptiveFilter`` object
-    
-#     Caution:
-#         needs proper initialization of FO[1]
-    
-#     References:
-#         - [1] Inoue, Takashi, and Shu Namiki. "Carrier recovery for M-QAM signals based on
-#           a block estimation process with Kalman filter." Optics express 22.13 (2014): 15376-15387.
-#         - [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
-#           covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
-#           society general meeting. IEEE, 2017.
-#     """
-#     const = jnp.asarray(const)
-#     train = cxopt.make_schedule(train)
-#     akf = cxopt.make_schedule(akf)
-
-#     def init(w0=0):
-#         z0 = jnp.array([[0], [w0]], dtype=jnp.float32)
-#         P0 = jnp.zeros((2, 2), dtype=jnp.float32)
-#         state0 = (z0, P0, Q)
-#         return state0
-
-#     def update(i, state, inp):
-#         z_c, P_c, Q = state
-#         y, x = inp
-
-#         N = y.shape[0] # frame size
-#         A = jnp.array([[1, N],
-#                        [0, 1]])
-#         I = jnp.eye(2)
-#         n = (jnp.arange(N) - (N - 1) / 2)
-
-#         z_p = A @ z_c
-#         P_p = A @ P_c @ A.T + Q
-#         phi_p = z_p[0, 0] + n * z_p[1, 0]  # linear approx.
-#         s_p = y * jnp.exp(-1j * phi_p)
-#         d = jnp.where(train(i), x, const[jnp.argmin(jnp.abs(const[None, :] - s_p[:, None]), axis=-1)])
-#         scd_p = s_p * d.conj()
-#         sumscd_p = jnp.sum(scd_p)
-#         e = jnp.array([[jnp.arctan(sumscd_p.imag / sumscd_p.real)],
-#                        [(jnp.sum(n * scd_p)).imag / (jnp.sum(n * n * scd_p)).real]])
-
-#         G = P_p @ jnp.linalg.pinv((P_p + R))
-#         z_c = z_p + G @ e
-#         P_c = (I - G) @ P_p
-
-#         Q = jnp.where(akf(i),
-#                       alpha * Q + (1 - alpha) * (G @ e @ e.T @ G),
-#                       Q)
-
-#         out = (z_p[1, 0], phi_p)
-#         state = (z_c, P_c, Q)
-
-#         return state, out
-
-#     def apply(phis, ys):
-#         return jax.vmap(lambda y, phi: y * jnp.exp(-1j * phi))(ys, phis)
-
-#     return AdaptiveFilter(init, update, apply)
-
 @partial(adaptive_filter, trainable=True)
-def frame_cpr_kf(
-    Q_init: Array = jnp.array([[0.0, 0.0],
-                               [0.0, 1e-9]], dtype=jnp.float32),
-    R_init: Array = jnp.array([[1e-2, 0.0],
-                               [0.0, 1e-3]], dtype=jnp.float32),
-    w0_init: float = 0.0,
-    const: Array = comm.const("16QAM", norm=True),
-    train: Union[bool, cxopt.Schedule] = False,
-    akf: cxopt.Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
-    alpha: float = 0.999
-) -> AdaptiveFilter:
-    """
-    示例：Block-based CFO Kalman filter
-    State = (z_c, P_c, Q, R)
-    """
+def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
+                                       [0, 1e-9]]), # 1e-8 is better if akf is False
+                 R: Array = jnp.array([[1e-2, 0],
+                                       [0, 1e-3]]),
+                 const: Array = comm.const("16QAM", norm=True),
+                 train: Union[bool, Schedule] = False,
+                 akf: Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
+                 alpha: float = 0.999) -> AdaptiveFilter:
+    """Block based estimator of carrier frequency offset
 
+    frame-by-frame coarse carrier phsae recovery using Kalman filter, can tolerate 0.1 * baudrate
+    frequency offset[1].
+    
+    Args:
+        Q: covariance matrix of observer noises
+        R: covariance matrix of system noises
+        const: reference constellation used in decison stage
+        train: scheduler of training mode
+        akf: scheduler of AKF
+        alpha: smoothening factor used in AKF
+    
+    Returns:
+        A ``AdaptiveFilter`` object
+    
+    Caution:
+        needs proper initialization of FO[1]
+    
+    References:
+        - [1] Inoue, Takashi, and Shu Namiki. "Carrier recovery for M-QAM signals based on
+          a block estimation process with Kalman filter." Optics express 22.13 (2014): 15376-15387.
+        - [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
+          covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
+          society general meeting. IEEE, 2017.
+    """
+    const = jnp.asarray(const)
     train = cxopt.make_schedule(train)
     akf = cxopt.make_schedule(akf)
-    const = jnp.asarray(const, dtype=jnp.complex64)
 
-    def init(w0=None, param_Q=None, param_R=None):
-        """
-        w0: 初始 freq offset
-        param_Q, param_R: 若外部想覆盖,可传进来.否则用 Q_init, R_init
-        """
-        if w0 is None:
-            w0 = w0_init
-        if param_Q is None:
-            param_Q = Q_init
-        if param_R is None:
-            param_R = R_init
+    def init(w0=0):
+        z0 = jnp.array([[0], [w0]], dtype=jnp.float32)
+        P0 = jnp.zeros((2, 2), dtype=jnp.float32)
+        state0 = (z0, P0, Q)
+        return state0
 
-        z0 = jnp.array([[0.0],[w0]], dtype=jnp.float32)   # [phi, freq]
-        P0 = jnp.zeros((2,2), dtype=jnp.float32)
-        return (z0, P0, param_Q, param_R)
+    def update(i, state, inp):
+        z_c, P_c, Q = state
+        y, x = inp
 
-    def update(step_i, state, inp):
-        """
-        state = (z_c, P_c, Q, R)
-        inp   = (frame_data, [可选truth?])
-        """
-        (z_c, P_c, Q, R) = state
-        frame_data = inp[0]  # shape=(framesize, dims)
-        N = frame_data.shape[0]
+        N = y.shape[0] # frame size
+        A = jnp.array([[1, N],
+                       [0, 1]])
+        I = jnp.eye(2)
+        n = (jnp.arange(N) - (N - 1) / 2)
 
-        # 线性相位模型
-        A = jnp.array([[1, N],[0,1]], dtype=jnp.float32)
         z_p = A @ z_c
         P_p = A @ P_c @ A.T + Q
+        phi_p = z_p[0, 0] + n * z_p[1, 0]  # linear approx.
+        s_p = y * jnp.exp(-1j * phi_p)
+        d = jnp.where(train(i), x, const[jnp.argmin(jnp.abs(const[None, :] - s_p[:, None]), axis=-1)])
+        scd_p = s_p * d.conj()
+        sumscd_p = jnp.sum(scd_p)
+        e = jnp.array([[jnp.arctan(sumscd_p.imag / sumscd_p.real)],
+                       [(jnp.sum(n * scd_p)).imag / (jnp.sum(n * n * scd_p)).real]])
 
-        # 做个简单演示 => y(t)
-        n = jnp.arange(N, dtype=jnp.float32)
-        phi_p = z_p[0,0] + z_p[1,0]*n
-        # broadcast => (N,dims) * (N,1)
-        phi_3d = phi_p[:, None, None]
-        s_p = frame_data * jnp.exp(-1j * phi_3d[:,None])
+        G = P_p @ jnp.linalg.pinv((P_p + R))
+        z_c = z_p + G @ e
+        P_c = (I - G) @ P_p
 
-        # 例如 compute e
-        sp_sum = jnp.sum(s_p)
-        e = jnp.array([[jnp.arctan2(sp_sum.imag, sp_sum.real)],
-                       [0.0]], dtype=jnp.float32)
+        Q = jnp.where(akf(i),
+                      alpha * Q + (1 - alpha) * (G @ e @ e.T @ G),
+                      Q)
 
-        # KF update
-        P_p_plus_R = P_p + R
-        G = P_p @ jnp.linalg.pinv(P_p_plus_R)
-        z_c_new = z_p + G @ e
-        P_c_new = (jnp.eye(2, dtype=jnp.float32) - G) @ P_p
+        out = (z_p[1, 0], phi_p)
+        state = (z_c, P_c, Q)
 
-        # 也可做 AKF => Q = ...
-        new_state = (z_c_new, P_c_new, Q, R)
-        # out => w_frame shape=(1,dims)? 仅演示
-        w_frame = jnp.array([[z_c_new[1,0], 0.0]], dtype=jnp.float32)
+        return state, out
 
-        return new_state, w_frame
+    def apply(phis, ys):
+        return jax.vmap(lambda y, phi: y * jnp.exp(-1j * phi))(ys, phis)
 
-    def apply(params, frames):
-        # 视需要实现
-        return frames
+    return AdaptiveFilter(init, update, apply)
 
-    return (init, update, apply)
     
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train: Union[bool, Schedule] = False,
