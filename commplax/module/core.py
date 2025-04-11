@@ -231,7 +231,7 @@ def conv1d(
     if new_stop < new_start:
         new_stop = new_start
     new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x_out, new_t)
+    return Signal(x, new_t)
   
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -272,7 +272,7 @@ def mimoconv1d(
     if new_stop < new_start:
         new_stop = new_start
     new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x_out, new_t)     
+    return Signal(x, new_t)     
    
 # def mimofoeaf(scope: Scope,
 #               signal,
@@ -497,7 +497,7 @@ def mimoaf(
     if new_stop < new_start:
         new_stop = new_start
     new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x_out, new_t)   
+    return Signal(x, new_t)   
       
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
@@ -724,7 +724,7 @@ def fdbp(
     if new_stop < new_start:
         new_stop = new_start
     new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x_out, new_t)   
+    return Signal(x, new_t)   
 
 # def fdbp(
 #     scope: Scope,
@@ -911,7 +911,7 @@ def fdbp1(
     if new_stop < new_start:
         new_stop = new_start
     new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x_out, new_t)   
+    return Signal(x, new_t)   
 
 
     
@@ -960,12 +960,7 @@ def fanin_sum(scope, inputs):
 def fanin_mean(scope, inputs):
     val = sum(signal.val for signal in inputs) / len(inputs)
     t = inputs[0].t  # 假设所有的 t 都相同
-    new_start = t.start
-    new_stop  = t.stop  # or if you've changed it
-    if new_stop < new_start:
-        new_stop = new_start
-    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x_out, new_t)   
+    return Signal(val, t)   
 
 
 def fanin_concat(scope, inputs, axis=-1):
