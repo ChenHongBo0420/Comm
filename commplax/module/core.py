@@ -619,31 +619,7 @@ from jax.nn.initializers import orthogonal, zeros
 #                                                             taps=ntaps,
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss):
-    x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    for i in range(steps):
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    new_start = t.start
-    new_stop  = t.stop 
-    if new_stop < new_start:
-        new_stop = new_start
-    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
-    return Signal(x, new_t)   
+#     return Signal(x, t)  
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
@@ -682,7 +658,107 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     out_1d = out.squeeze(axis=-1)
     return out_1d, t
                              
+def fdbp(
+    scope: Scope,
+    signal: Signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=None,  # e.g. delta
+    n_init=None,  # e.g. gauss
+    hidden_dim=2,
+    use_alpha=True,
+):
+    """
+    修复版 fdbp(D->N->residual)：
+      - 在 (B) 非线性补偿时，确保 exp(1j*c) 和 x[...] 长度匹配，通过 clamp slice。
+      - 在返回时，对 SigTime 做 stop>=start clamp。
+    """
+    if d_init is None:
+        from commplax.module.core import delta
+        d_init = delta
+    if n_init is None:
+        from commplax.module.core import gauss
+        n_init = gauss
 
+    x, t = signal
+
+    # 1) 色散补偿卷积 (vmap)
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    # 可选: 对 residual 加可训练 alpha
+    if use_alpha:
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+    else:
+        alpha = 1.0
+
+    for i in range(steps):
+        # --- (A) 色散补偿 (D)
+        x_d, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+          # x_d.shape => (?), td => SigTime
+        # --- (B) 非线性补偿 (N)
+        #   先获取 c: shape(?), tN
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x_d)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # c.shape => (len_c, ) [假设1D];  tN => SigTime
+
+        # 目标： x_new = exp(j*c_slice) * x_d[ slice_start : slice_stop ]
+        #   slice_start = (tN.start - td.start)
+        #   slice_stop  = slice_start + len_c
+        len_c = c.shape[0]
+
+        slice_start = (tN.start - td.start)
+        slice_stop  = slice_start + len_c
+
+        # clamp to [0, x_d.shape[0]]
+        slice_start = jnp.maximum(slice_start, 0)
+        slice_start = jnp.minimum(slice_start, x_d.shape[0])
+        slice_stop  = jnp.maximum(slice_stop, 0)
+        slice_stop  = jnp.minimum(slice_stop, x_d.shape[0])
+
+        x_slice = x_d[slice_start : slice_stop]  # shape (someLen,2)
+        # clamp c to same length
+        slice_len = x_slice.shape[0]
+        c_slice   = c[: slice_len]  # shape (someLen,)
+
+        # exp
+        phase = jnp.exp(1j * c_slice)  # => (someLen,)
+        # broadcast to (someLen,2)
+        x_new = phase[:, None] * x_slice
+
+        # --- (C) residual MLP
+        #   先做 Signal(abs(x_new)^2, tN)
+        #   clamp MLP input  => 这里如果 residual MLP expects len=? => 只做 same shape
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # res_val => shape(?). Suppose => shape(someLen,) or (someLen,2)...
+
+        # clamp again to match x_new shape
+        L_res = jnp.minimum(res_val.shape[0], x_new.shape[0])
+        x_new = x_new[:L_res]  # (L_res,2)
+        rv_slice = res_val[:L_res]  # (L_res,)
+
+        # broadcast alpha * rv_slice to (L_res,2)
+        rv_cplx_2d = jnp.asarray(rv_slice, x_new.dtype)[:, None]
+        x_new = x_new + alpha * rv_cplx_2d
+
+        # update x,t => x_new, t_res
+        x, t = x_new, t_res
+
+    # --- (D) final clamp SigTime => avoid negative
+    new_start = t.start
+    new_stop  = t.stop
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+
+    return Signal(x, new_t)
 # from jax import debug
 # def fdbp(
 #     scope: Scope,
