@@ -282,112 +282,96 @@ def mimofoeaf(
     scope: Scope,
     signal: Signal,
     framesize=100,
-    w0=0.0,             # 保持原先的 w0 接口
+    w0=0.0,
     train=False,
     preslicer=lambda x: x,
-    foekwargs={},       # 给 frame_cpr_kf(...) 的额外参数
-    mimofn=None,        # 给 mimoaf 的自适应滤波函数(默认af.rde)
+    foekwargs={},
+    mimofn=None,
     mimokwargs={},
     mimoinitargs={},
-    learn_R=False,      # 是否让噪声协方差 R 成为可学习参数
-    learn_Q=False       # 是否让噪声协方差 Q 成为可学习参数
+    learn_R=False,
+    learn_Q=False
 ):
     """
-    改进版: 不再调用 af.array(...) => 无 vmap 轴冲突
+    把 outside R, Q 注入到 frame_cpr_kf.update(...) => 真正影响卡尔曼滤波
     """
 
-    import commplax.adaptive_filter as af
-
     if mimofn is None:
-        mimofn = af.rde  # 若你想默认使用 RDE
+        mimofn = af.rde  # 默认 RDE
 
-    sps = 2
-    dims = 2
-    tx = signal.t
-    x, t = signal
-
-    # (1) 先做 MIMO 自适应滤波
+    # 1) MIMO 自适应
     slisig = preslicer(signal)
-    auxsig = scope.child(
-        lambda scp, sig: scp.child(mimoaf,
-                                   mimofn=mimofn,
-                                   train=train,
-                                   mimokwargs=mimokwargs,
-                                   mimoinitargs=mimoinitargs,
-                                   name='MIMO4FOE')(sig)
-    )(slisig)
-    y, ty = auxsig
-
-    # (2) 分帧 => (N_frames, framesize, dims)
+    y_sig = scope.child(mimoaf,
+                        mimofn=mimofn,
+                        train=train,
+                        mimokwargs=mimokwargs,
+                        mimoinitargs=mimoinitargs,
+                        name='MIMO4FOE')(slisig)
+    y, ty = y_sig
+    # 2) 分帧
     yf = xop.frame(y, framesize, framesize)
 
-    # (3) 直接拿 frame_cpr_kf 的 (init, update, apply), 无 array(...) 包装
-    #     => 不会再出现 vmap shape冲突
-    foe_init, foe_update_orig, foe_apply = af.frame_cpr_kf(**foekwargs)
+    # 3) 拿 frame_cpr_kf
+    foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
 
-    # (4) 定义可学习 R, Q(可选) -- 只是在本函数 param 中。若需要真正用到它们，
-    #     需在 frame_cpr_kf 内部拿 state=(z_c,P_c,Q,R) 改写；这里仅示范 param 声明
+    # 4) 声明 R, Q as param
+    dims = 2
     if learn_R:
-        R = scope.param(
+        param_R = scope.param(
             'R',
             lambda key, shape, dtype: jnp.eye(dims, dtype=dtype)*0.01,
             (dims, dims), jnp.float32
         )
     else:
-        R = jnp.eye(dims, dtype=jnp.float32)*0.01
+        param_R = jnp.eye(dims, dtype=jnp.float32)*0.01
 
     if learn_Q:
-        Q = scope.param(
+        param_Q = scope.param(
             'Q',
             lambda key, shape, dtype: jnp.eye(dims, dtype=dtype)*1e-4,
             (dims, dims), jnp.float32
         )
     else:
-        Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
+        param_Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
 
-    # (5) foe_init(w0) => 初始化
+    # 5) Kalman初始
     def init_kalman():
-        return foe_init(w0)  # => (z0, P0, Q, R)
-    state_var = scope.variable('af_state', 'framefoeaf',
+        return foe_init(w0)
+    state_var = scope.variable('af_state', 'foe_state',
                                lambda *_: (0.0, 0, init_kalman()), ())
-    phi, af_step, af_stats = state_var.value
-    # af_stats=(z_c, P_c, Q, R)
+    phi, af_step, af_stats = state_var.value  # af_stats => (z_c,P_c,Q_init,R_init)
 
-    # (6) 定义 wrapper => 3参: (step_i, old_state, data_tuple)
-    def foe_update_with_params(step_i, old_state, data_tuple):
-        # data_tuple = (frame_data, ...)
-        frame_data = data_tuple[0]  # (framesize, dims)
-        # 不显式传 R, Q, w0 => 避免 unexpected keyword error
-        new_state, w_frame = foe_update_orig(step_i, old_state, (frame_data,))
+    # 6) wrapper
+    def foe_update_with_QR(step_i, old_state, data_tuple):
+        """
+        data_tuple=(frame_data,) => shape( framesize, dims )
+        + inject param_R, param_Q => so final => (frame_data, param_R, param_Q)
+        """
+        frame_data = data_tuple[0]
+        # 组装 => (frame_data, param_R, param_Q)
+        new_state, w_frame = foe_update(step_i, old_state, (frame_data, param_R, param_Q))
         return new_state, (w_frame, None)
 
-    # (7) 用 af.iterate(...) => 逐帧扫描
+    # 7) iterate => 逐帧
     af_step, (af_stats, (wf, _)) = af.iterate(
-        foe_update_with_params,
+        foe_update_with_QR,
         af_step,
         af_stats,
-        yf  # shape=(N_frames, framesize, dims)
+        yf
     )
-    # wf shape=(N_frames, ???)
+    # wf shape => (N_frames, ???)
 
-    # (8) 后处理 => interpolation, etc
-    # 这里假设 wf=(N_frames, dims)
-    # 如果 foe_update_orig 产出 shape=(N_frames, 2)  => 需 reshape
-    wp = wf.reshape((-1, dims)).mean(axis=-1)  # => (N_frames,)
-    x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2
-    x_axis = jnp.arange(y.shape[0] * sps) / sps
-    w = jnp.interp(x_axis, x_wp, wp) / sps
+    # 8) 后处理
+    wp = wf.reshape((-1, dims)).mean(axis=-1)  
+    x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1)/2
+    x_axis = jnp.arange(y.shape[0])  
+    w = jnp.interp(x_axis, x_wp, wp)/2  # or sps=2 ?
+
     psi = phi + jnp.cumsum(w)
     state_var.value = (psi[-1], af_step, af_stats)
 
-    # (9) 相位校正
-    psi_ext = jnp.concatenate([
-        w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
-        psi,
-        w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]
-    ])
-    out_signal = Signal(x[:psi_ext.shape[0]] * jnp.exp(-1j * psi_ext)[:, None], t)
-    return out_signal
+    out_val = signal.val[:psi.shape[0]] * jnp.exp(-1j * psi)[:, None]
+    return Signal(out_val, signal.t)
                 
 def mimoaf(
     scope: Scope,
