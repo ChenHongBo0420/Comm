@@ -381,7 +381,76 @@ def mimofoeaf(
     out_signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return out_signal
 
+# def mimofoeaf(
+#     scope: Scope,
+#     signal: Signal,
+#     framesize=100,
+#     w0=0.0,
+#     train=False,
+#     preslicer=lambda x: x,
+#     foekwargs={},
+#     mimofn=af.rde,
+#     mimokwargs={},
+#     mimoinitargs={},
+# ):
+#     sps = 2
+#     dims = 2
+#     x, t = signal
 
+#     # (1) MIMO self-adaptive
+#     slisig = preslicer(signal)
+#     out_sig = scope.child(mimoaf,
+#                           mimofn=mimofn,
+#                           train=train,
+#                           mimokwargs=mimokwargs,
+#                           mimoinitargs=mimoinitargs,
+#                           name='MIMO4FOE')(slisig)
+#     y, ty = out_sig
+
+#     # (2) 分帧 => shape=(N_frames, framesize, dims)
+#     yf = xop.frame(y, framesize, framesize)
+
+#     # (3) 直接拿 frame_cpr_kf
+#     foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
+
+#     # (4) Kalman state => scope.variable
+#     def init_kalman():
+#         return foe_init(w0)
+#     state_var = scope.variable('af_state', 'framefoeaf',
+#                                lambda *_: (0., 0, init_kalman()), ())
+#     phi, af_step, af_stats = state_var.value
+
+#     # (5) 定义 wrapper
+#     def foe_update_with_params(step_i, old_state, data_tuple):
+#         frame_data = data_tuple[0]  # shape(framesize,dims)
+#         new_state, w_frame = foe_update(step_i, old_state, (frame_data,))
+#         return new_state, (w_frame, None)
+
+#     # (6) af.iterate => 逐帧
+#     af_step, (af_stats, (wf, _)) = af.iterate(
+#         foe_update_with_params,
+#         af_step,
+#         af_stats,
+#         yf
+#     )
+#     # wf shape => (N_frames,1,2) in this example
+
+#     # (7) 后处理 => interpolation
+#     #   suppose wf reshape => (N_frames, dims)
+#     wf_reshaped = wf.reshape((-1, dims))  # => (N_frames,2)
+#     wp = wf_reshaped.mean(axis=-1)       # => (N_frames,)
+#     x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1)/2
+#     x_axis = jnp.arange(y.shape[0]*sps)/sps
+#     w_phase = jnp.interp(x_axis, x_wp, wp)/sps
+#     psi = phi + jnp.cumsum(w_phase)
+#     state_var.value = (psi[-1], af_step, af_stats)
+
+#     # (8) apply phase
+#     # times => shape(len(psi),), x => shape(len(psi), 2)
+#     # expand psi => shape(len(psi),1)
+#     psi_ext = psi[:, None]
+#     out_val = x[:psi.shape[0]] * jnp.exp(-1j * psi_ext)  # or do bounds carefully
+#     return Signal(out_val, t)
                 
 def mimoaf(
     scope: Scope,
