@@ -285,36 +285,35 @@ def mimofoeaf(
     w0=0.0,
     train=False,
     preslicer=lambda x: x,
-    foekwargs={},
-    mimofn=None,
+    foekwargs={},     # 传给 frame_cpr_kf
+    mimofn=None,      # 自适应均衡器函数
     mimokwargs={},
     mimoinitargs={},
     learn_R=False,
     learn_Q=False
 ):
     """
-    把 outside R, Q 注入到 frame_cpr_kf.update(...) => 真正影响卡尔曼滤波
+    改进：在这里声明 param_R, param_Q 并注入到 frame_cpr_kf 的 init state
+    => 让 update(...) 真正使用外部可学习 R, Q
     """
-
     if mimofn is None:
         mimofn = af.rde  # 默认 RDE
 
     # 1) MIMO 自适应
     slisig = preslicer(signal)
-    y_sig = scope.child(mimoaf,
-                        mimofn=mimofn,
-                        train=train,
-                        mimokwargs=mimokwargs,
-                        mimoinitargs=mimoinitargs,
-                        name='MIMO4FOE')(slisig)
-    y, ty = y_sig
+    out_sig = scope.child(
+        lambda scp, sig: scp.child(mimoaf,
+                                   mimofn=mimofn,
+                                   train=train,
+                                   mimokwargs=mimokwargs,
+                                   mimoinitargs=mimoinitargs,
+                                   name='MIMO4FOE')(sig)
+    )(slisig)
+    y, ty = out_sig
     # 2) 分帧
     yf = xop.frame(y, framesize, framesize)
 
-    # 3) 拿 frame_cpr_kf
-    foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
-
-    # 4) 声明 R, Q as param
+    # 3) 声明 param_R, param_Q
     dims = 2
     if learn_R:
         param_R = scope.param(
@@ -334,43 +333,51 @@ def mimofoeaf(
     else:
         param_Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
 
-    # 5) Kalman初始
+    # 4) 拿 frame_cpr_kf => (init_fn, update_fn, apply_fn)
+    foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
+
+    # 5) 在 scope.variable 里存
     def init_kalman():
-        return foe_init(w0)
+        # 把 param_Q, param_R 放进去
+        return foe_init(w0, param_Q=param_Q, param_R=param_R)
+
+    # state_var => (phi, step, (z_c, P_c, Q, R))
     state_var = scope.variable('af_state', 'foe_state',
                                lambda *_: (0.0, 0, init_kalman()), ())
-    phi, af_step, af_stats = state_var.value  # af_stats => (z_c,P_c,Q_init,R_init)
+    phi, af_step, kf_state = state_var.value
 
-    # 6) wrapper
-    def foe_update_with_QR(step_i, old_state, data_tuple):
-        """
-        data_tuple=(frame_data,) => shape( framesize, dims )
-        + inject param_R, param_Q => so final => (frame_data, param_R, param_Q)
-        """
-        frame_data = data_tuple[0]
-        # 组装 => (frame_data, param_R, param_Q)
-        new_state, w_frame = foe_update(step_i, old_state, (frame_data, param_R, param_Q))
+    # 6) wrapper => 3参
+    def foe_update_wrapper(step_i, old_state, data_tuple):
+        # data_tuple => (frame_data, truth?)
+        # old_state => (z_c, P_c, Q, R)
+        new_state, w_frame = foe_update(step_i, old_state, data_tuple)
         return new_state, (w_frame, None)
 
-    # 7) iterate => 逐帧
-    af_step, (af_stats, (wf, _)) = af.iterate(
-        foe_update_with_QR,
+    # 7) iterate => (kf_state => new_kf_state)
+    af_step, (kf_state, (wf, _)) = af.iterate(
+        foe_update_wrapper,
         af_step,
-        af_stats,
+        kf_state,
         yf
     )
     # wf shape => (N_frames, ???)
-
-    # 8) 后处理
-    wp = wf.reshape((-1, dims)).mean(axis=-1)  
-    x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1)/2
-    x_axis = jnp.arange(y.shape[0])  
-    w = jnp.interp(x_axis, x_wp, wp)/2  # or sps=2 ?
+    # 8) 后处理 => interpolation
+    #   e.g. wf.reshape((-1,dims))
+    N_frames = wf.shape[0]
+    dims = wf.shape[-1]
+    wf_reshaped = wf.reshape((N_frames, dims))  # => (N_frames,dims)
+    wp = wf_reshaped.mean(axis=-1)             # => (N_frames,)
+    # 这里做一个插值 => w(t)
+    x_wp = jnp.arange(N_frames)*framesize + (framesize-1)/2
+    x_axis = jnp.arange(y.shape[0])
+    w = jnp.interp(x_axis, x_wp, wp)/2  # or /sps
 
     psi = phi + jnp.cumsum(w)
-    state_var.value = (psi[-1], af_step, af_stats)
+    # 更新
+    state_var.value = (psi[-1], af_step, kf_state)
 
-    out_val = signal.val[:psi.shape[0]] * jnp.exp(-1j * psi)[:, None]
+    # 9) apply
+    out_val = signal.val[:psi.shape[0]] * jnp.exp(-1j*psi)[:,None]
     return Signal(out_val, signal.t)
                 
 def mimoaf(
