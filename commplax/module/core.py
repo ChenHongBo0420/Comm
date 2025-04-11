@@ -521,63 +521,102 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 #     out_1d = out.squeeze(axis=-1)
 #     return out_1d, t
                              
-def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
+def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2, debug=True):
     """
-    将原先的两层 MLP 改为 FFN 风格的门控（SwiGLU/GLU）结构，并加上残差输出。
-    signal: (x, t)
-        x: shape=(N, C) 或 (N, 2) 等复数输入
-        t: 时间或其他附带信息，直接原样返回
-    hidden_dim: 中间层大小的一半（因为要一次映射到2*hidden_dim做门控拆分）
+    利用 FFN 风格的门控结构对输入信号进行处理并生成残差，
+    调试版本会打印输入和中间变量的形状信息，帮助定位错误。
+
+    参数:
+      scope: 模块作用域，用于参数创建
+      signal: 包含 (x, t) 的元组，其中 x 可为多通道复数数据或一维标量数据
+      hidden_dim: 中间层大小的一半（因为会映射到 2*hidden_dim 后拆分为两部分）
+      debug: 是否打印调试信息
+
+    返回:
+      (输出, t)
+      输出形状应为 (N,)（N 为样本数），t 保持原样
     """
+    # 解包输入
     x, t = signal
-    # 1) 对 x 做范数处理，得到 (N,) 标量
+
+    # 保证 x 至少为一维（若原本是标量则转换为形状 (1,)）
     x = jnp.atleast_1d(x)
+    if debug:
+        print("【调试】输入 x: ", x)
+        print("【调试】x.shape: ", x.shape)
+        print("【调试】x.ndim: ", x.ndim)
+
+    # 根据 x 的维度确定如何提取每个样本的标量特征
     if x.ndim == 1:
+        # x 本身已经是一维，每个元素即为一个样本的标量特征
         x_scalar = x
+        if debug:
+            print("【调试】x_ndim == 1，直接使用 x 作为 x_scalar.")
     else:
+        # 对于多维情况，假设最后一维为通道，沿该维度计算范数
         x_scalar = jnp.linalg.norm(x, axis=-1)
-    x_scalar = jnp.linalg.norm(x, axis=-1)
-    N = x_scalar.shape[0]
-    
-    # 2) reshape => (N, 1)，并转换为复数 (若不需要复数可去掉 astype)
+        if debug:
+            print("【调试】x_ndim > 1，使用 jnp.linalg.norm(x, axis=-1) 计算 x_scalar.")
+
+    if debug:
+        print("【调试】x_scalar: ", x_scalar)
+        # 打印 x_scalar 的形状，如果它是标量（零维）将没有 shape[0]
+        try:
+            print("【调试】x_scalar.shape: ", x_scalar.shape)
+        except Exception as e:
+            print("【调试】获取 x_scalar.shape 出错:", e)
+        print("【调试】x_scalar.ndim: ", x_scalar.ndim)
+
+    # 此处要求 x_scalar 为一维数组，每个样本对应一个标量值
+    try:
+        N = x_scalar.shape[0]
+    except Exception as e:
+        print("【调试】获取样本数 N 时出错：", e)
+        raise e
+    if debug:
+        print("【调试】N (样本数): ", N)
+
+    # 将 x_scalar 重塑为 (N, 1) 并转换为复数类型
     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
+    if debug:
+        print("【调试】x_2d.shape: ", x_2d.shape)
 
-    # 3) 定义第一层门控参数：输出 2*hidden_dim 个通道，拆分成(门控, 激活)
+    # 定义门控层参数：第一层将输入映射到 2*hidden_dim 个通道
     W_in = scope.param('W_in', complex_glorot_uniform, (1, 2 * hidden_dim))
-    b_in = scope.param(
-        'b_in',
-        lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=dtype),
-        (2 * hidden_dim,)
-    )
+    b_in = scope.param('b_in',
+                       lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=dtype),
+                       (2 * hidden_dim,))
 
-    # 4) 定义第二层输出参数：从 hidden_dim -> 1
+    # 定义第二层参数：从 hidden_dim 映射回 1
     W_out = scope.param('W_out', complex_glorot_uniform, (hidden_dim, 1))
-    b_out = scope.param(
-        'b_out',
-        lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=dtype),
-        (1,)
-    )
+    b_out = scope.param('b_out',
+                        lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=dtype),
+                        (1,))
 
-    # 5) 第一层映射 => (N, 2*hidden_dim)
+    # 第一层全连接映射，输出形状 (N, 2 * hidden_dim)
     pre_act = jnp.dot(x_2d, W_in) + b_in
-    # 拆成两半：(N, hidden_dim) 和 (N, hidden_dim)
+    if debug:
+        print("【调试】pre_act.shape: ", pre_act.shape)
+    # 拆分为两部分，每部分的形状均为 (N, hidden_dim)
     gate, act = jnp.split(pre_act, 2, axis=-1)
 
-    # 6) 门控：一半直接保留 gate，另一半做 SiLU 后再与 gate 逐元素乘
-    #    若想要 GLU，可替换为 gate * jax.nn.sigmoid(act)，等等
-    #    这里直接演示 SwiGLU 风格：gate * silu(act)
+    # 门控操作（SwiGLU 风格）： gate 乘以 SiLU(act)
     h = gate * jax.nn.silu(act)
-
-    # 7) 第二层映射 => (N, 1)
+    if debug:
+        print("【调试】h.shape: ", h.shape)
+    # 第二层全连接映射，输出 (N, 1)
     out = jnp.dot(h, W_out) + b_out
-
-    # 8) squeeze 得到 (N,)
+    if debug:
+        print("【调试】out.shape: ", out.shape)
+    # squeeze 去除最后一维，得到 (N,)
     out_1d = out.squeeze(axis=-1)
-
-    # 9) 将残差加回输入标量
+    if debug:
+        print("【调试】out_1d.shape: ", out_1d.shape)
+    # 残差连接：加上原始的 x_scalar（形状 (N,)）
     out_res = out_1d + x_scalar
+    if debug:
+        print("【调试】最终输出 out_res.shape: ", out_res.shape)
 
-    # 返回 (输出, t)
     return out_res, t
 
   
