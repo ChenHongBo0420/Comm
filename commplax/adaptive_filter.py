@@ -701,7 +701,7 @@ def frame_cpr_kf(
     train: Union[bool, cxopt.Schedule] = False,
     akf: cxopt.Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
     alpha: float = 0.999
-) -> af.AdaptiveFilter:
+) -> AdaptiveFilter:
     """
     Block-based estimator of carrier frequency offset using Kalman filter.
     把 Q, R, w0 都纳入 state，以便在 update 中使用.
