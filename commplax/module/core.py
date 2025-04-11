@@ -293,8 +293,8 @@ def mimofoeaf(
     learn_Q=False
 ):
     """
-    - 在最终输出时, 对 out_signal 与原 signal 做长度对齐
-    - 这样就能避免 (205,2) vs (500,2) 之类错误
+    修正: 在输出 Signal 时，不再用 t._replace(...)。 
+    而是手动创建新的 SigTime(t.start, new_stop, t.sps).
     """
     if mimofn is None:
         mimofn = af.rde  # 默认 RDE
@@ -304,12 +304,14 @@ def mimofoeaf(
 
     # 1) MIMO
     slisig = preslicer(signal)
-    out_sig = scope.child(mimoaf,
-                          mimofn=mimofn,
-                          train=train,
-                          mimokwargs=mimokwargs,
-                          mimoinitargs=mimoinitargs,
-                          name='MIMO4FOE')(slisig)
+    out_sig = scope.child(
+        lambda scp, sig: scp.child(mimoaf,
+                                   mimofn=mimofn,
+                                   train=train,
+                                   mimokwargs=mimokwargs,
+                                   mimoinitargs=mimoinitargs,
+                                   name='MIMO4FOE')(sig)
+    )(slisig)
     y, ty = out_sig
 
     # 2) 分帧 => shape=(N_frames, framesize, dims)
@@ -334,10 +336,10 @@ def mimofoeaf(
     else:
         param_Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
 
-    # 4) 拿 frame_cpr_kf
+    # 4) 拿 frame_cpr_kf => (init, update, apply)
     foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
 
-    # 5) init kalman => state
+    # 5) 初始化 Kalman state
     def init_kalman():
         return foe_init(w0, param_Q=param_Q, param_R=param_R)
     state_var = scope.variable('af_state', 'foe_state',
@@ -349,7 +351,7 @@ def mimofoeaf(
         new_state, w_frame = foe_update(step_i, old_state, data_tuple)
         return new_state, (w_frame, None)
 
-    # 7) iterate
+    # 7) 逐帧 iterate
     af_step, (kf_state, (wf, _)) = af.iterate(
         foe_update_wrapper,
         af_step,
@@ -358,22 +360,24 @@ def mimofoeaf(
     )
 
     N_frames = wf.shape[0]
-    # e.g. (N_frames, dims)
-    wf2 = wf.reshape((N_frames, dims))
-    wp = wf2.mean(axis=-1)  # => (N_frames,)
+    dims = wf.shape[-1]
+    wf_reshaped = wf.reshape((N_frames, dims))
+    wp = wf_reshaped.mean(axis=-1)
 
-    x_wp = jnp.arange(N_frames)*framesize + (framesize-1)/2
+    x_wp = jnp.arange(N_frames)*framesize + (framesize - 1)/2
     x_axis = jnp.arange(y.shape[0])
-    w = jnp.interp(x_axis, x_wp, wp)/2  # or / sps=2 ?
+    w = jnp.interp(x_axis, x_wp, wp)/2  # or /sps
 
     psi = phi + jnp.cumsum(w)
     state_var.value = (psi[-1], af_step, kf_state)
 
-    # 8) 这里做长度对齐 => out_signal长度 = min(psi.shape[0], x.shape[0])
+    # 8) 对齐长度 => L
     L = jnp.minimum(psi.shape[0], x.shape[0])
-    out_val = x[:L] * jnp.exp(-1j*psi[:L])[:, None]
+    out_val = x[:L] * jnp.exp(-1j*psi[:L])[:,None]
 
-    return Signal(out_val, t._replace(stop=t.start + L))
+    # 9) 新建 SigTime => (t.start, t.start+L, t.sps)
+    new_t = SigTime(start=t.start, stop=(t.start + L), sps=t.sps)
+    return Signal(out_val, new_t)
                 
 def mimoaf(
     scope: Scope,
