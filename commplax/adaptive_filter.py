@@ -690,7 +690,7 @@ def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
 
     return AdaptiveFilter(init, update, apply)
 
-    
+
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train: Union[bool, Schedule] = False,
               alpha: float = 0.99,
@@ -811,5 +811,3 @@ def anf(f0: float,
         return ys - es
 
     return AdaptiveFilter(init, update, apply)
-
-
