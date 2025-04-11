@@ -211,60 +211,60 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
       
-def conv1d_ffn(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn=xop.convolve,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    对原始 1D 卷积增加一个 FFN 分支，对卷积输出的幅度信息做修正：
-      1) 进行卷积运算得到 x_conv
-      2) 以 |x_conv|² 为输入经过 FFN 得到修正值（offset）
-      3) 通过一个可训练缩放系数 alpha 残差式加到 x_conv 上
-    """
-    # ------------------ 原始卷积部分 ------------------
-    # 解包输入信号
-    x, t = signal
+# def conv1d_ffn(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn=xop.convolve,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     对原始 1D 卷积增加一个 FFN 分支，对卷积输出的幅度信息做修正：
+#       1) 进行卷积运算得到 x_conv
+#       2) 以 |x_conv|² 为输入经过 FFN 得到修正值（offset）
+#       3) 通过一个可训练缩放系数 alpha 残差式加到 x_conv 上
+#     """
+#     # ------------------ 原始卷积部分 ------------------
+#     # 解包输入信号
+#     x, t = signal
     
-    # 根据 conv1d_t（外部定义的时间变量生成函数）创建时间变量
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     # 根据 conv1d_t（外部定义的时间变量生成函数）创建时间变量
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
-    # 定义卷积核参数，初始化函数为 kernel_init，数据类型为复数
-    # h = scope.param('kernel', kernel_init, (taps,), np.complex64)
+#     # 定义卷积核参数，初始化函数为 kernel_init，数据类型为复数
+#     # h = scope.param('kernel', kernel_init, (taps,), np.complex64)
     
-    # 执行卷积操作（conv_fn 可替换为你需要的卷积运算函数）
-    # x_conv = conv_fn(x, h, mode=mode)
-    if x.ndim == 1:
-        x = x[:, None]
+#     # 执行卷积操作（conv_fn 可替换为你需要的卷积运算函数）
+#     # x_conv = conv_fn(x, h, mode=mode)
+#     if x.ndim == 1:
+#         x = x[:, None]
     
-    # ------------------ FFN 分支部分 ------------------
-    # 以卷积结果的幅度平方作为 FFN 的输入，这里包装成 Signal 对象以便传递时间 t
-    ffn_input = Signal(jnp.abs(x)**2, t)
+#     # ------------------ FFN 分支部分 ------------------
+#     # 以卷积结果的幅度平方作为 FFN 的输入，这里包装成 Signal 对象以便传递时间 t
+#     ffn_input = Signal(jnp.abs(x)**2, t)
     
-    # 使用子模块调用 FFN，模块名称设为 "Conv1dFFN"
-    # 注意：residual_ffn 的实现可参考之前的示例，返回值形状为 (N,) 与对应的时间变量
-    offset, t_ffn = scope.child(residual_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
+#     # 使用子模块调用 FFN，模块名称设为 "Conv1dFFN"
+#     # 注意：residual_ffn 的实现可参考之前的示例，返回值形状为 (N,) 与对应的时间变量
+#     offset, t_ffn = scope.child(residual_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
     
-    # 将 offset 转换为与卷积输出相同的数据类型，并扩展维度以便于广播相加
-    offset_cplx = jnp.asarray(offset, x.dtype)[:, None]
+#     # 将 offset 转换为与卷积输出相同的数据类型，并扩展维度以便于广播相加
+#     offset_cplx = jnp.asarray(offset, x.dtype)[:, None]
     
-    # 可选：对 FFN 输出加一个可训练缩放因子 alpha
-    if use_alpha:
-        alpha = scope.param('ffn_alpha', nn.initializers.ones, ())
-    else:
-        alpha = 1.0
+#     # 可选：对 FFN 输出加一个可训练缩放因子 alpha
+#     if use_alpha:
+#         alpha = scope.param('ffn_alpha', nn.initializers.ones, ())
+#     else:
+#         alpha = 1.0
     
-    # 将 FFN 产生的修正值以残差形式加回卷积输出
-    x_out = alpha * offset_cplx
+#     # 将 FFN 产生的修正值以残差形式加回卷积输出
+#     x_out = alpha * offset_cplx
     
-    # 返回更新后的信号，这里时间变量使用 FFN 返回的 t_ffn（你也可选择保留原 t）
-    return Signal(x_out, t_ffn)
+#     # 返回更新后的信号，这里时间变量使用 FFN 返回的 t_ffn（你也可选择保留原 t）
+#     return Signal(x_out, t_ffn)
   
   
 def kernel_initializer(rng, shape):
@@ -623,65 +623,65 @@ def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2, debug=True):
 
   
 # from jax import debug
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss,
-#     hidden_dim=2,
-#     use_alpha=True,
-# ):
-#     """
-#     保持原 fdbp(D->N)结构:
-#       1) D
-#       2) N
-#       + 3) residual MLP => out shape=(N,) and add to x
-#     """
-#     x, t = signal
-#     # 1) 色散
-#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss,
+    hidden_dim=2,
+    use_alpha=True,
+):
+    """
+    保持原 fdbp(D->N)结构:
+      1) D
+      2) N
+      + 3) residual MLP => out shape=(N,) and add to x
+    """
+    x, t = signal
+    # 1) 色散
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-#     # 可选: 对res加个可训练缩放
-#     if use_alpha:
-#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-#     else:
-#         alpha = 1.0
-#     # debug.print("alpha = {}", alpha)
-#     for i in range(steps):
-#         # --- (A) 色散补偿 (D)
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+    # 可选: 对res加个可训练缩放
+    if use_alpha:
+        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+    else:
+        alpha = 1.0
+    # debug.print("alpha = {}", alpha)
+    for i in range(steps):
+        # --- (A) 色散补偿 (D)
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
-#         # --- (B) 非线性补偿 (N)
-#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-#             Signal(jnp.abs(x)**2, td),
-#             taps=ntaps,
-#             kernel_init=n_init
-#         )
-#         # 应用相位: x_new = exp(j*c) * x[...]
-#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-#         # --- (C) residual MLP
-#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-#             Signal(jnp.abs(x_new)**2, tN),
-#             hidden_dim=hidden_dim
-#         )
-#         # res_val => (N_new,)
-#         # cast to complex, or interpret as real
-#         # 这里示例 "在幅度上+res"
-#         # x_new += alpha * res_val
-#         # 不分real/imag => 全部 real offset => x_new + alpha * res
-#         # 只要 x_new是complex => convert
-#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-#         x_new = x_new + alpha * res_val_cplx_2d 
+        # --- (B) 非线性补偿 (N)
+        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(jnp.abs(x)**2, td),
+            taps=ntaps,
+            kernel_init=n_init
+        )
+        # 应用相位: x_new = exp(j*c) * x[...]
+        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        # --- (C) residual MLP
+        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+        res_val, t_res = scope.child(residual_ffn, name=f'ResCNN_{i}')(
+            Signal(jnp.abs(x_new)**2, tN),
+            hidden_dim=hidden_dim
+        )
+        # res_val => (N_new,)
+        # cast to complex, or interpret as real
+        # 这里示例 "在幅度上+res"
+        # x_new += alpha * res_val
+        # 不分real/imag => 全部 real offset => x_new + alpha * res
+        # 只要 x_new是complex => convert
+        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+        x_new = x_new + alpha * res_val_cplx_2d 
         
-#         # update x,t
-#         x, t = x_new, t_res
-#     return Signal(x, t)
+        # update x,t
+        x, t = x_new, t_res
+    return Signal(x, t)
 
 # def fdbp(
 #     scope: Scope,
