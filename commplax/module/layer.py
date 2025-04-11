@@ -70,6 +70,7 @@ def scan(layer, **scan_kwargs):
 
 BatchPowerNorm = make_layer(core.batchpowernorm, mutable=('norm',))
 Conv1d = make_layer(core.conv1d)
+Conv1d_ffn = make_layer(core.conv1d_ffn)
 MIMOConv1d = make_layer(core.mimoconv1d)
 MIMOAF = make_layer(core.mimoaf, mutable=('af_state',))
 FDBP = make_layer(core.fdbp)
