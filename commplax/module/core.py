@@ -342,8 +342,15 @@ def mimofoeaf(
     phi, af_step, af_stats = state.value
 
     # (6) 用一个内联函数，把 R, Q, w0 传给 foe_update_orig
-    def foe_update_with_params(stats, frame_data):
-        return foe_update_orig(stats, frame_data, R=R, Q=Q, w0=w0)
+    def foe_update_with_params(step_i, old_state, data_tuple):
+        # data_tuple = (signal_i, truth_i)
+        # 如果你不需要 truth，就忽略 data_tuple[1]
+        frame_data = data_tuple[0]
+        # 然后再调用原先 foe_update_orig(...) 
+        # 注意 foe_update_orig 可能只接受 (old_state, frame_data, R, Q, w0) 
+        new_state, w_frame = foe_update_orig(old_state, frame_data, R=R, Q=Q, w0=w0)
+        # 返回和 update 相同格式 => (new_state, (some outputs))
+        return new_state, (w_frame, None)
 
     # (7) 调用 af.iterate(...)
     af_step, (af_stats, (wf, _)) = af.iterate(
