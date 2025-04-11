@@ -210,61 +210,6 @@ def conv1d(
                      (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
-      
-def conv1d_ffn(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn=xop.convolve,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    对原始 1D 卷积增加一个 FFN 分支，对卷积输出的幅度信息做修正：
-      1) 进行卷积运算得到 x_conv
-      2) 以 |x_conv|² 为输入经过 FFN 得到修正值（offset）
-      3) 通过一个可训练缩放系数 alpha 残差式加到 x_conv 上
-    """
-    # ------------------ 原始卷积部分 ------------------
-    # 解包输入信号
-    x, t = signal
-    
-    # 根据 conv1d_t（外部定义的时间变量生成函数）创建时间变量
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    
-    # 定义卷积核参数，初始化函数为 kernel_init，数据类型为复数
-    # h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    
-    # 执行卷积操作（conv_fn 可替换为你需要的卷积运算函数）
-    # x_conv = conv_fn(x, h, mode=mode)
-    if x.ndim == 1:
-        x = x[:, None]
-    
-    # ------------------ FFN 分支部分 ------------------
-    # 以卷积结果的幅度平方作为 FFN 的输入，这里包装成 Signal 对象以便传递时间 t
-    ffn_input = Signal(jnp.abs(x)**2, t)
-    
-    # 使用子模块调用 FFN，模块名称设为 "Conv1dFFN"
-    # 注意：residual_ffn 的实现可参考之前的示例，返回值形状为 (N,) 与对应的时间变量
-    offset, t_ffn = scope.child(residual_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
-    
-    # 将 offset 转换为与卷积输出相同的数据类型，并扩展维度以便于广播相加
-    offset_cplx = jnp.asarray(offset, x.dtype)[:, None]
-    
-    # 可选：对 FFN 输出加一个可训练缩放因子 alpha
-    if use_alpha:
-        alpha = scope.param('ffn_alpha', nn.initializers.ones, ())
-    else:
-        alpha = 1.0
-    
-    # 将 FFN 产生的修正值以残差形式加回卷积输出
-    x_out = alpha * offset_cplx
-    
-    # 返回更新后的信号，这里时间变量使用 FFN 返回的 t_ffn（你也可选择保留原 t）
-    return Signal(x_out, t_ffn)
   
   
 def kernel_initializer(rng, shape):
@@ -492,38 +437,38 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
 
-# def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
-#     """
-#     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
-#     然后使用两层 MLP 生成 (N,) 复数 residual。
-#     """
-#     x, t = signal
-#     # x 的形状例如 (N, 2) 或 (N, C) 等
-#     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
-#     # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
-#     x_scalar = jnp.linalg.norm(x, axis=-1)
-#     N = x_scalar.shape[0]
-#     # 2) reshape 成 (N,1)，并转换为复数数据类型
-#     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
-#     # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
-#     W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
-#     b1 = scope.param('b1',
-#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-#                      (hidden_dim,))
-#     W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
-#     b2 = scope.param('b2',
-#                      lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
-#                      (1,))
-#     # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
-#     h = jnp.dot(x_2d, W1) + b1
-#     h = jax.nn.gelu(h)
-#     # 5) 输出层：形状 (N,1)
-#     out = jnp.dot(h, W2) + b2
-#     # 6) squeeze 得到形状 (N,)
-#     out_1d = out.squeeze(axis=-1)
-#     return out_1d, t
+def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
+    """
+    对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
+    然后使用两层 MLP 生成 (N,) 复数 residual。
+    """
+    x, t = signal
+    # x 的形状例如 (N, 2) 或 (N, C) 等
+    # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
+    # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+    x_scalar = jnp.linalg.norm(x, axis=-1)
+    N = x_scalar.shape[0]
+    # 2) reshape 成 (N,1)，并转换为复数数据类型
+    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
+    # 3) 定义 2 层 MLP 的参数，注意参数的 dtype 为 jnp.complex64
+    W1 = scope.param('W1', complex_glorot_uniform, (1, hidden_dim))
+    b1 = scope.param('b1',
+                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+                     (hidden_dim,))
+    W2 = scope.param('W2', complex_glorot_uniform, (hidden_dim, 1))
+    b2 = scope.param('b2',
+                     lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=jnp.complex64),
+                     (1,))
+    # 4) 第一层全连接：hidden 的形状为 (N, hidden_dim)
+    h = jnp.dot(x_2d, W1) + b1
+    h = jax.nn.gelu(h)
+    # 5) 输出层：形状 (N,1)
+    out = jnp.dot(h, W2) + b2
+    # 6) squeeze 得到形状 (N,)
+    out_1d = out.squeeze(axis=-1)
+    return out_1d, t
                              
-def residual_ffn(
+def conv1d_ffn(
     scope: Scope,
     signal,
     taps=31,
@@ -563,7 +508,7 @@ def residual_ffn(
     
     # 使用子模块调用 residual_ffn（保证 residual_ffn 的实现符合要求），
     # 得到修正 offset 和新的时间变量 t_ffn
-    offset, t_ffn = scope.child(residual_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
+    offset, t_ffn = scope.child(conv1d_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
     
     # 将 offset 转换为与卷积输出相同的数据类型，并扩展为二维，以便后续广播相加
     offset_cplx = jnp.asarray(offset, x_conv.dtype)[:, None]
@@ -624,7 +569,7 @@ def fdbp(
         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
         # --- (C) residual MLP
         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_ffn, name=f'ResCNN_{i}')(
+        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
             Signal(jnp.abs(x_new)**2, tN),
             hidden_dim=hidden_dim
         )
