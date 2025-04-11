@@ -314,10 +314,7 @@ def mimofoeaf(
 
     # (2) 分帧
     yf = xop.frame(y, framesize, framesize)
-
-    # (3) 通过 af.array(...) 并在其返回的可调用上指定 dims=dims
-    #     这样就不会在 array() 函数本身传入 dims
-    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf)(dims=dims, **foekwargs)
+    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, replicas=1)(dims=dims, **foekwargs)
 
     # (4) 定义可学习的 R, Q(可选)
     if learn_R:
