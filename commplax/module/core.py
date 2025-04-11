@@ -240,6 +240,8 @@ def conv1d_ffn(
     
     # 执行卷积操作（conv_fn 可替换为你需要的卷积运算函数）
     # x_conv = conv_fn(x, h, mode=mode)
+    if x.ndim == 1:
+        x = x[:, None]
     
     # ------------------ FFN 分支部分 ------------------
     # 以卷积结果的幅度平方作为 FFN 的输入，这里包装成 Signal 对象以便传递时间 t
