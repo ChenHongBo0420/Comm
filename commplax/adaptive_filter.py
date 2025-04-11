@@ -690,7 +690,7 @@ def ddlms(
 
 #     return AdaptiveFilter(init, update, apply)
 
-@partial(af.adaptive_filter, trainable=True)
+@partial(adaptive_filter, trainable=True)
 def frame_cpr_kf(
     Q_init: Array = jnp.array([[0,    0],
                                [0, 1e-9]]),
