@@ -692,94 +692,85 @@ def ddlms(
 
 @partial(adaptive_filter, trainable=True)
 def frame_cpr_kf(
-    Q_init: Array = jnp.array([[0,    0],
-                               [0, 1e-9]]),
-    R_init: Array = jnp.array([[1e-2, 0],
-                               [0, 1e-3]]),
-    w0_init: float = 0.0,  
+    Q_init: Array = jnp.array([[0.0, 0.0],
+                               [0.0, 1e-9]], dtype=jnp.float32),
+    R_init: Array = jnp.array([[1e-2, 0.0],
+                               [0.0, 1e-3]], dtype=jnp.float32),
+    w0_init: float = 0.0,
     const: Array = comm.const("16QAM", norm=True),
     train: Union[bool, cxopt.Schedule] = False,
     akf: cxopt.Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
     alpha: float = 0.999
 ) -> AdaptiveFilter:
     """
-    Block-based CFO Kalman filter. 
-    支持外部传入 (external_R, external_Q) 来替换内部 state, 从而实现端到端学习.
-
-    Args:
-      Q_init, R_init: 卡尔曼初始Q,R
-      w0_init: 初始 freq
-      const, train, akf, alpha: 常规参数
+    示例：Block-based CFO Kalman filter
+    State = (z_c, P_c, Q, R)
     """
 
     train = cxopt.make_schedule(train)
     akf = cxopt.make_schedule(akf)
     const = jnp.asarray(const, dtype=jnp.complex64)
 
-    def init(w0=None):
-        """init => (z_c, P_c, Q, R)"""
+    def init(w0=None, param_Q=None, param_R=None):
+        """
+        w0: 初始 freq offset
+        param_Q, param_R: 若外部想覆盖,可传进来.否则用 Q_init, R_init
+        """
         if w0 is None:
             w0 = w0_init
-        z0 = jnp.array([[0.0],[w0]], dtype=jnp.float32)
+        if param_Q is None:
+            param_Q = Q_init
+        if param_R is None:
+            param_R = R_init
+
+        z0 = jnp.array([[0.0],[w0]], dtype=jnp.float32)   # [phi, freq]
         P0 = jnp.zeros((2,2), dtype=jnp.float32)
-        # 这里存入 Q_init, R_init 作为初始
-        return (z0, P0, Q_init, R_init)
+        return (z0, P0, param_Q, param_R)
 
     def update(step_i, state, inp):
         """
-        update(step_i, state, inp) => (new_state, out)
-        state: (z_c, P_c, Q_internal, R_internal)
-        inp: (frame_data, external_R, external_Q, maybe truth)
-             - frame_data shape=(framesize, dims)
-             - external_R, external_Q => shape=(2,2) or whatever you need
+        state = (z_c, P_c, Q, R)
+        inp   = (frame_data, [可选truth?])
         """
-        (z_c, P_c, Q_int, R_int) = state
-        # 这里解包 inp
-        frame_data, ext_R, ext_Q = inp[0], inp[1], inp[2]  # 3个组成
-
-        # 覆盖 => 让卡尔曼公式真正使用 "外部" R,Q
-        # 若 ext_R, ext_Q=None 可以改成 jnp.where(...) or you can decide logic
-        Q = ext_Q
-        R = ext_R
-
+        (z_c, P_c, Q, R) = state
+        frame_data = inp[0]  # shape=(framesize, dims)
         N = frame_data.shape[0]
+
+        # 线性相位模型
         A = jnp.array([[1, N],[0,1]], dtype=jnp.float32)
         z_p = A @ z_c
         P_p = A @ P_c @ A.T + Q
 
-        n = jnp.arange(N, dtype=jnp.float32)-(N-1)/2
+        # 做个简单演示 => y(t)
+        n = jnp.arange(N, dtype=jnp.float32)
         phi_p = z_p[0,0] + z_p[1,0]*n
-        # shape => frame_data: (N,dims)
-        # broadcast phi => (N,1)
+        # broadcast => (N,dims) * (N,1)
         s_p = frame_data * jnp.exp(-1j * phi_p[:,None])
 
-        # 这里随便做个简单观测 e
-        sumsp = jnp.sum(s_p)
-        e = jnp.array([
-            [jnp.arctan2(sumsp.imag, sumsp.real)],
-            [0.0]
-        ], dtype=jnp.float32)
+        # 例如 compute e
+        sp_sum = jnp.sum(s_p)
+        e = jnp.array([[jnp.arctan2(sp_sum.imag, sp_sum.real)],
+                       [0.0]], dtype=jnp.float32)
 
-        # 卡尔曼增益
-        P_p_R = P_p + R
-        G = P_p @ jnp.linalg.pinv(P_p_R)
+        # KF update
+        P_p_plus_R = P_p + R
+        G = P_p @ jnp.linalg.pinv(P_p_plus_R)
         z_c_new = z_p + G @ e
-        P_c_new = (jnp.eye(2) - G) @ P_p
+        P_c_new = (jnp.eye(2, dtype=jnp.float32) - G) @ P_p
 
-        # 也可做 AKF => Q = alpha*Q + ...
-        # 这儿省略或加 => Q = jnp.where(akf(step_i), alpha*Q + ... , Q)
-
-        new_state = (z_c_new, P_c_new, Q_int, R_int)
-        # out: 形状 (1,dims)? 这里给 demo
+        # 也可做 AKF => Q = ...
+        new_state = (z_c_new, P_c_new, Q, R)
+        # out => w_frame shape=(1,dims)? 仅演示
         w_frame = jnp.array([[z_c_new[1,0], 0.0]], dtype=jnp.float32)
+
         return new_state, w_frame
 
     def apply(params, frames):
-        # frames shape => do as you want
+        # 视需要实现
         return frames
 
     return (init, update, apply)
-
+    
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train: Union[bool, Schedule] = False,
               alpha: float = 0.99,
