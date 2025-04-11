@@ -236,21 +236,21 @@ def conv1d_ffn(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     
     # 定义卷积核参数，初始化函数为 kernel_init，数据类型为复数
-    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
+    # h = scope.param('kernel', kernel_init, (taps,), np.complex64)
     
     # 执行卷积操作（conv_fn 可替换为你需要的卷积运算函数）
-    x_conv = conv_fn(x, h, mode=mode)
+    # x_conv = conv_fn(x, h, mode=mode)
     
     # ------------------ FFN 分支部分 ------------------
     # 以卷积结果的幅度平方作为 FFN 的输入，这里包装成 Signal 对象以便传递时间 t
-    ffn_input = Signal(jnp.abs(x_conv)**2, t)
+    ffn_input = Signal(jnp.abs(x)**2, t)
     
     # 使用子模块调用 FFN，模块名称设为 "Conv1dFFN"
     # 注意：residual_ffn 的实现可参考之前的示例，返回值形状为 (N,) 与对应的时间变量
     offset, t_ffn = scope.child(residual_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
     
     # 将 offset 转换为与卷积输出相同的数据类型，并扩展维度以便于广播相加
-    offset_cplx = jnp.asarray(offset, x_conv.dtype)[:, None]
+    offset_cplx = jnp.asarray(offset, x.dtype)[:, None]
     
     # 可选：对 FFN 输出加一个可训练缩放因子 alpha
     if use_alpha:
@@ -259,7 +259,7 @@ def conv1d_ffn(
         alpha = 1.0
     
     # 将 FFN 产生的修正值以残差形式加回卷积输出
-    x_out = x_conv + alpha * offset_cplx
+    x_out = alpha * offset_cplx
     
     # 返回更新后的信号，这里时间变量使用 FFN 返回的 t_ffn（你也可选择保留原 t）
     return Signal(x_out, t_ffn)
@@ -523,32 +523,21 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
                              
 def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
     """
-    使用 FFN 风格的门控（例如 SwiGLU/GLU）结构，
-    对输入信号的模长进行两层线性映射，并加上残差项。
-
-    参数:
-      scope: 模块作用域，用于参数创建
-      signal: 包含 (x, t)，其中 x 可以是复数输入的特征
-      hidden_dim: 中间层大小的一半（因为会映射到 2*hidden_dim，然后拆分成两部分）
-    
-    返回:
-      (输出, t)
-      其中输出形状为 (N,) ，与输入批次对应，t 保持不变
+    将原先的两层 MLP 改为 FFN 风格的门控（SwiGLU/GLU）结构，并加上残差输出。
+    signal: (x, t)
+        x: shape=(N, C) 或 (N, 2) 等复数输入
+        t: 时间或其他附带信息，直接原样返回
+    hidden_dim: 中间层大小的一半（因为要一次映射到2*hidden_dim做门控拆分）
     """
-    # 解包输入
     x, t = signal
-    
-    # 确保 x 至少有一维（比如批次维度），防止后续 axis 操作出错
-    x = jnp.atleast_1d(x)
-    
-    # 1) 对 x 做范数处理，得到形状为 (N,) 的标量张量
+    # 1) 对 x 做范数处理，得到 (N,) 标量
     x_scalar = jnp.linalg.norm(x, axis=-1)
     N = x_scalar.shape[0]
 
-    # 2) reshape 为 (N, 1)，并转换为复数类型
+    # 2) reshape => (N, 1)，并转换为复数 (若不需要复数可去掉 astype)
     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
 
-    # 3) 定义第一层门控参数：映射到 2*hidden_dim 个通道，然后拆分为 gate 和 act 部分
+    # 3) 定义第一层门控参数：输出 2*hidden_dim 个通道，拆分成(门控, 激活)
     W_in = scope.param('W_in', complex_glorot_uniform, (1, 2 * hidden_dim))
     b_in = scope.param(
         'b_in',
@@ -556,7 +545,7 @@ def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
         (2 * hidden_dim,)
     )
 
-    # 4) 定义第二层输出参数：从 hidden_dim 映射到 1
+    # 4) 定义第二层输出参数：从 hidden_dim -> 1
     W_out = scope.param('W_out', complex_glorot_uniform, (hidden_dim, 1))
     b_out = scope.param(
         'b_out',
@@ -564,25 +553,26 @@ def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
         (1,)
     )
 
-    # 5) 第一层映射：输出形状 (N, 2 * hidden_dim)
+    # 5) 第一层映射 => (N, 2*hidden_dim)
     pre_act = jnp.dot(x_2d, W_in) + b_in
-    # 拆分为两半：得到两个形状均为 (N, hidden_dim) 的张量
+    # 拆成两半：(N, hidden_dim) 和 (N, hidden_dim)
     gate, act = jnp.split(pre_act, 2, axis=-1)
 
-    # 6) 执行门控操作：
-    #    这里采用 SwiGLU 风格，即 gate 与 SiLU(act) 的逐元素乘积，
-    #    若想用 GLU 可修改为 gate * jax.nn.sigmoid(act)
+    # 6) 门控：一半直接保留 gate，另一半做 SiLU 后再与 gate 逐元素乘
+    #    若想要 GLU，可替换为 gate * jax.nn.sigmoid(act)，等等
+    #    这里直接演示 SwiGLU 风格：gate * silu(act)
     h = gate * jax.nn.silu(act)
 
-    # 7) 第二层映射：输出形状 (N, 1)
+    # 7) 第二层映射 => (N, 1)
     out = jnp.dot(h, W_out) + b_out
 
-    # 8) squeeze 到 (N,) 形状
+    # 8) squeeze 得到 (N,)
     out_1d = out.squeeze(axis=-1)
 
-    # 9) 残差连接：加上原始输入 x_scalar
+    # 9) 将残差加回输入标量
     out_res = out_1d + x_scalar
 
+    # 返回 (输出, t)
     return out_res, t
 
   
