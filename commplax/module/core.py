@@ -522,15 +522,33 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 #     return out_1d, t
                              
 def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
+    """
+    使用 FFN 风格的门控（例如 SwiGLU/GLU）结构，
+    对输入信号的模长进行两层线性映射，并加上残差项。
+
+    参数:
+      scope: 模块作用域，用于参数创建
+      signal: 包含 (x, t)，其中 x 可以是复数输入的特征
+      hidden_dim: 中间层大小的一半（因为会映射到 2*hidden_dim，然后拆分成两部分）
+    
+    返回:
+      (输出, t)
+      其中输出形状为 (N,) ，与输入批次对应，t 保持不变
+    """
+    # 解包输入
     x, t = signal
-    # 1) 对 x 做范数处理，得到 (N,) 标量
+    
+    # 确保 x 至少有一维（比如批次维度），防止后续 axis 操作出错
+    x = jnp.atleast_1d(x)
+    
+    # 1) 对 x 做范数处理，得到形状为 (N,) 的标量张量
     x_scalar = jnp.linalg.norm(x, axis=-1)
     N = x_scalar.shape[0]
 
-    # 2) reshape => (N, 1)，并转换为复数 (若不需要复数可去掉 astype)
+    # 2) reshape 为 (N, 1)，并转换为复数类型
     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
 
-    # 3) 定义第一层门控参数：输出 2*hidden_dim 个通道，拆分成(门控, 激活)
+    # 3) 定义第一层门控参数：映射到 2*hidden_dim 个通道，然后拆分为 gate 和 act 部分
     W_in = scope.param('W_in', complex_glorot_uniform, (1, 2 * hidden_dim))
     b_in = scope.param(
         'b_in',
@@ -538,7 +556,7 @@ def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
         (2 * hidden_dim,)
     )
 
-    # 4) 定义第二层输出参数：从 hidden_dim -> 1
+    # 4) 定义第二层输出参数：从 hidden_dim 映射到 1
     W_out = scope.param('W_out', complex_glorot_uniform, (hidden_dim, 1))
     b_out = scope.param(
         'b_out',
@@ -546,27 +564,27 @@ def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
         (1,)
     )
 
-    # 5) 第一层映射 => (N, 2*hidden_dim)
+    # 5) 第一层映射：输出形状 (N, 2 * hidden_dim)
     pre_act = jnp.dot(x_2d, W_in) + b_in
-    # 拆成两半：(N, hidden_dim) 和 (N, hidden_dim)
+    # 拆分为两半：得到两个形状均为 (N, hidden_dim) 的张量
     gate, act = jnp.split(pre_act, 2, axis=-1)
 
-    # 6) 门控：一半直接保留 gate，另一半做 SiLU 后再与 gate 逐元素乘
-    #    若想要 GLU，可替换为 gate * jax.nn.sigmoid(act)，等等
-    #    这里直接演示 SwiGLU 风格：gate * silu(act)
+    # 6) 执行门控操作：
+    #    这里采用 SwiGLU 风格，即 gate 与 SiLU(act) 的逐元素乘积，
+    #    若想用 GLU 可修改为 gate * jax.nn.sigmoid(act)
     h = gate * jax.nn.silu(act)
 
-    # 7) 第二层映射 => (N, 1)
+    # 7) 第二层映射：输出形状 (N, 1)
     out = jnp.dot(h, W_out) + b_out
 
-    # 8) squeeze 得到 (N,)
+    # 8) squeeze 到 (N,) 形状
     out_1d = out.squeeze(axis=-1)
 
-    # 9) 将残差加回输入标量
+    # 9) 残差连接：加上原始输入 x_scalar
     out_res = out_1d + x_scalar
 
-    # 返回 (输出, t)
     return out_res, t
+
   
 # from jax import debug
 # def fdbp(
