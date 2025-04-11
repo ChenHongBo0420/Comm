@@ -314,7 +314,7 @@ def mimofoeaf(
 
     # (2) 分帧
     yf = xop.frame(y, framesize, framesize)
-    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, replicas=1)(dims=dims, **foekwargs)
+    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, replicas=1)(**foekwargs)
 
     # (4) 定义可学习的 R, Q(可选)
     if learn_R:
