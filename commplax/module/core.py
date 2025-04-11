@@ -531,9 +531,14 @@ def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2):
     """
     x, t = signal
     # 1) 对 x 做范数处理，得到 (N,) 标量
+    x = jnp.atleast_1d(x)
+    if x.ndim == 1:
+        x_scalar = x
+    else:
+        x_scalar = jnp.linalg.norm(x, axis=-1)
     x_scalar = jnp.linalg.norm(x, axis=-1)
     N = x_scalar.shape[0]
-
+    
     # 2) reshape => (N, 1)，并转换为复数 (若不需要复数可去掉 astype)
     x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
 
