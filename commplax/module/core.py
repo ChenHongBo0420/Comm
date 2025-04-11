@@ -523,103 +523,62 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 #     out_1d = out.squeeze(axis=-1)
 #     return out_1d, t
                              
-def residual_ffn(scope: Scope, signal: Signal, hidden_dim=2, debug=True):
+def conv1d_ffn(
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn=xop.convolve,
+    hidden_dim=2,
+    use_alpha=True,
+):
     """
-    利用 FFN 风格的门控结构对输入信号进行处理并生成残差，
-    调试版本会打印输入和中间变量的形状信息，帮助定位错误。
-
-    参数:
-      scope: 模块作用域，用于参数创建
-      signal: 包含 (x, t) 的元组，其中 x 可为多通道复数数据或一维标量数据
-      hidden_dim: 中间层大小的一半（因为会映射到 2*hidden_dim 后拆分为两部分）
-      debug: 是否打印调试信息
-
-    返回:
-      (输出, t)
-      输出形状应为 (N,)（N 为样本数），t 保持原样
+    对原始 1D 卷积增加一个 FFN 分支，对卷积输出的幅度信息做修正：
+      1) 进行卷积运算得到 x_conv
+      2) 以 |x_conv|² 为输入经过 FFN 得到修正值（offset）
+      3) 通过一个可训练缩放系数 alpha 将修正值残差式加到 x_conv 上
     """
-    # 解包输入
+    # ------------------ 原始卷积部分 ------------------
+    # 解包输入信号
     x, t = signal
-
-    # 保证 x 至少为一维（若原本是标量则转换为形状 (1,)）
-    x = jnp.atleast_1d(x)
-    if debug:
-        print("【调试】输入 x: ", x)
-        print("【调试】x.shape: ", x.shape)
-        print("【调试】x.ndim: ", x.ndim)
-
-    # 根据 x 的维度确定如何提取每个样本的标量特征
-    if x.ndim == 1:
-        # x 本身已经是一维，每个元素即为一个样本的标量特征
-        x_scalar = x
-        if debug:
-            print("【调试】x_ndim == 1，直接使用 x 作为 x_scalar.")
+    
+    # 利用外部定义的 conv1d_t 函数生成新的时间变量
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    
+    # 定义卷积核参数，使用 kernel_init 初始化，数据类型为复数
+    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
+    
+    # 执行卷积操作
+    x_conv = conv_fn(x, h, mode=mode)
+    
+    # 保证卷积结果至少为二维（例如：(N,) 转换为 (N,1)）
+    if x_conv.ndim == 1:
+        x_conv = x_conv[:, None]
+    
+    # ------------------ FFN 分支部分 ------------------
+    # 以卷积结果的幅度平方作为 FFN 的输入特征
+    ffn_input = Signal(jnp.abs(x_conv)**2, t)
+    
+    # 使用子模块调用 residual_ffn（保证 residual_ffn 的实现符合要求），
+    # 得到修正 offset 和新的时间变量 t_ffn
+    offset, t_ffn = scope.child(residual_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
+    
+    # 将 offset 转换为与卷积输出相同的数据类型，并扩展为二维，以便后续广播相加
+    offset_cplx = jnp.asarray(offset, x_conv.dtype)[:, None]
+    
+    # 可选：对 FFN 输出加上一个可训练缩放系数 alpha
+    if use_alpha:
+        alpha = scope.param('ffn_alpha', nn.initializers.ones, ())
     else:
-        # 对于多维情况，假设最后一维为通道，沿该维度计算范数
-        x_scalar = jnp.linalg.norm(x, axis=-1)
-        if debug:
-            print("【调试】x_ndim > 1，使用 jnp.linalg.norm(x, axis=-1) 计算 x_scalar.")
-
-    if debug:
-        print("【调试】x_scalar: ", x_scalar)
-        # 打印 x_scalar 的形状，如果它是标量（零维）将没有 shape[0]
-        try:
-            print("【调试】x_scalar.shape: ", x_scalar.shape)
-        except Exception as e:
-            print("【调试】获取 x_scalar.shape 出错:", e)
-        print("【调试】x_scalar.ndim: ", x_scalar.ndim)
-
-    # 此处要求 x_scalar 为一维数组，每个样本对应一个标量值
-    try:
-        N = x_scalar.shape[0]
-    except Exception as e:
-        print("【调试】获取样本数 N 时出错：", e)
-        raise e
-    if debug:
-        print("【调试】N (样本数): ", N)
-
-    # 将 x_scalar 重塑为 (N, 1) 并转换为复数类型
-    x_2d = x_scalar.reshape(N, 1).astype(jnp.complex64)
-    if debug:
-        print("【调试】x_2d.shape: ", x_2d.shape)
-
-    # 定义门控层参数：第一层将输入映射到 2*hidden_dim 个通道
-    W_in = scope.param('W_in', complex_glorot_uniform, (1, 2 * hidden_dim))
-    b_in = scope.param('b_in',
-                       lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=dtype),
-                       (2 * hidden_dim,))
-
-    # 定义第二层参数：从 hidden_dim 映射回 1
-    W_out = scope.param('W_out', complex_glorot_uniform, (hidden_dim, 1))
-    b_out = scope.param('b_out',
-                        lambda key, shape, dtype=jnp.complex64: jnp.zeros(shape, dtype=dtype),
-                        (1,))
-
-    # 第一层全连接映射，输出形状 (N, 2 * hidden_dim)
-    pre_act = jnp.dot(x_2d, W_in) + b_in
-    if debug:
-        print("【调试】pre_act.shape: ", pre_act.shape)
-    # 拆分为两部分，每部分的形状均为 (N, hidden_dim)
-    gate, act = jnp.split(pre_act, 2, axis=-1)
-
-    # 门控操作（SwiGLU 风格）： gate 乘以 SiLU(act)
-    h = gate * jax.nn.silu(act)
-    if debug:
-        print("【调试】h.shape: ", h.shape)
-    # 第二层全连接映射，输出 (N, 1)
-    out = jnp.dot(h, W_out) + b_out
-    if debug:
-        print("【调试】out.shape: ", out.shape)
-    # squeeze 去除最后一维，得到 (N,)
-    out_1d = out.squeeze(axis=-1)
-    if debug:
-        print("【调试】out_1d.shape: ", out_1d.shape)
-    # 残差连接：加上原始的 x_scalar（形状 (N,)）
-    out_res = out_1d + x_scalar
-    if debug:
-        print("【调试】最终输出 out_res.shape: ", out_res.shape)
-
-    return out_res, t
+        alpha = 1.0
+    
+    # 将 FFN 产生的修正值以残差形式加到卷积输出上
+    x_out = x_conv + alpha * offset_cplx
+    
+    # 返回更新后的 Signal，使用 FFN 返回的时间变量 t_ffn（也可以保留原来的 t）
+    return Signal(x_out, t_ffn)
 
   
 # from jax import debug
