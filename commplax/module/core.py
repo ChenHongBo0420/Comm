@@ -212,6 +212,7 @@ def conv1d(
     return Signal(x, t)
 
   
+  
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
@@ -230,9 +231,8 @@ def mimoconv1d(
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
-
-   
-   
+      
+      
 def mimofoeaf(scope: Scope,
               signal,
               framesize=100,
@@ -278,122 +278,6 @@ def mimofoeaf(scope: Scope,
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
 
-# def mimofoeaf(
-#     scope: Scope,
-#     signal: Signal,
-#     framesize=100,
-#     w0=0.0,
-#     train=False,
-#     preslicer=lambda x: x,
-#     foekwargs={},
-#     mimofn=None,
-#     mimokwargs={},
-#     mimoinitargs={},
-#     learn_R=False,
-#     learn_Q=False
-# ):
-#     """
-#     改进: 在最终输出时保证 (stop-start) >= framesize, 
-#     避免 frame length < fstep 报错. 
-#     """
-
-#     if mimofn is None:
-#         # 默认=af.rde
-#         import commplax.adaptive_filter as af
-#         mimofn = af.rde
-
-#     x, t = signal
-#     dims = x.shape[-1]
-
-#     # (1) MIMO
-#     slisig = preslicer(signal)
-#     out_sig = scope.child(mimoaf,
-#                           mimofn=mimofn,
-#                           train=train,
-#                           mimokwargs=mimokwargs,
-#                           mimoinitargs=mimoinitargs,
-#                           name='MIMO4FOE')(slisig)
-#     y, ty = out_sig
-
-#     # (2) 分帧 => shape=(N_frames, framesize, dims)
-#     yf = xop.frame(y, framesize, framesize)
-
-#     # (3) param_R, param_Q
-#     if learn_R:
-#         param_R = scope.param(
-#             'R',
-#             lambda key, shape, dt: jnp.eye(dims, dt)*0.01,
-#             (dims, dims), jnp.float32
-#         )
-#     else:
-#         param_R = jnp.eye(dims, dtype=jnp.float32)*0.01
-
-#     if learn_Q:
-#         param_Q = scope.param(
-#             'Q',
-#             lambda key, shape, dt: jnp.eye(dims, dt)*1e-4,
-#             (dims, dims), jnp.float32
-#         )
-#     else:
-#         param_Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
-
-#     # (4) frame_cpr_kf
-#     foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
-
-#     # (5) init kalman
-#     def init_kalman():
-#         return foe_init(w0, param_Q=param_Q, param_R=param_R)
-#     state_var = scope.variable('af_state', 'foe_state',
-#                                lambda *_: (0.0, 0, init_kalman()), ())
-#     phi, af_step, kf_state = state_var.value
-
-#     # (6) wrapper
-#     def foe_update_wrapper(step_i, old_state, data_tuple):
-#         new_state, w_frame = foe_update(step_i, old_state, data_tuple)
-#         return new_state, (w_frame, None)
-
-#     # (7) iterate => 逐帧
-#     af_step, (kf_state, (wf, _)) = af.iterate(
-#         foe_update_wrapper,
-#         af_step,
-#         kf_state,
-#         yf
-#     )
-
-#     # (8) 后处理 => wp => w => psi
-#     N_frames = wf.shape[0]
-#     dims = wf.shape[-1]
-#     wf2 = wf.reshape((N_frames, dims))
-#     wp = wf2.mean(axis=-1)  # => (N_frames,)
-
-#     x_wp = jnp.arange(N_frames)*framesize + (framesize -1)/2
-#     x_axis = jnp.arange(y.shape[0])
-#     w = jnp.interp(x_axis, x_wp, wp)/2  # or / sps=2 ?
-
-#     psi = phi + jnp.cumsum(w)
-#     state_var.value = (psi[-1], af_step, kf_state)
-
-#     # 计算原始长度 vs psi长度
-#     L = jnp.minimum(psi.shape[0], x.shape[0])
-#     # 为避免 frame length < framesize => 强行 L >= framesize
-#     L = jnp.maximum(L, framesize)  # 确保 L >= framesize
-
-#     # 如果 L > x.shape[0]，下行 x[:L] 可能溢出 => clamp
-#     L = jnp.minimum(L, x.shape[0])
-
-#     # => out_val
-#     out_val = x[:L] * jnp.exp(-1j*psi[:L])[:,None]
-
-#     # 强行保证 (stop-start) = L >= framesize
-#     final_stop = t.start + L
-
-#     # 避免 final_stop < t.start
-#     if final_stop < t.start:
-#         final_stop = t.start
-
-#     new_t = SigTime(start=t.start, stop=final_stop, sps=t.sps)
-#     return Signal(out_val, new_t)
-
                 
 def mimoaf(
     scope: Scope,
@@ -422,8 +306,9 @@ def mimoaf(
     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
-    return Signal(y, t) 
+    return Signal(y, t)
       
+
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
     assert channels % groups == 0, "channels should be divisible by groups"
@@ -544,7 +429,7 @@ from jax.nn.initializers import orthogonal, zeros
 #                                                             taps=ntaps,
 #                                                             kernel_init=n_init)
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)  
+#     return Signal(x, t)
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -584,6 +469,7 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     out_1d = out.squeeze(axis=-1)
     return out_1d, t
                              
+
 from jax import debug
 def fdbp(
     scope: Scope,
@@ -643,7 +529,7 @@ def fdbp(
         
         # update x,t
         x, t = x_new, t_res
-    return Signal(x, t)   
+    return Signal(x, t)
 
 # def fdbp(
 #     scope: Scope,
@@ -792,6 +678,72 @@ def fdbp(
 #     return Signal(x, t)
 
 
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # input_dim = x.shape[1]
+#     # hidden_size = 2 
+#     # output_dim = x.shape[1]
+#     # x1 = x[:, 0]
+#     # x2 = x[:, 1]
+#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
+#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+#     # x = rnn_layer(x_updated)
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         ixpm_samples = [
+#             jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+#         ]
+#         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # IXPM 窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
+#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
+#         # 对信号幅度平方进行 roll
+#         ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+#         # 用 softmax 得到归一化权重
+#         weights = jax.nn.softmax(ixpm_alpha)
+#         # 计算加权和
+#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+#         c, t = scope.child(mimoconv1d, name='NConv1_%d' % i)(
+#             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
+#         # 更新信号 x
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp1(
     scope: Scope,
     signal,
@@ -799,36 +751,18 @@ def fdbp1(
     dtaps=261,
     ntaps=41,
     sps=2,
-    ixpm_window=3,  # 新增参数，设置IXPM的窗口大小
     d_init=delta,
     n_init=gauss):
-    
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    
-    # input_dim = x.shape[1]
-    # hidden_size = 2 
-    # output_dim = x.shape[1]
-    # x1 = x[:, 0]
-    # x2 = x[:, 1]
-    # x1_updated, x2_updated = weighted_interaction(x1, x2)
-    # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
-    # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
-    # x = rnn_layer(x_updated)
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        ixpm_samples = [
-            jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
-        ]
-        ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)   
-
-
-    
+    return Signal(x, t)
+      
 def identity(scope, inputs):
     return inputs
 
@@ -874,7 +808,7 @@ def fanin_sum(scope, inputs):
 def fanin_mean(scope, inputs):
     val = sum(signal.val for signal in inputs) / len(inputs)
     t = inputs[0].t  # 假设所有的 t 都相同
-    return Signal(val, t)   
+    return Signal(val, t)
 
 
 def fanin_concat(scope, inputs, axis=-1):
