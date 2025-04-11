@@ -653,8 +653,10 @@ def fdbp(
         x_d, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
         # --- (B) 非线性补偿 (N)
         #   先获取 c: shape(?), tN
+        x_complex = x_d[:, 0] + 1j * x_d[:, 1]
+        power_signal = jnp.abs(x_complex)**2
         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x_d)**2, td),
+            Signal(jnp.abs(power_signal)**2, td),
             taps=ntaps,
             kernel_init=n_init
         )
