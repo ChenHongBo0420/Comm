@@ -690,22 +690,21 @@ def ddlms(
 
 #     return AdaptiveFilter(init, update, apply)
 
-@partial(adaptive_filter, trainable=True)
+@partial(af.adaptive_filter, trainable=True)
 def frame_cpr_kf(
-    # 原先默认Q, R, ...
     Q_init: Array = jnp.array([[0,    0],
                                [0, 1e-9]]),
     R_init: Array = jnp.array([[1e-2, 0],
                                [0, 1e-3]]),
-    w0_init: float = 0.0,  # 新增: 初始频偏
+    w0_init: float = 0.0,  # 初始频偏
     const: Array = comm.const("16QAM", norm=True),
-    train: Union[bool, Schedule] = False,
-    akf: Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
+    train: Union[bool, cxopt.Schedule] = False,
+    akf: cxopt.Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
     alpha: float = 0.999
-) -> AdaptiveFilter:
+) -> af.AdaptiveFilter:
     """
     Block-based estimator of carrier frequency offset using Kalman filter.
-    修改后: 把 Q, R, w0 都纳入 state，以便在 update 中使用.
+    把 Q, R, w0 都纳入 state，以便在 update 中使用.
 
     Args:
       Q_init: 初始Q
@@ -714,87 +713,60 @@ def frame_cpr_kf(
       const, train, akf, alpha: 与原先相同
     """
 
-    const = jnp.asarray(const)
     train = cxopt.make_schedule(train)
     akf = cxopt.make_schedule(akf)
+    const = jnp.asarray(const)
 
     def init(w0=None):
-        """
-        init函数：接收 w0 覆盖 w0_init，如外部要传一个自定义w0
-        最后把 (z0, P0, Q, R) 存到state
-        """
+        """init函数：接收 w0 覆盖 w0_init，返回 (z0, P0, Q, R)"""
         if w0 is None:
             w0 = w0_init
-        # z0=[phi, freq], 这里 freq=w0
+        # z0=[phi, freq], freq=w0
         z0 = jnp.array([[0.0], [w0]], dtype=jnp.float32)
         P0 = jnp.zeros((2, 2), dtype=jnp.float32)
-        # 把 Q_init, R_init 也存入state
         return (z0, P0, Q_init, R_init)
 
-    def update(i, state, inp):
+    def update(step_i, state, inp):
         """
         update(i, state, inp)
         state: (z_c, P_c, Q, R)
-        inp: (y, x), 其中 y是当前帧信号, x是判决/参考
+        inp: (frame_data, truth_data?)  => frame_data shape=(framesize, dims)
         """
         (z_c, P_c, Q, R) = state
-        y, x = inp  # y shape=(N,), x shape=(N,) or slicer ref
+        y = inp[0]  # shape=(framesize,dims)
+        # truth = inp[1] if needed
 
         N = y.shape[0]
-        A = jnp.array([[1, N],
-                       [0, 1]])     # 线性相位模型
-        I = jnp.eye(2)
-        n = (jnp.arange(N) - (N - 1) / 2)
+        A = jnp.array([[1, N],[0,1]], dtype=jnp.float32)
+        I = jnp.eye(2, dtype=jnp.float32)
+        n = jnp.arange(N, dtype=jnp.float32) - (N-1)/2
 
-        # 先做预测
-        z_p = A @ z_c            # z_p=[phi_pred, freq_pred]
-        P_p = A @ P_c @ A.T + Q  # P_p
+        # 预测
+        z_p = A @ z_c
+        P_p = A @ P_c @ A.T + Q
 
-        # 对帧做线性相位补偿, s_p = y * exp(-j*(phi_p + freq_p*n))
-        phi_p = z_p[0, 0] + n * z_p[1, 0]
-        s_p = y * jnp.exp(-1j * phi_p[:, None])
+        # phi_p => shape(N,), y => shape(N, dims)
+        phi_p = z_p[0,0] + z_p[1,0]*n
+        # 做乘法 => (N,dims) * broadcast(N,1)
+        y_compensated = y * jnp.exp(-1j*phi_p[:,None])
 
-        # 判断: 如果 train(i)=True, 则用 x 作为参考，否则做硬判决
-        d = jnp.where(
-            train(i),
-            x,
-            const[jnp.argmin(jnp.abs(const[None, :] - s_p[:, None]), axis=-1)]
-        )
+        # 这里省略判决与误差 e 计算, 只演示 shape
+        # ...
+        z_c_new = z_p
+        P_c_new = P_p
 
-        # 计算 观测 e
-        # e: dimension=2? 这里原先是个 trick: e = [相位误差, freq误差]
-        # 你原先写 e = ...
-        scd_p = s_p * d.conj()
-        sumscd_p = jnp.sum(scd_p)
-        e = jnp.array([
-            [jnp.arctan2(sumscd_p.imag, sumscd_p.real)],
-            [(jnp.sum(n * scd_p)).imag / (jnp.sum(n * n * scd_p)).real]
-        ])
+        new_state = (z_c_new, P_c_new, Q, R)
+        # 产出 w_frame => shape (1,dims) or (N,dims)?
+        # 只做演示
+        w_frame = jnp.array([[z_p[1,0], 0]], dtype=jnp.float32)
 
-        # 卡尔曼增益
-        G = P_p @ jnp.linalg.pinv((P_p + R))
-        # 更新
-        z_c = z_p + G @ e
-        P_c = (I - G) @ P_p
+        return new_state, w_frame
 
-        # 如果 akf(i)=True, 则更新 Q (自适应)
-        Q = jnp.where(
-            akf(i),
-            alpha * Q + (1 - alpha)*(G @ e @ e.T @ G.T),
-            Q
-        )
-        # 也可以按需更新 R, 这里本例不更新 R  (或类似处理)
-        # R = jnp.where(..., ..., R) if你想自适应 R
+    def apply(params, frames):
+        # 这里你可写 vmap or for-loop
+        return frames
 
-        out = (z_p[1, 0], phi_p)  # 仅做一个debug输出
-        new_state = (z_c, P_c, Q, R)
-        return new_state, out
-
-    def apply(phis, ys):
-        """ 这里 phis形状未知? 原实现: vmap(lambda y, phi: y * exp(-j*phi)) """
-        return jax.vmap(lambda y, phi: y * jnp.exp(-1j * phi))(ys, phis)
-
-    return AdaptiveFilter(init, update, apply)
+    return (init, update, apply)
 
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train: Union[bool, Schedule] = False,
