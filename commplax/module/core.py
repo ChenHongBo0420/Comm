@@ -194,6 +194,23 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
         mean = running_mean.value
     return signal / jnp.sqrt(mean)
 
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+#     return Signal(x, t)
+
 def conv1d(
     scope: Scope,
     signal,
@@ -209,12 +226,32 @@ def conv1d(
                      kernel_init,
                      (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
-    return Signal(x, t)
-
-  
+    new_start = t.start
+    new_stop  = t.stop  # or if you've changed it
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+    return Signal(x_out, new_t)
   
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
+
+# def mimoconv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     dims=2,
+#     mode='valid',
+#     kernel_init=zeros,
+#     conv_fn=xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
+#     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
+#     return Signal(y, t)
+
 
 def mimoconv1d(
     scope: Scope,
@@ -230,9 +267,13 @@ def mimoconv1d(
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
-    return Signal(y, t)
-      
-      
+    new_start = t.start
+    new_stop  = t.stop  # or if you've changed it
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+    return Signal(x_out, new_t)     
+   
 # def mimofoeaf(scope: Scope,
 #               signal,
 #               framesize=100,
@@ -395,6 +436,35 @@ def mimofoeaf(
     return Signal(out_val, new_t)
 
                 
+# def mimoaf(
+#     scope: Scope,
+#     signal,
+#     taps=32,
+#     rtap=None,
+#     dims=2,
+#     sps=2,
+#     train=False,
+#     mimofn=af.ddlms,
+#     mimokwargs={},
+#     mimoinitargs={}):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+#     x = xop.frame(x, taps, sps)
+#     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+#     state = scope.variable('af_state', 'mimoaf',
+#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+#     truth_var = scope.variable('aux_inputs', 'truth',
+#                                lambda *_: None, ())
+#     truth = truth_var.value
+#     if truth is not None:
+#         truth = truth[t.start: truth.shape[0] + t.stop]
+#     af_step, af_stats = state.value
+#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+#     y = mimo_apply(af_weights, x)
+#     state.value = (af_step, af_stats)
+#     return Signal(y, t)
+      
 def mimoaf(
     scope: Scope,
     signal,
@@ -422,9 +492,13 @@ def mimoaf(
     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
-    return Signal(y, t)
+    new_start = t.start
+    new_stop  = t.stop  # or if you've changed it
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+    return Signal(x_out, new_t)   
       
-
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
     assert channels % groups == 0, "channels should be divisible by groups"
@@ -645,7 +719,12 @@ def fdbp(
         
         # update x,t
         x, t = x_new, t_res
-    return Signal(x, t)
+    new_start = t.start
+    new_stop  = t.stop  # or if you've changed it
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+    return Signal(x_out, new_t)   
 
 # def fdbp(
 #     scope: Scope,
@@ -827,7 +906,12 @@ def fdbp1(
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-    return Signal(x, t)
+    new_start = t.start
+    new_stop  = t.stop  # or if you've changed it
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+    return Signal(x_out, new_t)   
 
 
     
@@ -876,7 +960,12 @@ def fanin_sum(scope, inputs):
 def fanin_mean(scope, inputs):
     val = sum(signal.val for signal in inputs) / len(inputs)
     t = inputs[0].t  # 假设所有的 t 都相同
-    return Signal(val, t)
+    new_start = t.start
+    new_stop  = t.stop  # or if you've changed it
+    if new_stop < new_start:
+        new_stop = new_start
+    new_t = SigTime(start=new_start, stop=new_stop, sps=t.sps)
+    return Signal(x_out, new_t)   
 
 
 def fanin_concat(scope, inputs, axis=-1):
