@@ -293,10 +293,11 @@ def mimofoeaf(
     learn_Q=False       # 是否让噪声协方差 Q 成为可学习参数
 ):
     """
-    修正后：
-    - 不再出现 "array() got an unexpected keyword argument 'dims'"
-    - 仍可学习 R, Q, 并保留 w0
-    - 如果不想学习 R, Q => learn_R=False, learn_Q=False
+    改进版:
+      1) 不再显式给 foe_update_orig(...) 传 R=..., Q=..., w0=...
+      2) 内部声明 R, Q 为可选可学习参数
+      3) 确保 foe_update_with_params 与 af.iterate(...) 都使用 3个位置参数的约定 (step, old_state, data_tuple)
+      4) 其余逻辑保持原先结构
     """
     sps = 2
     dims = 2
@@ -312,11 +313,15 @@ def mimofoeaf(
                          name='MIMO4FOE')(slisig)
     y, ty = auxsig
 
-    # (2) 分帧
+    # (2) 分帧 => (N_frames, framesize, dims)
     yf = xop.frame(y, framesize, framesize)
-    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, replicas=1)(**foekwargs)
 
-    # (4) 定义可学习的 R, Q(可选)
+    # (3) 从 adaptive_filter.array(...) 获取 foe_init, foe_update_orig
+    #     注意: 不再传 dims=...，也不再显式 replicas=...
+    #     如果 frame_cpr_kf 强制需要 replicas=1, dims=2, 则写: af.array(af.frame_cpr_kf, 1)(...)
+    foe_init, foe_update_orig, _ = af.array(af.frame_cpr_kf, 1)(**foekwargs)
+
+    # (4) 定义可学习的 R, Q(可选)，仅存在本函数param中
     if learn_R:
         R = scope.param(
             'R',
@@ -324,7 +329,6 @@ def mimofoeaf(
             (dims, dims), jnp.float32
         )
     else:
-        # 不想学 => 一个固定值
         R = jnp.eye(dims, dtype=jnp.float32)*0.01
 
     if learn_Q:
@@ -336,24 +340,24 @@ def mimofoeaf(
     else:
         Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
 
-    # (5) foe_init(w0) => 初始状态
-    state = scope.variable('af_state', 'framefoeaf',
-                           lambda *_: (0.0, 0, foe_init(w0)), ())
-    phi, af_step, af_stats = state.value
+    # (5) foe_init(w0) => 初始化 (z0, P0, etc.) for Kalman
+    #     存到 scope.variable(...) => (phi, af_step, af_stats)
+    state_var = scope.variable('af_state', 'framefoeaf',
+                               lambda *_: (0.0, 0, foe_init(w0)), ())
+    phi, af_step, af_stats = state_var.value
 
-    # (6) 用一个内联函数，把 R, Q, w0 传给 foe_update_orig
+    # (6) foe_update_with_params: 3 位置参数 (step_i, old_state, data_tuple)
+    #     里头只调用 foe_update_orig(step_i, old_state, data_tuple)
     def foe_update_with_params(step_i, old_state, data_tuple):
-        # data_tuple = (signal_i, truth_i)
-        # 如果你不需要 truth，就忽略 data_tuple[1]
+        # data_tuple = (frame_data, truth_data)  => 这里仅用 frame_data
         frame_data = data_tuple[0]
-        # 然后再调用原先 foe_update_orig(...) 
-        # 注意 foe_update_orig 可能只接受 (old_state, frame_data, R, Q, w0) 
-        # new_state, w_frame = foe_update_orig(old_state, frame_data, R=R, Q=Q, w0=w0)
-        new_state, w_frame = foe_update_orig(old_state, frame_data)
-        # 返回和 update 相同格式 => (new_state, (some outputs))
+        # 不传 R, Q, w0 => 避免 unexpected keyword error
+        new_state, w_frame = foe_update_orig(step_i, old_state, (frame_data,))
         return new_state, (w_frame, None)
 
-    # (7) 调用 af.iterate(...)
+    # (7) 调用 af.iterate(...) => 会在内部 scan:
+    #    lambda c, xs: foe_update_with_params(xs[0], c, xs[1:])
+    #    其中 xs[0]=step_i, c=af_stats, xs[1:]=(frame_i, truth_i)
     af_step, (af_stats, (wf, _)) = af.iterate(
         foe_update_with_params,
         af_step,
@@ -362,14 +366,16 @@ def mimofoeaf(
     )
 
     # (8) 对 wf 做后处理 => w => psi
-    wp = wf.reshape((-1, dims)).mean(axis=-1)  # (N_frames,)
+    #     例如: wf shape=(N_frames, dims)
+    wp = wf.reshape((-1, dims)).mean(axis=-1)  # => (N_frames,)
     x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2
     x_axis = jnp.arange(y.shape[0] * sps)/sps
     w = jnp.interp(x_axis, x_wp, wp) / sps
     psi = phi + jnp.cumsum(w)
-    state.value = (psi[-1], af_step, af_stats)
+    # 更新 state => 把新的phi存进去, 以备下次迭代
+    state_var.value = (psi[-1], af_step, af_stats)
 
-    # (9) 线性外推并相位校正
+    # (9) 对原信号做相位校正
     psi_ext = jnp.concatenate([
         w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
         psi,
@@ -377,6 +383,7 @@ def mimofoeaf(
     ])
     out_signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return out_signal
+
                 
 def mimoaf(
     scope: Scope,
