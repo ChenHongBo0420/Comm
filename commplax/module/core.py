@@ -286,7 +286,7 @@ def mimofoeaf(
     train=False,
     preslicer=lambda x: x,
     foekwargs={},       # 给 frame_cpr_kf(...) 的额外参数
-    mimofn=af.rde,      # 给 mimoaf 的自适应滤波函数
+    mimofn=None,        # 给 mimoaf 的自适应滤波函数(默认af.rde)
     mimokwargs={},
     mimoinitargs={},
     learn_R=False,      # 是否让噪声协方差 R 成为可学习参数
@@ -295,27 +295,38 @@ def mimofoeaf(
     """
     改进版: 不再调用 af.array(...) => 无 vmap 轴冲突
     """
+
+    import commplax.adaptive_filter as af
+
+    if mimofn is None:
+        mimofn = af.rde  # 若你想默认使用 RDE
+
     sps = 2
     dims = 2
     tx = signal.t
+    x, t = signal
 
     # (1) 先做 MIMO 自适应滤波
     slisig = preslicer(signal)
-    auxsig = scope.child(mimoaf,
-                         mimofn=mimofn,
-                         train=train,
-                         mimokwargs=mimokwargs,
-                         mimoinitargs=mimoinitargs,
-                         name='MIMO4FOE')(slisig)
+    auxsig = scope.child(
+        lambda scp, sig: scp.child(mimoaf,
+                                   mimofn=mimofn,
+                                   train=train,
+                                   mimokwargs=mimokwargs,
+                                   mimoinitargs=mimoinitargs,
+                                   name='MIMO4FOE')(sig)
+    )(slisig)
     y, ty = auxsig
 
     # (2) 分帧 => (N_frames, framesize, dims)
     yf = xop.frame(y, framesize, framesize)
 
     # (3) 直接拿 frame_cpr_kf 的 (init, update, apply), 无 array(...) 包装
+    #     => 不会再出现 vmap shape冲突
     foe_init, foe_update_orig, foe_apply = af.frame_cpr_kf(**foekwargs)
 
-    # (4) 定义可学习 R, Q(可选) -- 只是在本函数param中
+    # (4) 定义可学习 R, Q(可选) -- 只是在本函数 param 中。若需要真正用到它们，
+    #     需在 frame_cpr_kf 内部拿 state=(z_c,P_c,Q,R) 改写；这里仅示范 param 声明
     if learn_R:
         R = scope.param(
             'R',
@@ -343,13 +354,11 @@ def mimofoeaf(
     # af_stats=(z_c, P_c, Q, R)
 
     # (6) 定义 wrapper => 3参: (step_i, old_state, data_tuple)
-    # 并调用 foe_update_orig(step_i, old_state, data_tuple)
     def foe_update_with_params(step_i, old_state, data_tuple):
+        # data_tuple = (frame_data, ...)
         frame_data = data_tuple[0]  # (framesize, dims)
-        # 你若有 truth: truth_data = data_tuple[1]
-        # 这里不显式传 R, Q, w0
+        # 不显式传 R, Q, w0 => 避免 unexpected keyword error
         new_state, w_frame = foe_update_orig(step_i, old_state, (frame_data,))
-        # w_frame shape=(?, dims)? 你可自定义
         return new_state, (w_frame, None)
 
     # (7) 用 af.iterate(...) => 逐帧扫描
@@ -363,8 +372,7 @@ def mimofoeaf(
 
     # (8) 后处理 => interpolation, etc
     # 这里假设 wf=(N_frames, dims)
-    # 如果 foe_update_orig 产出 shape=(N_frames, 2)  => ok
-    # 你可自行调试 shape
+    # 如果 foe_update_orig 产出 shape=(N_frames, 2)  => 需 reshape
     wp = wf.reshape((-1, dims)).mean(axis=-1)  # => (N_frames,)
     x_wp = jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2
     x_axis = jnp.arange(y.shape[0] * sps) / sps
@@ -378,7 +386,7 @@ def mimofoeaf(
         psi,
         w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]
     ])
-    out_signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+    out_signal = Signal(x[:psi_ext.shape[0]] * jnp.exp(-1j * psi_ext)[:, None], t)
     return out_signal
                 
 def mimoaf(
