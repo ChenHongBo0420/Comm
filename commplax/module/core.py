@@ -523,7 +523,7 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
 #     out_1d = out.squeeze(axis=-1)
 #     return out_1d, t
                              
-def conv1d_ffn(
+def residual_ffn(
     scope: Scope,
     signal,
     taps=31,
