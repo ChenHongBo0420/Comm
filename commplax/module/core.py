@@ -292,53 +292,67 @@ def mimofoeaf(
     learn_R=False,
     learn_Q=False
 ):
+    """
+    改进: 在最终输出时保证 (stop-start) >= framesize, 
+    避免 frame length < fstep 报错. 
+    """
+
+    if mimofn is None:
+        # 默认=af.rde
+        import commplax.adaptive_filter as af
+        mimofn = af.rde
+
     x, t = signal
     dims = x.shape[-1]
 
-    # 1) MIMO
+    # (1) MIMO
     slisig = preslicer(signal)
-    out_sig = scope.child(
-        lambda scp, sig: scp.child(mimoaf,
-                                   mimofn=(mimofn or af.rde),
-                                   train=train,
-                                   mimokwargs=mimokwargs,
-                                   mimoinitargs=mimoinitargs,
-                                   name='MIMO4FOE')(sig)
-    )(slisig)
+    out_sig = scope.child(mimoaf,
+                          mimofn=mimofn,
+                          train=train,
+                          mimokwargs=mimokwargs,
+                          mimoinitargs=mimoinitargs,
+                          name='MIMO4FOE')(slisig)
     y, ty = out_sig
 
-    # 2) 分帧
+    # (2) 分帧 => shape=(N_frames, framesize, dims)
     yf = xop.frame(y, framesize, framesize)
 
-    # 3) param_R, param_Q
+    # (3) param_R, param_Q
     if learn_R:
-        param_R = scope.param('R', lambda key, shape, dt: jnp.eye(dims, dt)*0.01,
-                              (dims, dims), jnp.float32)
+        param_R = scope.param(
+            'R',
+            lambda key, shape, dt: jnp.eye(dims, dt)*0.01,
+            (dims, dims), jnp.float32
+        )
     else:
         param_R = jnp.eye(dims, dtype=jnp.float32)*0.01
 
     if learn_Q:
-        param_Q = scope.param('Q', lambda key, shape, dt: jnp.eye(dims, dt)*1e-4,
-                              (dims, dims), jnp.float32)
+        param_Q = scope.param(
+            'Q',
+            lambda key, shape, dt: jnp.eye(dims, dt)*1e-4,
+            (dims, dims), jnp.float32
+        )
     else:
         param_Q = jnp.eye(dims, dtype=jnp.float32)*1e-4
 
-    # 4) 拿 frame_cpr_kf
+    # (4) frame_cpr_kf
     foe_init, foe_update, foe_apply = af.frame_cpr_kf(**foekwargs)
 
-    # 5) Kalman state
+    # (5) init kalman
     def init_kalman():
         return foe_init(w0, param_Q=param_Q, param_R=param_R)
     state_var = scope.variable('af_state', 'foe_state',
                                lambda *_: (0.0, 0, init_kalman()), ())
     phi, af_step, kf_state = state_var.value
 
-    # 6) wrapper
+    # (6) wrapper
     def foe_update_wrapper(step_i, old_state, data_tuple):
         new_state, w_frame = foe_update(step_i, old_state, data_tuple)
         return new_state, (w_frame, None)
 
-    # 7) iterate
+    # (7) iterate => 逐帧
     af_step, (kf_state, (wf, _)) = af.iterate(
         foe_update_wrapper,
         af_step,
@@ -346,30 +360,38 @@ def mimofoeaf(
         yf
     )
 
+    # (8) 后处理 => wp => w => psi
     N_frames = wf.shape[0]
+    dims = wf.shape[-1]
     wf2 = wf.reshape((N_frames, dims))
-    wp = wf2.mean(axis=-1)
+    wp = wf2.mean(axis=-1)  # => (N_frames,)
 
-    x_wp = jnp.arange(N_frames)*framesize + (framesize-1)/2
+    x_wp = jnp.arange(N_frames)*framesize + (framesize -1)/2
     x_axis = jnp.arange(y.shape[0])
-    w = jnp.interp(x_axis, x_wp, wp)/2
+    w = jnp.interp(x_axis, x_wp, wp)/2  # or / sps=2 ?
 
     psi = phi + jnp.cumsum(w)
     state_var.value = (psi[-1], af_step, kf_state)
 
-    # 8) 计算 L
+    # 计算原始长度 vs psi长度
     L = jnp.minimum(psi.shape[0], x.shape[0])
-    # 如果 L < 0, 强制为 0
-    L = jnp.maximum(L, 0)
-    # 9) 截取
-    out_val = x[:L] * jnp.exp(-1j*psi[:L])[:, None]
+    # 为避免 frame length < framesize => 强行 L >= framesize
+    L = jnp.maximum(L, framesize)  # 确保 L >= framesize
 
-    # 10) 确保 stop>=start => final_stop = t.start+L
+    # 如果 L > x.shape[0]，下行 x[:L] 可能溢出 => clamp
+    L = jnp.minimum(L, x.shape[0])
+
+    # => out_val
+    out_val = x[:L] * jnp.exp(-1j*psi[:L])[:,None]
+
+    # 强行保证 (stop-start) = L >= framesize
     final_stop = t.start + L
+
+    # 避免 final_stop < t.start
     if final_stop < t.start:
         final_stop = t.start
-    new_t = SigTime(start=t.start, stop=final_stop, sps=t.sps)
 
+    new_t = SigTime(start=t.start, stop=final_stop, sps=t.sps)
     return Signal(out_val, new_t)
 
                 
