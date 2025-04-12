@@ -514,7 +514,7 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
 #     # 返回更新后的 Signal，使用 FFN 返回的时间变量 t_ffn（也可以保留原来的 t）
 #     return Signal(x_out, t_ffn)
 
-def conv1d_ffn(scope: Scope, signal: Signal, hidden_dim=2):
+def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=xop.convolve, hidden_dim=2, use_alpha=True):
     """
     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
     然后使用两层 MLP 生成 (N,) 复数 residual。
