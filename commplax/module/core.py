@@ -523,6 +523,7 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     # x 的形状例如 (N, 2) 或 (N, C) 等
     # 1) 沿通道维度做均值（也可换成范数，如 jnp.linalg.norm(x, axis=-1)）
     # x_scalar = jnp.mean(x, axis=-1)  # shape=(N,), 复数
+    x = jnp.expand_dims(x, axis=0) 
     x_scalar = jnp.linalg.norm(x, axis=-1)
     N = x_scalar.shape[0]
     # 2) reshape 成 (N,1)，并转换为复数数据类型
