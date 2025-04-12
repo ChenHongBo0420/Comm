@@ -488,23 +488,12 @@ def conv1d_ffn(
     # ------------------ 原始卷积部分 ------------------
     # 解包输入信号
     x, t = signal
-    
-    # 利用外部定义的 conv1d_t 函数生成新的时间变量
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    
-    # 定义卷积核参数，使用 kernel_init 初始化，数据类型为复数
-    h = scope.param('kernel', kernel_init, (taps,), np.complex64)
-    
-    # 执行卷积操作
-    x_conv = conv_fn(x, h, mode=mode)
-    
-    # 保证卷积结果至少为二维（例如：(N,) 转换为 (N,1)）
-    if x_conv.ndim == 1:
-        x_conv = x_conv[:, None]
+    if x.ndim == 1:
+        x = x_conv[:, None]
     
     # ------------------ FFN 分支部分 ------------------
     # 以卷积结果的幅度平方作为 FFN 的输入特征
-    ffn_input = Signal(jnp.abs(x_conv)**2, t)
+    ffn_input = Signal(jnp.abs(x)**2, t)
     
     # 使用子模块调用 residual_ffn（保证 residual_ffn 的实现符合要求），
     # 得到修正 offset 和新的时间变量 t_ffn
