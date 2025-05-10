@@ -464,8 +464,8 @@ def fdbp(
     d_init=delta,
     n_init=gauss):
     x, t = signal
-    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    dconv = vmap(wpartial(conv1d_fft, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # dconv = vmap(wpartial(conv1d_fft, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
