@@ -214,88 +214,88 @@ def conv1d(
 import math, functools, jax.numpy as jnp
 from jax import lax
 
-# def conv1d_fft(scope, signal, taps=1025, seglen=None,
-#                mode='valid', kernel_init=delta):
-#     """
-#     FFT overlap-save 1-D convolution  (complex64)
-#     seglen: FFT 长度，默认取最近的 2^k ≥ taps+block-1
-#     """
-#     x, t = signal          # x: (N,2)    t: slice
-
-#     # ① 参数：频域权重 H[k]
-#     h_time = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
-
-#     # ② 预计算 FFT 长和 padding
-#     if seglen is None:
-#         seglen = 1 << (taps*2 - 1).bit_length()   # 最近 2^k
-#     L = seglen - taps + 1                        # 每块有效输出长度
-
-#     # ③ time→freq
-#     Hk = jnp.fft.rfft(h_time, seglen)            # (seglen//2+1,)
-
-#     # ④ overlap-save
-#     def _os_block(carry, block):
-#         buf = carry                              # shape (taps-1,2)
-#         blk = jnp.concatenate([buf, block], 0)   # (seglen,2)
-#         Xk = jnp.fft.rfft(blk, axis=0)
-#         Yk = Xk * Hk[:,None]                     # broadcast on pol dim
-#         y = jnp.fft.irfft(Yk, axis=0)[taps-1:]   # throw away first taps-1
-#         return block[-(taps-1):], y              # new buf, output
-
-#     # pad x 使其能整除 L
-#     pad = (-x.shape[0]) % L
-#     x_pad = jnp.pad(x, ((taps-1, pad), (0,0)))
-
-#     init_buf = jnp.zeros((taps-1, 2), x.dtype)
-#     _, ys = lax.scan(_os_block, init_buf,          # carry buf
-#                      jnp.reshape(x_pad, (-1, L, 2)))   # blocks
-#     y = jnp.reshape(ys, (-1,2))[:x.shape[0]+pad]   # 去掉 pad
-
-#     # ⑤ 更新 slice
-#     t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
-#     return Signal(y, t_out)
-
-
-def conv1d_fft(scope, signal, *,
-               taps      = 1025,
-               seglen    = None,          # ← 可以手动传；否则自动 ≥ 8192
-               mode      = 'valid',
-               kernel_init = delta):
+def conv1d_fft(scope, signal, taps=1025, seglen=None,
+               mode='valid', kernel_init=delta):
     """
-    FFT overlap-save 1-D convolution (complex64).
-    seglen: FFT 长度；若 None，则取 max(8192, 最近 2^k ≥ taps+L-1)
+    FFT overlap-save 1-D convolution  (complex64)
+    seglen: FFT 长度，默认取最近的 2^k ≥ taps+block-1
     """
-    x, t = signal            # x: (N,2)
+    x, t = signal          # x: (N,2)    t: slice
 
-    # ---- ① 频域权重参数 H[k] -----------------------------------------------
+    # ① 参数：频域权重 H[k]
     h_time = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
 
-    # ---- ② 选择 seglen & 有效输出 L -----------------------------------------
+    # ② 预计算 FFT 长和 padding
     if seglen is None:
-        # 至少 8192，再往上取最近 2 的整数次幂
-        seglen = 1 << max(13, (taps*2 - 1).bit_length())
-    L = seglen - taps + 1            # 每块有效输出长度
+        seglen = 1 << (taps*2 - 1).bit_length()   # 最近 2^k
+    L = seglen - taps + 1                        # 每块有效输出长度
 
-    # ---- ③ 预计算 H[k] ------------------------------------------------------
-    Hk = jnp.fft.rfft(h_time, seglen)              # (seglen//2+1,)
+    # ③ time→freq
+    Hk = jnp.fft.rfft(h_time, seglen)            # (seglen//2+1,)
 
-    # ---- ④ overlap-save -----------------------------------------------------
-    def _os_block(buf, block):
-        blk = jnp.concatenate([buf, block], 0)     # (seglen,2)
-        Yk  = jnp.fft.rfft(blk, axis=0) * Hk[:,None]
-        y   = jnp.fft.irfft(Yk, axis=0)[taps-1:]   # 丢前 taps-1
-        return block[-(taps-1):], y               # 新 buf, 输出
+    # ④ overlap-save
+    def _os_block(carry, block):
+        buf = carry                              # shape (taps-1,2)
+        blk = jnp.concatenate([buf, block], 0)   # (seglen,2)
+        Xk = jnp.fft.rfft(blk, axis=0)
+        Yk = Xk * Hk[:,None]                     # broadcast on pol dim
+        y = jnp.fft.irfft(Yk, axis=0)[taps-1:]   # throw away first taps-1
+        return block[-(taps-1):], y              # new buf, output
 
-    pad = (-x.shape[0]) % L                       # 右填充到整数块
-    x_pad = jnp.pad(x, ((taps-1, pad), (0, 0)))   # 左 pad taps-1
+    # pad x 使其能整除 L
+    pad = (-x.shape[0]) % L
+    x_pad = jnp.pad(x, ((taps-1, pad), (0,0)))
+
     init_buf = jnp.zeros((taps-1, 2), x.dtype)
-    _, ys = lax.scan(_os_block, init_buf,
-                     jnp.reshape(x_pad, (-1, L, 2)))
-    y = jnp.reshape(ys, (-1, 2))[:x.shape[0]+pad]
+    _, ys = lax.scan(_os_block, init_buf,          # carry buf
+                     jnp.reshape(x_pad, (-1, L, 2)))   # blocks
+    y = jnp.reshape(ys, (-1,2))[:x.shape[0]+pad]   # 去掉 pad
 
-    # ---- ⑤ slice 调整 -------------------------------------------------------
+    # ⑤ 更新 slice
     t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
     return Signal(y, t_out)
+
+
+# def conv1d_fft(scope, signal, *,
+#                taps      = 1025,
+#                seglen    = None,          # ← 可以手动传；否则自动 ≥ 8192
+#                mode      = 'valid',
+#                kernel_init = delta):
+#     """
+#     FFT overlap-save 1-D convolution (complex64).
+#     seglen: FFT 长度；若 None，则取 max(8192, 最近 2^k ≥ taps+L-1)
+#     """
+#     x, t = signal            # x: (N,2)
+
+#     # ---- ① 频域权重参数 H[k] -----------------------------------------------
+#     h_time = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+
+#     # ---- ② 选择 seglen & 有效输出 L -----------------------------------------
+#     if seglen is None:
+#         # 至少 8192，再往上取最近 2 的整数次幂
+#         seglen = 1 << max(13, (taps*2 - 1).bit_length())
+#     L = seglen - taps + 1            # 每块有效输出长度
+
+#     # ---- ③ 预计算 H[k] ------------------------------------------------------
+#     Hk = jnp.fft.rfft(h_time, seglen)              # (seglen//2+1,)
+
+#     # ---- ④ overlap-save -----------------------------------------------------
+#     def _os_block(buf, block):
+#         blk = jnp.concatenate([buf, block], 0)     # (seglen,2)
+#         Yk  = jnp.fft.rfft(blk, axis=0) * Hk[:,None]
+#         y   = jnp.fft.irfft(Yk, axis=0)[taps-1:]   # 丢前 taps-1
+#         return block[-(taps-1):], y               # 新 buf, 输出
+
+#     pad = (-x.shape[0]) % L                       # 右填充到整数块
+#     x_pad = jnp.pad(x, ((taps-1, pad), (0, 0)))   # 左 pad taps-1
+#     init_buf = jnp.zeros((taps-1, 2), x.dtype)
+#     _, ys = lax.scan(_os_block, init_buf,
+#                      jnp.reshape(x_pad, (-1, L, 2)))
+#     y = jnp.reshape(ys, (-1, 2))[:x.shape[0]+pad]
+
+#     # ---- ⑤ slice 调整 -------------------------------------------------------
+#     t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
+#     return Signal(y, t_out)
                  
 def dispersion_init(a, *, steps=3):
     """
