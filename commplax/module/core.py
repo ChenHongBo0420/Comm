@@ -671,8 +671,11 @@ def fdbp(
     """
     x, t = signal
     # 1) 色散
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
+    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d_fft,
+                          taps=dtaps,
+                          seglen=None,      # 让函数自己挑
+                          kernel_init=d_init))
     # 可选: 对res加个可训练缩放
     if use_alpha:
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
