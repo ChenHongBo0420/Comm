@@ -255,6 +255,12 @@ from jax import lax
 #     t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
 #     return Signal(y, t_out)
 
+def _pad1d_or_2d(arr, left, right):
+    """自动判断 arr 是 (N,) 还是 (N,2) 做 pad"""
+    if arr.ndim == 1:              # (N,)  ->  ((left,right),)
+        return jnp.pad(arr, (left, right))
+    else:                          # (N, K) -> ((left,right),(0,0))
+        return jnp.pad(arr, ((left, right), (0, 0)))
 
 def conv1d_fft(scope, signal, *, taps=1025, seglen=None,
                mode='valid', kernel_init=delta):
