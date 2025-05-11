@@ -305,8 +305,10 @@ def conv1d_fft(scope, signal, *, taps=1025, seglen=None,
     y = jnp.reshape(ys, x_pad.shape)[:x.shape[0]]  # 去 pad
 
     # ──⑥ 更新 slice─────────────────────────────────────────────
-    t_out = slice(t.start + (taps-1)//2,
-                  t.stop  - (taps-1)//2)
+    t_out = type(t)(
+        start = t.start + (taps-1)//2,
+        stop  = t.stop  - (taps-1)//2,
+        sps   = t.sps)
     return Signal(y, t_out)
 
 
