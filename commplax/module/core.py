@@ -256,54 +256,59 @@ from jax import lax
 #     return Signal(y, t_out)
 
 def _pad1d_or_2d(arr, left, right):
-    """自动判断 arr 是 (N,) 还是 (N,2) 做 pad"""
-    if arr.ndim == 1:              # (N,)  ->  ((left,right),)
+    """对 (N,) 或 (N,K) 都能用的 pad 封装"""
+    if arr.ndim == 1:
         return jnp.pad(arr, (left, right))
-    else:                          # (N, K) -> ((left,right),(0,0))
+    else:
         return jnp.pad(arr, ((left, right), (0, 0)))
+
 
 def conv1d_fft(scope, signal, *, taps=1025, seglen=None,
                mode='valid', kernel_init=delta):
     """
-    Complex FFT overlap-save 1-D convolution.
-    Works for (N,) or (N,2) complex64.
+    Complex FFT overlap-save 1-D conv.
+    兼容 (N,) 与 (N,2) 复向量。
     """
-    x, t = signal                       # x: (N,)  or (N,2)
+    x, t = signal                         # x: (N,) / (N,2)
 
-    # ① kernel
+    # ──① 内核 h[n]──────────────────────────────────────────────
     h_time = scope.param('kernel', kernel_init,
                          (taps,), jnp.complex64)
 
-    # ② FFT len & block len
+    # ──② FFT 长度与每块有效输出 L────────────────────────────────
     if seglen is None:
-        seglen = 1 << max(13, (taps*2 - 1).bit_length())   # ≥8192 power-of-2
-    L = seglen - taps + 1
+        seglen = 1 << max(13, (taps * 2 - 1).bit_length())  # ≥8 k 的 2^k
+    L = seglen - taps + 1            # block 输出长度
 
-    # ③ H[k]
-    Hk = jnp.fft.fft(h_time, seglen)                       # (seglen,)
+    # ──③ 频域权重 H[k]──────────────────────────────────────────
+    Hk = jnp.fft.fft(h_time, seglen)             # (seglen,)
 
-    # ④ overlap-save
-    def _os_block(buf, block):
-        blk = jnp.concatenate([buf, block], 0)             # (seglen,[2])
+    # ──④ overlap-save 扫描函数──────────────────────────────────
+    def _os_block(buf, blk_in):
+        blk = jnp.concatenate([buf, blk_in], 0)  # (seglen,[2])
         Xk  = jnp.fft.fft(blk, seglen, axis=0)
         Yk  = Xk * Hk[:, None] if blk.ndim == 2 else Xk * Hk
-        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]
-        return block[-(taps-1):], y
+        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]      # 去掉重叠
+        return blk_in[-(taps-1):], y
 
+    # ──⑤ 右侧补零，使 len(x)+pad 可整除 L────────────────────────
     pad = (-x.shape[0]) % L
-    x_pad   = _pad1d_or_2d(x, taps-1, pad)
-    initbuf = jnp.zeros((taps-1,) if x.ndim==1
-                        else (taps-1, x.shape[1]), x.dtype)
+    x_pad = _pad1d_or_2d(x, 0, pad)              # 只右 pad
 
-    _, ys = lax.scan(_os_block, initbuf,
-                     jnp.reshape(x_pad, (-1, L) if x.ndim==1
-                                 else (-1, L, x.shape[1])))
-    y = jnp.reshape(ys, x.shape)        # 去掉右侧 pad
+    init_buf = jnp.zeros((taps-1,) if x.ndim == 1
+                         else (taps-1, x.shape[1]), x.dtype)
 
-    # ⑤ slice
+    # reshape 为 (n_blocks, L [,2])
+    blk_shape = (-1, L) if x.ndim == 1 else (-1, L, x.shape[1])
+    _, ys = lax.scan(_os_block, init_buf,
+                     jnp.reshape(x_pad, blk_shape))
+    y = jnp.reshape(ys, x_pad.shape)[:x.shape[0]]  # 去 pad
+
+    # ──⑥ 更新 slice─────────────────────────────────────────────
     t_out = slice(t.start + (taps-1)//2,
                   t.stop  - (taps-1)//2)
     return Signal(y, t_out)
+
 
                  
 def dispersion_init(a, *, steps=3):
