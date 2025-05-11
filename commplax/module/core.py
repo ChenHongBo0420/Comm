@@ -255,61 +255,45 @@ from jax import lax
 #     t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
 #     return Signal(y, t_out)
 
+# -------- FFT overlap-save 1-D conv (复数版，可单/双极化) -------
 def _pad1d_or_2d(arr, left, right):
-    """对 (N,) 或 (N,K) 都能用的 pad 封装"""
     if arr.ndim == 1:
         return jnp.pad(arr, (left, right))
-    else:
+    else:                        # (N,2) or (N,C)
         return jnp.pad(arr, ((left, right), (0, 0)))
-
 
 def conv1d_fft(scope, signal, *, taps=1025, seglen=None,
                mode='valid', kernel_init=delta):
-    """
-    Complex FFT overlap-save 1-D conv.
-    兼容 (N,) 与 (N,2) 复向量。
-    """
-    x, t = signal                         # x: (N,) / (N,2)
+    x, t = signal                                    # x:(N,[2])
+    h_t = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
 
-    # ──① 内核 h[n]──────────────────────────────────────────────
-    h_time = scope.param('kernel', kernel_init,
-                         (taps,), jnp.complex64)
+    if seglen is None:                               # 最近 2^k ≥ taps*2
+        seglen = 1 << max(13, (taps * 2 - 1).bit_length())
+    L = seglen - taps + 1                            # 每块有效长度
 
-    # ──② FFT 长度与每块有效输出 L────────────────────────────────
-    if seglen is None:
-        seglen = 1 << max(13, (taps * 2 - 1).bit_length())  # ≥8 k 的 2^k
-    L = seglen - taps + 1            # block 输出长度
+    Hk = jnp.fft.fft(h_t, seglen)                    # (seglen,)
 
-    # ──③ 频域权重 H[k]──────────────────────────────────────────
-    Hk = jnp.fft.fft(h_time, seglen)             # (seglen,)
-
-    # ──④ overlap-save 扫描函数──────────────────────────────────
-    def _os_block(buf, blk_in):
-        blk = jnp.concatenate([buf, blk_in], 0)  # (seglen,[2])
+    def _os(carry, blk_in):                          # overlap-save 内核
+        buf = carry
+        blk = jnp.concatenate([buf, blk_in], 0)      # (seglen,[2])
         Xk  = jnp.fft.fft(blk, seglen, axis=0)
-        Yk  = Xk * Hk[:, None] if blk.ndim == 2 else Xk * Hk
-        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]      # 去掉重叠
+        Yk  = Xk * (Hk[:, None] if blk.ndim == 2 else Hk)
+        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]   # 去重叠
         return blk_in[-(taps-1):], y
 
-    # ──⑤ 右侧补零，使 len(x)+pad 可整除 L────────────────────────
-    pad = (-x.shape[0]) % L
-    x_pad = _pad1d_or_2d(x, 0, pad)              # 只右 pad
+    pad   = (-x.shape[0]) % L
+    x_pad = _pad1d_or_2d(x, 0, pad)                  # 右 pad 到 L 的整数倍
+    init  = jnp.zeros_like(x_pad[:taps-1])
 
-    init_buf = jnp.zeros((taps-1,) if x.ndim == 1
-                         else (taps-1, x.shape[1]), x.dtype)
-
-    # reshape 为 (n_blocks, L [,2])
     blk_shape = (-1, L) if x.ndim == 1 else (-1, L, x.shape[1])
-    _, ys = lax.scan(_os_block, init_buf,
-                     jnp.reshape(x_pad, blk_shape))
-    y = jnp.reshape(ys, x_pad.shape)[:x.shape[0]]  # 去 pad
+    _, ys = lax.scan(_os, init, jnp.reshape(x_pad, blk_shape))
+    y = jnp.reshape(ys, x_pad.shape)[:x.shape[0]]    # 去 pad
 
-    # ──⑥ 更新 slice─────────────────────────────────────────────
-    t_out = type(t)(
-        start = t.start + (taps-1)//2,
-        stop  = t.stop  - (taps-1)//2,
-        sps   = t.sps)
+    t_out = type(t)(t.start + (taps-1)//2,
+                    t.stop  - (taps-1)//2,
+                    t.sps)
     return Signal(y, t_out)
+# -----------------------------------------------------------------
 
 
                  
@@ -664,77 +648,120 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     return out_1d, t  
 # from jax import debug
 
+# ---------- 2-pol wrapper for conv1d_fft -------------------------
 def dconv_pair(scope: Scope, sig: Signal, *, taps, kinit):
-    """conv1d_fft 两极化包装：返回 (N,2)"""
-    x, t = sig
-    xs   = []
-    for pol in range(x.shape[1]):               # 逐极化
+    x, t = sig          # x:(N,2)
+    outs = []
+    for pol in range(x.shape[1]):
         xp, tp = scope.child(
             wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
             name=f'Pol{pol}')(Signal(x[:, pol], t))
-        xs.append(xp[:, None])                  # 保持列向量
-    x_out = jnp.concatenate(xs, axis=1)         # (N,2)
-    return Signal(x_out, tp)  
+        outs.append(xp[:, None])                 # keep col-vector
+    return Signal(jnp.concatenate(outs, 1), tp)
+# ----------------------------------------------------------------
   
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    保持原 fdbp(D->N)结构:
-      1) D
-      2) N
-      + 3) residual MLP => out shape=(N,) and add to x
-    """
-    x, t = signal
-    # 1) 色散
-    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     保持原 fdbp(D->N)结构:
+#       1) D
+#       2) N
+#       + 3) residual MLP => out shape=(N,) and add to x
+#     """
+#     x, t = signal
+#     # 1) 色散
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     # 可选: 对res加个可训练缩放
+#     if use_alpha:
+#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+#     else:
+#         alpha = 1.0
+#     # debug.print("alpha = {}", alpha)
+#     for i in range(steps):
+#         # --- (A) 色散补偿 (D)
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
+#         # --- (B) 非线性补偿 (N)
+#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+#             Signal(jnp.abs(x)**2, td),
+#             taps=ntaps,
+#             kernel_init=n_init
+#         )
+#         # 应用相位: x_new = exp(j*c) * x[...]
+#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+#         # --- (C) residual MLP
+#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+#             Signal(jnp.abs(x_new)**2, tN),
+#             hidden_dim=hidden_dim
+#         )
+#         # res_val => (N_new,)
+#         # cast to complex, or interpret as real
+#         # 这里示例 "在幅度上+res"
+#         # x_new += alpha * res_val
+#         # 不分real/imag => 全部 real offset => x_new + alpha * res
+#         # 只要 x_new是complex => convert
+#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+#         x_new = x_new + alpha * res_val_cplx_2d 
+        
+#         # update x,t
+#         x, t = x_new, t_res
+#     return Signal(x, t)
+
+
+
+# ------------------- fdbp  (完整替换) ----------------------------
+def fdbp(scope: Scope,
+         signal,
+         steps=3,
+         dtaps=261,
+         ntaps=41,
+         sps=2,
+         d_init=delta,
+         n_init=gauss,
+         hidden_dim=2,
+         use_alpha=True):
+
+    x, t = signal                          # x:(N,2)
     dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
-    # 可选: 对res加个可训练缩放
-    if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-    # debug.print("alpha = {}", alpha)
+
+    alpha = scope.param('res_alpha', nn.initializers.zeros, ()) if use_alpha else 1.0
+
     for i in range(steps):
-        # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        # --- (C) residual MLP
-        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        # res_val => (N_new,)
-        # cast to complex, or interpret as real
-        # 这里示例 "在幅度上+res"
-        # x_new += alpha * res_val
-        # 不分real/imag => 全部 real offset => x_new + alpha * res
-        # 只要 x_new是complex => convert
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-        x_new = x_new + alpha * res_val_cplx_2d 
-        
-        # update x,t
-        x, t = x_new, t_res
+        # (A) CD 补偿 ------------------------------------------------------------------
+        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+
+        # (B) 非线性相位补偿 -----------------------------------------------------------
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+
+        # **关键：把 x 截成与 c 完全同长**  (防尺寸漂移)
+        seg0 = tN.start - td.start
+        seg1 = seg0 + c.shape[0]           # = seg0 + len(c)
+        x_seg = x[seg0:seg1]               # (len(c),2)
+
+        x_new = jnp.exp(1j * c) * x_seg    # 相位应用
+
+        # (C) residual-MLP  —— 在幅度域做一点可学习偏置 ----------------------------
+        res, _ = scope.child(residual_mlp, name=f'ResMLP_{i}')(
+            Signal(jnp.abs(x_new)**2, tN), hidden_dim=hidden_dim)
+        x_new += alpha * res[:, None].astype(x_new.dtype)
+
+        x, t = x_new, tN                   # 进入下一步
+
     return Signal(x, t)
+# ----------------------------------------------------------------
 
 # def fdbp(
 #     scope: Scope,
