@@ -256,49 +256,49 @@ from jax import lax
 #     return Signal(y, t_out)
 
 
-def conv1d_fft(scope, signal, *,
-               taps        = 1025,
-               seglen      = None,          # 自动挑 ≥8192
-               mode        = 'valid',
-               kernel_init = delta):
+def conv1d_fft(scope, signal, *, taps=1025, seglen=None,
+               mode='valid', kernel_init=delta):
     """
-    Complex FFT overlap-save 1-D convolution
-    Supports complex64 kernel & input.
+    Complex FFT overlap-save 1-D convolution.
+    Works for (N,) or (N,2) complex64.
     """
-    x, t = signal                      # x: (N,2) complex64
+    x, t = signal                       # x: (N,)  or (N,2)
 
-    # ---- ① kernel 参数 (time-domain) ----------------------------------------
+    # ① kernel
     h_time = scope.param('kernel', kernel_init,
                          (taps,), jnp.complex64)
 
-    # ---- ② FFT 长度 ---------------------------------------------------------
+    # ② FFT len & block len
     if seglen is None:
-        seglen = 1 << max(13, (taps*2 - 1).bit_length())   # ≥8192, power-of-2
-    L = seglen - taps + 1                                   # 有效输出长度
+        seglen = 1 << max(13, (taps*2 - 1).bit_length())   # ≥8192 power-of-2
+    L = seglen - taps + 1
 
-    # ---- ③ 频域权重 ---------------------------------------------------------
-    Hk = jnp.fft.fft(h_time, seglen)        # (seglen,)
+    # ③ H[k]
+    Hk = jnp.fft.fft(h_time, seglen)                       # (seglen,)
 
-    # ---- ④ overlap-save -----------------------------------------------------
-    def _os_block(buf, block):              # buf: (taps-1,2)
-        blk = jnp.concatenate([buf, block], 0)           # (seglen,2)
-        Xk  = jnp.fft.fft(blk, seglen, axis=0)           # (seglen,2)
-        Yk  = Xk * Hk[:, None]                           # broadcast on pol
-        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]  # drop first taps-1
-        return block[-(taps-1):], y                      # new buf, out-block
+    # ④ overlap-save
+    def _os_block(buf, block):
+        blk = jnp.concatenate([buf, block], 0)             # (seglen,[2])
+        Xk  = jnp.fft.fft(blk, seglen, axis=0)
+        Yk  = Xk * Hk[:, None] if blk.ndim == 2 else Xk * Hk
+        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]
+        return block[-(taps-1):], y
 
     pad = (-x.shape[0]) % L
-    x_pad = jnp.pad(x, ((taps-1, pad), (0, 0)))          # left pad taps-1
-    init_buf = jnp.zeros((taps-1, 2), x.dtype)
+    x_pad   = _pad1d_or_2d(x, taps-1, pad)
+    initbuf = jnp.zeros((taps-1,) if x.ndim==1
+                        else (taps-1, x.shape[1]), x.dtype)
 
-    _, ys = lax.scan(_os_block, init_buf,
-                     jnp.reshape(x_pad, (-1, L, 2)))
-    y = jnp.reshape(ys, (-1, 2))[:x.shape[0] + pad]      # remove rhs pad
+    _, ys = lax.scan(_os_block, initbuf,
+                     jnp.reshape(x_pad, (-1, L) if x.ndim==1
+                                 else (-1, L, x.shape[1])))
+    y = jnp.reshape(ys, x.shape)        # 去掉右侧 pad
 
-    # ---- ⑤ slice update -----------------------------------------------------
+    # ⑤ slice
     t_out = slice(t.start + (taps-1)//2,
                   t.stop  - (taps-1)//2)
     return Signal(y, t_out)
+
                  
 def dispersion_init(a, *, steps=3):
     """
