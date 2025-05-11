@@ -537,11 +537,7 @@ def fdbp(
     d_init=delta,
     n_init=gauss):
     x, t = signal
-    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    dconv = vmap(wpartial(conv1d_fft,
-                          taps=dtaps,
-                          seglen=None,      # 让函数自己挑
-                          kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
@@ -665,6 +661,19 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     out_1d = out.squeeze(axis=-1)
     return out_1d, t  
 # from jax import debug
+
+def dconv_pair(scope: Scope, sig: Signal, *, taps, kinit):
+    """conv1d_fft 两极化包装：返回 (N,2)"""
+    x, t = sig
+    xs   = []
+    for pol in range(x.shape[1]):               # 逐极化
+        xp, tp = scope.child(
+            wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
+            name=f'Pol{pol}')(Signal(x[:, pol], t))
+        xs.append(xp[:, None])                  # 保持列向量
+    x_out = jnp.concatenate(xs, axis=1)         # (N,2)
+    return Signal(x_out, tp)  
+  
 def fdbp(
     scope: Scope,
     signal,
@@ -686,10 +695,7 @@ def fdbp(
     x, t = signal
     # 1) 色散
     # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    dconv = vmap(wpartial(conv1d_fft,
-                          taps=dtaps,
-                          seglen=None,      # 让函数自己挑
-                          kernel_init=d_init))
+    dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
     # 可选: 对res加个可训练缩放
     if use_alpha:
         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
