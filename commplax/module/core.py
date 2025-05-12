@@ -262,37 +262,62 @@ def _pad1d_or_2d(arr, left, right):
     else:                        # (N,2) or (N,C)
         return jnp.pad(arr, ((left, right), (0, 0)))
 
-def conv1d_fft(scope, signal, *, taps=1025, seglen=None,
-               mode='valid', kernel_init=delta):
-    x, t = signal                                    # x:(N,[2])
-    h_t = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+import jax.numpy as jnp, numpy as np
+from jax import lax
+from commplax.module import core
+from commplax.util import wrapped_partial as wpartial
 
-    if seglen is None:                               # 最近 2^k ≥ taps*2
-        seglen = 1 << max(13, (taps * 2 - 1).bit_length())
-    L = seglen - taps + 1                            # 每块有效长度
+def conv1d_fft(scope, signal, *, taps=261, seglen=None,
+               kernel_init=core.delta):
+    """valid-mode complex FFT 1-D convolution ，输出长度 = N-taps+1"""
+    x, t_in = signal                      # x:(N,) or (N,2)
 
-    Hk = jnp.fft.fft(h_t, seglen)                    # (seglen,)
+    # ① kernel
+    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
 
-    def _os(carry, blk_in):                          # overlap-save 内核
-        buf = carry
-        blk = jnp.concatenate([buf, blk_in], 0)      # (seglen,[2])
+    # ② FFT 长
+    if seglen is None:
+        seglen = 1 << max(13, (taps*2-1).bit_length())
+    L = seglen - taps + 1                # 每块有效输出
+
+    # ③ 频域权重
+    Hk = jnp.fft.fft(h, seglen)
+
+    # ④ 左 pad taps-1，右 pad 使总长可整除 L
+    pad_right = (-x.shape[0] - (taps-1)) % L
+    x_pad = jnp.pad(x, ((taps-1, pad_right), (0,0)) if x.ndim==2
+                          else (taps-1, pad_right))
+
+    init_buf = jnp.zeros_like(x_pad[:taps-1])
+    blk_shape = (-1, L)                   if x.ndim==1 else (-1, L, x.shape[1])
+
+    def _os(buf, blk_in):
+        blk = jnp.concatenate([buf, blk_in], 0)         # (seglen,[2])
         Xk  = jnp.fft.fft(blk, seglen, axis=0)
-        Yk  = Xk * (Hk[:, None] if blk.ndim == 2 else Hk)
-        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]   # 去重叠
+        Yk  = Xk * (Hk[:,None] if blk.ndim==2 else Hk)
+        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:] # valid part
         return blk_in[-(taps-1):], y
 
-    pad   = (-x.shape[0]) % L
-    x_pad = _pad1d_or_2d(x, 0, pad)                  # 右 pad 到 L 的整数倍
-    init  = jnp.zeros_like(x_pad[:taps-1])
+    _, ys = lax.scan(_os, init_buf, jnp.reshape(x_pad, blk_shape))
+    y_full = jnp.reshape(ys, (-1,)+x_pad.shape[1:])     # strip right pad
+    y = y_full[:x.shape[0] - taps + 1]                  # final valid 长度
 
-    blk_shape = (-1, L) if x.ndim == 1 else (-1, L, x.shape[1])
-    _, ys = lax.scan(_os, init, jnp.reshape(x_pad, blk_shape))
-    y = jnp.reshape(ys, x_pad.shape)[:x.shape[0]]    # 去 pad
+    t_out = core.SigTime(t_in.start + taps-1, t_in.stop, t_in.sps)
+    return core.Signal(y, t_out)
 
-    t_out = type(t)(t.start + (taps-1)//2,
-                    t.stop  - (taps-1)//2,
-                    t.sps)
-    return Signal(y, t_out)
+def dconv_pair(scope, sig: core.Signal, *, taps, kinit):
+    """两极化 FFT-conv ，并在时域中心抽样 (sps=2 → 取偶数下标)。"""
+    x, t = sig
+    outs = []
+    for pol in range(x.shape[1]):
+        y, tp = scope.child(wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
+                            name=f'Pol{pol}')(core.Signal(x[:,pol], t))
+        # 抽取符号：偶数采样 => 与 sent-symbol 对齐
+        outs.append(y[::t.sps, None])
+    # 取完抽样后，时间轴变成符号速率
+    tp_sym = core.SigTime(tp.start//t.sps, tp.stop//t.sps, 1)
+    return core.Signal(jnp.concatenate(outs,1), tp_sym)
+
 # -----------------------------------------------------------------
 
 
@@ -647,18 +672,6 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     out_1d = out.squeeze(axis=-1)
     return out_1d, t  
 # from jax import debug
-
-# ---------- 2-pol wrapper for conv1d_fft -------------------------
-def dconv_pair(scope: Scope, sig: Signal, *, taps, kinit):
-    x, t = sig          # x:(N,2)
-    outs = []
-    for pol in range(x.shape[1]):
-        xp, tp = scope.child(
-            wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
-            name=f'Pol{pol}')(Signal(x[:, pol], t))
-        outs.append(xp[:, None])                 # keep col-vector
-    return Signal(jnp.concatenate(outs, 1), tp)
-# ----------------------------------------------------------------
   
 # def fdbp(
 #     scope: Scope,
