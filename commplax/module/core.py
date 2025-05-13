@@ -268,38 +268,58 @@ from jax import lax
 from commplax.module import core
 from commplax.util import wrapped_partial as wpartial
 
+def _pad_left_right(arr, left, right):
+    """兼容 (N,) 与 (N,C) 的左右 pad。"""
+    if arr.ndim == 1:
+        return jnp.pad(arr, (left, right))
+    return jnp.pad(arr, ((left, right), (0, 0)))
+
 def conv1d_fft(scope, signal, *, taps=261, seglen=None,
                kernel_init=core.delta):
-    """valid-mode complex FFT 1-D convolution，保持 t.sps 不变"""
-    x, t_in = signal                            # x:(N,)/(N,2)
+    """
+    valid-mode complex FFT overlap-save 1-D convolution
+    - 支持 (N,) 或 (N,2) 复向量
+    - 不改变 t.sps
+    """
+    x, t_in = signal                     # x:(N,) or (N,2)
 
+    # ──① kernel 参数──────────────────────────
     h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
 
+    # ──② FFT 长度 & block 输出 L───────────────
     if seglen is None:
-        seglen = 1 << max(13, (taps*2-1).bit_length())
-    L = seglen - taps + 1                       # 每块有效输出
+        seglen = 1 << max(13, (taps*2 - 1).bit_length())   # ≥ 8192
+    L = seglen - taps + 1
 
+    # ──③ 频域权重──────────────────────────────
     Hk = jnp.fft.fft(h, seglen)
 
+    # ──④ 输入左 pad taps-1，右 pad 使整除 L────
     pad_r = (-x.shape[0] - (taps-1)) % L
-    x_pad = jnp.pad(x, ((taps-1, pad_r), (0,0)) if x.ndim==2
-                        else (taps-1, pad_r))
+    x_pad = _pad_left_right(x, taps-1, pad_r)
 
     init_buf = jnp.zeros_like(x_pad[:taps-1])
-    blk_shape = (-1, L) if x.ndim==1 else (-1, L, x.shape[1])
+    blk_shape = (-1, L) if x.ndim == 1 else (-1, L, x.shape[1])
 
+    # overlap-save 核心
     def _os(buf, blk_in):
-        blk = jnp.concatenate([buf, blk_in], 0)
+        blk = jnp.concatenate([buf, blk_in], 0)            # (seglen,…)
         Xk  = jnp.fft.fft(blk, seglen, axis=0)
-        Yk  = Xk * (Hk[:,None] if blk.ndim==2 else Hk)
-        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]
+        Yk  = Xk * (Hk[:, None] if blk.ndim == 2 else Hk)
+        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]    # 去掉 overlap
         return blk_in[-(taps-1):], y
 
     _, ys = lax.scan(_os, init_buf, jnp.reshape(x_pad, blk_shape))
-    y_full = jnp.reshape(ys, (-1,)+x_pad.shape[1:])
-    y = y_full[:x.shape[0] - taps + 1]          # valid 长度
+    y_full = jnp.reshape(ys, (-1,) + x_pad.shape[1:])
+    y = y_full[:x.shape[0] - taps + 1]                     # valid 长度
 
-    t_out = core.SigTime(t_in.start + taps-1, t_in.stop, t_in.sps)
+    # ──⑤ 正确更新 SigTime (关键修正)────────────
+    rtap = (taps - 1) // 2
+    t_out = core.SigTime(
+        start = t_in.start + rtap,
+        stop  = t_in.stop  - rtap,
+        sps   = t_in.sps)
+
     return core.Signal(y, t_out)
 
 def dconv_pair(scope, sig: core.Signal, *, taps, kinit):
