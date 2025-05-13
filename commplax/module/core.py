@@ -747,45 +747,45 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
 
 
 # ------------------- fdbp  (完整替换) ----------------------------
-def fdbp(scope: Scope,
-         signal,
-         steps=3,
-         dtaps=261,
-         ntaps=41,
-         sps=2,
-         d_init=delta,
-         n_init=gauss,
-         hidden_dim=2,
-         use_alpha=True):
+# def fdbp(scope: Scope,
+#          signal,
+#          steps=3,
+#          dtaps=261,
+#          ntaps=41,
+#          sps=2,
+#          d_init=delta,
+#          n_init=gauss,
+#          hidden_dim=2,
+#          use_alpha=True):
 
-    x, t = signal                          # x:(N,2)
-    dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
+#     x, t = signal                          # x:(N,2)
+#     dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
 
-    alpha = scope.param('res_alpha', nn.initializers.zeros, ()) if use_alpha else 1.0
+#     alpha = scope.param('res_alpha', nn.initializers.zeros, ()) if use_alpha else 1.0
 
-    for i in range(steps):
-        # (A) CD 补偿 ------------------------------------------------------------------
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#     for i in range(steps):
+#         # (A) CD 补偿 ------------------------------------------------------------------
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
 
-        # (B) 非线性相位补偿 -----------------------------------------------------------
-        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # (B) 非线性相位补偿 -----------------------------------------------------------
+#         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
 
-        # **关键：把 x 截成与 c 完全同长**  (防尺寸漂移)
-        seg0 = tN.start - td.start
-        seg1 = seg0 + c.shape[0]           # = seg0 + len(c)
-        x_seg = x[seg0:seg1]               # (len(c),2)
+#         # **关键：把 x 截成与 c 完全同长**  (防尺寸漂移)
+#         seg0 = tN.start - td.start
+#         seg1 = seg0 + c.shape[0]           # = seg0 + len(c)
+#         x_seg = x[seg0:seg1]               # (len(c),2)
 
-        x_new = jnp.exp(1j * c) * x_seg    # 相位应用
+#         x_new = jnp.exp(1j * c) * x_seg    # 相位应用
 
-        # (C) residual-MLP  —— 在幅度域做一点可学习偏置 ----------------------------
-        res, _ = scope.child(residual_mlp, name=f'ResMLP_{i}')(
-            Signal(jnp.abs(x_new)**2, tN), hidden_dim=hidden_dim)
-        x_new += alpha * res[:, None].astype(x_new.dtype)
+#         # (C) residual-MLP  —— 在幅度域做一点可学习偏置 ----------------------------
+#         res, _ = scope.child(residual_mlp, name=f'ResMLP_{i}')(
+#             Signal(jnp.abs(x_new)**2, tN), hidden_dim=hidden_dim)
+#         x_new += alpha * res[:, None].astype(x_new.dtype)
 
-        x, t = x_new, tN                   # 进入下一步
+#         x, t = x_new, tN                   # 进入下一步
 
-    return Signal(x, t)
+#     return Signal(x, t)
 # ----------------------------------------------------------------
 
 # def fdbp(
