@@ -194,7 +194,7 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #         mean = running_mean.value
 #     return signal / jnp.sqrt(mean)
 
-def BatchPowerNorm(scope, *,
+def batchpowernorm(scope, *,
                    momentum=0.999,
                    eps=1e-8,
                    mode='train'):
