@@ -194,21 +194,21 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
 #         mean = running_mean.value
 #     return signal / jnp.sqrt(mean)
 
-def batchpowernorm(scope, *,
-                   momentum=0.999,
-                   eps=1e-8,
-                   mode='train'):
-  def _bpn(signal):
+def batchpowernorm(scope, signal,
+                         momentum=0.999,
+                         eps=1e-8,
+                         mode='train'):
+    """Same as original, but add eps to avoid div/0 → inf → NaN."""
     running = scope.variable('norm', 'running_mean',
                              lambda *_: jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-      m = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
-      running.value = momentum * running.value + (1 - momentum) * m
+        m = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
+        running.value = momentum * running.value + (1 - momentum) * m
     else:
-      m = running.value
-    m = jnp.where(m < eps, eps, m)          # ← 护栏，防 0 / NaN
+        m = running.value
+    m = jnp.where(m < eps, eps, m)          # ← 护栏
     return signal / jnp.sqrt(m)
-  return _bpn
+
 
 
 def conv1d(
