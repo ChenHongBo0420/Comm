@@ -255,7 +255,6 @@ def conv1d_fft(scope, signal, taps=1025, seglen=None,
     t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
     return Signal(y, t_out)
 
--------- FFT overlap-save 1-D conv (复数版，可单/双极化) -------
 def _pad1d_or_2d(arr, left, right):
     if arr.ndim == 1:
         return jnp.pad(arr, (left, right))
