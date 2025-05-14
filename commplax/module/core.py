@@ -982,8 +982,8 @@ def fdbp1(
     n_init=gauss):
     
     x, t = signal
-    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    # dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
     
