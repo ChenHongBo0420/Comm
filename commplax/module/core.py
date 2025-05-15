@@ -212,41 +212,47 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
   
-import math, functools, jax.numpy as jnp
-from jax import lax
+# ---------- util ----------
+def _next_pow2(n: int) -> int:
+    return 1 << (n - 1).bit_length()
 
-def conv1d_fft(scope, signal, *, taps=261, seglen=None,
-                       kernel_init=core.delta, debug=False):
+# ---------- FFT 卷积：完全遵循 core.conv1d 的 valid 约定 ----------
+def conv1d_fft(scope: Scope,
+               signal: Signal,
+               *,
+               taps: int = 261,
+               seglen: int | None = None,
+               kernel_init = delta,
+               debug=False):
     """
-    与 commplax.module.core.conv1d 完全一致的时序/方向：
-      · kernel **不**翻转
-      · valid 输出首样下标 = rtap = (taps-1)//2
-      · SigTime.start += rtap, stop -= rtap
+    1-D complex convolution, **valid**, 与 core.conv1d 同对齐：
+      · kernel 不翻转；
+      · valid 首样在 rtap = (taps-1)//2；
+      · SigTime.{start,stop} 同步 ±rtap。
     """
     x, t_in = signal
-    h = scope.param("kernel", kernel_init, (taps,), jnp.complex64)
+    h       = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
 
     N_in  = x.shape[0]
     rtap  = (taps - 1) // 2
-    N_out = N_in - (2 * rtap)                 # = N_in - taps + 1
+    N_out = N_in - 2 * rtap
 
     fft_len = seglen or _next_pow2(N_in + taps - 1)
     if debug:
-        print(f"[fft] N={N_in} taps={taps} rtap={rtap} fft_len={fft_len}")
+        print(f"[conv1d_fft] N={N_in} taps={taps} fft_len={fft_len} rtap={rtap}")
 
-    Xk = jnp.fft.fft(x, fft_len, axis=0)      # x 先 pad 到 fft_len
-    Hk = jnp.fft.fft(h, fft_len)              # !!! no flip
-    if x.ndim == 2: Hk = Hk[:, None]
+    Xk = jnp.fft.fft(x,        fft_len, axis=0)
+    Hk = jnp.fft.fft(h,        fft_len)          # no flip
+    if x.ndim == 2:
+        Hk = Hk[:, None]                         # broadcast to (fft_len, C)
 
-    Y_full = jnp.fft.ifft(Xk * Hk, fft_len, axis=0)
+    y_full = jnp.fft.ifft(Xk * Hk, fft_len, axis=0)
+    y_val  = y_full[rtap : rtap + N_out]         # valid 部分
 
-    # ---- 取 valid，首样是 rtap -------------------------------
-    y = Y_full[rtap : rtap + N_out]
-
-    t_out = core.SigTime(t_in.start + rtap,
-                         t_in.stop  - rtap,
-                         t_in.sps)
-    return core.Signal(y, t_out)
+    t_out = SigTime(t_in.start + rtap,
+                    t_in.stop  - rtap,
+                    t_in.sps)
+    return Signal(y_val, t_out)
 
 
 def _pad1d_or_2d(arr, left, right):
@@ -255,77 +261,16 @@ def _pad1d_or_2d(arr, left, right):
     else:                        # (N,2) or (N,C)
         return jnp.pad(arr, ((left, right), (0, 0)))
 
-# --- 放到 gdbp_base_test.py 顶部（或单独 cell 执行） -----------------
-import jax.numpy as jnp, numpy as np
-from jax import lax
-from commplax.module import core
-from commplax.util import wrapped_partial as wpartial
-
-def _pad_left_right(arr, left, right):
-    """兼容 (N,) 与 (N,C) 的左右 pad。"""
-    if arr.ndim == 1:
-        return jnp.pad(arr, (left, right))
-    return jnp.pad(arr, ((left, right), (0, 0)))
-
-def conv1d_fft(scope, signal, *, taps=261, seglen=None,
-               kernel_init=core.delta):
-    """
-    valid-mode complex FFT overlap-save 1-D convolution
-    - 支持 (N,) 或 (N,2) 复向量
-    - 不改变 t.sps
-    """
-    x, t_in = signal                     # x:(N,) or (N,2)
-
-    # ──① kernel 参数──────────────────────────
-    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
-
-    # ──② FFT 长度 & block 输出 L───────────────
-    if seglen is None:
-        seglen = 1 << max(13, (taps*2 - 1).bit_length())   # ≥ 8192
-    L = seglen - taps + 1
-
-    # ──③ 频域权重──────────────────────────────
-    Hk = jnp.fft.fft(h, seglen)
-
-    # ──④ 输入左 pad taps-1，右 pad 使整除 L────
-    pad_r = (-x.shape[0] - (taps-1)) % L
-    x_pad = _pad_left_right(x, taps-1, pad_r)
-
-    init_buf = jnp.zeros_like(x_pad[:taps-1])
-    blk_shape = (-1, L) if x.ndim == 1 else (-1, L, x.shape[1])
-
-    # overlap-save 核心
-    def _os(buf, blk_in):
-        blk = jnp.concatenate([buf, blk_in], 0)            # (seglen,…)
-        Xk  = jnp.fft.fft(blk, seglen, axis=0)
-        Yk  = Xk * (Hk[:, None] if blk.ndim == 2 else Hk)
-        y   = jnp.fft.ifft(Yk, seglen, axis=0)[taps-1:]    # 去掉 overlap
-        return blk_in[-(taps-1):], y
-
-    _, ys = lax.scan(_os, init_buf, jnp.reshape(x_pad, blk_shape))
-    y_full = jnp.reshape(ys, (-1,) + x_pad.shape[1:])
-    y = y_full[:x.shape[0] - taps + 1]                     # valid 长度
-
-    # ──⑤ 正确更新 SigTime (关键修正)────────────
-    rtap = (taps - 1) // 2
-    t_out = core.SigTime(
-        start = t_in.start + rtap,
-        stop  = t_in.stop  - rtap,
-        sps   = t_in.sps)
-
-    return core.Signal(y, t_out)
-
-def dconv_pair(scope, sig, *, taps, kinit):
+def dconv_pair(scope, sig: Signal, *, taps, kinit):
     x, t = sig
     outs = []
-    for p in range(x.shape[1]):
+    for p in range(x.shape[1]):                   # 两极化独立
         y, tp = scope.child(
-            wpartial(conv1d_fft_aligned, taps=taps, kernel_init=kinit),
-            name=f"Pol{p}"
-        )(core.Signal(x[:, p], t))
+            wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
+            name=f'Pol{p}'
+        )(Signal(x[:, p], t))
         outs.append(y[:, None])
-    return core.Signal(jnp.concatenate(outs, 1), tp)
-# ---------------------------------------------------------------------------
+    return Signal(jnp.concatenate(outs, axis=1), tp)
 
                 
 def dispersion_init(a, *, steps=3):
