@@ -212,32 +212,67 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
   
-# ---------- util ----------
+# ---------- 辅助 ----------
 def _next_pow2(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
-# ---------- FFT 卷积：完全遵循 core.conv1d 的 valid 约定 ----------
-def conv1d_fft(scope, signal, *, taps=261, seglen=None,
-               kernel_init=delta, debug=False):
-
+# ---------- FFT 1-D valid 卷积 ----------
+def conv1d_fft(scope: Scope,
+               signal: core.Signal,
+               *,
+               taps: int = 261,
+               seglen: int | None = None,
+               kernel_init = core.delta,
+               debug: bool = False):
+    """
+    完全复刻  core.conv1d(mode='valid')  的
+        • kernel 方向（不翻转）
+        • 输出长度  N_out = N_in − 2·rtap
+        • 输出首样  位移 rtap
+        • SigTime  同步 ±rtap
+    """
     x, t_in = signal
-    h       = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+    h = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
 
     rtap   = (taps - 1) // 2
-    N_out  = x.shape[0] - 2*rtap
+    N_out  = x.shape[0] - 2 * rtap
     fftlen = seglen or _next_pow2(x.shape[0] + taps - 1)
 
     Xk = jnp.fft.fft(x, fftlen, axis=0)
-    Hk = jnp.fft.fft(h, fftlen)                 # ★ 不再 flip
-    if x.ndim == 2: Hk = Hk[:, None]
+    Hk = jnp.fft.fft(h, fftlen)                 # ★ NO flip!
+    if x.ndim == 2:                             # broadcast (fftlen, C)
+        Hk = Hk[:, None]
 
     y_full = jnp.fft.ifft(Xk * Hk, fftlen, axis=0)
-    y      = y_full[rtap : rtap + N_out]        # ★ 用 rtap
+    y_val  = y_full[rtap : rtap + N_out]        # ★ 首样 = rtap
 
-    t_out = SigTime(t_in.start + rtap,
-                    t_in.stop  - rtap,
-                    t_in.sps)
-    return Signal(y, t_out)
+    t_out = core.SigTime(t_in.start + rtap,
+                         t_in.stop  - rtap,
+                         t_in.sps)
+    if debug:
+        print(f"[conv1d_fft] N={x.shape[0]} taps={taps} rtap={rtap} "
+              f"fftlen={fftlen}  out_len={N_out}")
+    return core.Signal(y_val, t_out)
+
+# ---------- 双极化 D-filter （用上面那一版 FFT-conv） ----------
+def dconv_pair(scope: Scope,
+               signal: core.Signal,
+               *,
+               taps: int = 261,
+               kinit = core.delta) -> core.Signal:
+    """
+    对 (N,2) 复波形作 2 × 单极化色散补偿，保持与 core.conv1d 对齐。
+    """
+    x, t = signal
+    outs = []
+    for p in range(x.shape[1]):                 # 两极化独立
+        y, tp = scope.child(
+            wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
+            name=f'Pol{p}'
+        )(core.Signal(x[:, p], t))
+        outs.append(y[:, None])
+    return core.Signal(jnp.concatenate(outs, axis=1), tp)
+
 
 
 
@@ -246,17 +281,6 @@ def _pad1d_or_2d(arr, left, right):
         return jnp.pad(arr, (left, right))
     else:                        # (N,2) or (N,C)
         return jnp.pad(arr, ((left, right), (0, 0)))
-
-def dconv_pair(scope, sig: Signal, *, taps, kinit):
-    x, t = sig
-    outs = []
-    for p in range(x.shape[1]):                   # 两极化独立
-        y, tp = scope.child(
-            wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
-            name=f'Pol{p}'
-        )(Signal(x[:, p], t))
-        outs.append(y[:, None])
-    return Signal(jnp.concatenate(outs, axis=1), tp)
 
                 
 def dispersion_init(a, *, steps=3):
