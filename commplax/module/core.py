@@ -218,7 +218,7 @@ def _next_pow2(n: int) -> int:
 
 # ---------- FFT 1-D valid 卷积 ----------
 def conv1d_fft(scope: Scope,
-               signal: core.Signal,
+               signal: Signal,
                *,
                taps: int = 261,
                seglen: int | None = None,
