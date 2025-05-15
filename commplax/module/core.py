@@ -256,7 +256,7 @@ def conv1d_fft(scope: Scope,
 
 # ---------- 双极化 D-filter （用上面那一版 FFT-conv） ----------
 def dconv_pair(scope: Scope,
-               signal: core.Signal,
+               signal: Signal,
                *,
                taps: int = 261,
                kinit = delta) -> Signal:
