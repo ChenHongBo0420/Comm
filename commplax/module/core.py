@@ -218,7 +218,7 @@ def _next_pow2(n: int) -> int:
 
 # ---------- FFT 卷积：完全遵循 core.conv1d 的 valid 约定 ----------
 def conv1d_fft(scope, signal, *, taps=261, seglen=None,
-               kernel_init=core.delta, debug=False):
+               kernel_init=delta, debug=False):
     """
     valid-mode 1-D 复数卷积   (不降采样，不 streaming)
 
