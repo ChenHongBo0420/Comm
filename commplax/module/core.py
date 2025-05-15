@@ -184,31 +184,15 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
     return fn(signal, *aux)
 
 
-# def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
-#     running_mean = scope.variable('norm', 'running_mean',
-#                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
-#     if mode == 'train':
-#         mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
-#         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
-#     else:
-#         mean = running_mean.value
-#     return signal / jnp.sqrt(mean)
-
-def batchpowernorm(scope, signal,
-                         momentum=0.999,
-                         eps=1e-8,
-                         mode='train'):
-    """Same as original, but add eps to avoid div/0 → inf → NaN."""
-    running = scope.variable('norm', 'running_mean',
-                             lambda *_: jnp.ones(signal.val.shape[-1]), ())
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+    running_mean = scope.variable('norm', 'running_mean',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        m = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
-        running.value = momentum * running.value + (1 - momentum) * m
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
-        m = running.value
-    m = jnp.where(m < eps, eps, m)          # ← 护栏
-    return signal / jnp.sqrt(m)
-
+        mean = running_mean.value
+    return signal / jnp.sqrt(mean)
 
 
 def conv1d(
@@ -231,46 +215,39 @@ def conv1d(
 import math, functools, jax.numpy as jnp
 from jax import lax
 
-def conv1d_fft(scope, signal, taps=1025, seglen=None,
-               mode='valid', kernel_init=delta):
+def conv1d_fft(scope, signal, *, taps=261, seglen=None,
+                       kernel_init=core.delta, debug=False):
     """
-    FFT overlap-save 1-D convolution  (complex64)
-    seglen: FFT 长度，默认取最近的 2^k ≥ taps+block-1
+    与 commplax.module.core.conv1d 完全一致的时序/方向：
+      · kernel **不**翻转
+      · valid 输出首样下标 = rtap = (taps-1)//2
+      · SigTime.start += rtap, stop -= rtap
     """
-    x, t = signal          # x: (N,2)    t: slice
+    x, t_in = signal
+    h = scope.param("kernel", kernel_init, (taps,), jnp.complex64)
 
-    # ① 参数：频域权重 H[k]
-    h_time = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+    N_in  = x.shape[0]
+    rtap  = (taps - 1) // 2
+    N_out = N_in - (2 * rtap)                 # = N_in - taps + 1
 
-    # ② 预计算 FFT 长和 padding
-    if seglen is None:
-        seglen = 1 << (taps*2 - 1).bit_length()   # 最近 2^k
-    L = seglen - taps + 1                        # 每块有效输出长度
+    fft_len = seglen or _next_pow2(N_in + taps - 1)
+    if debug:
+        print(f"[fft] N={N_in} taps={taps} rtap={rtap} fft_len={fft_len}")
 
-    # ③ time→freq
-    Hk = jnp.fft.rfft(h_time, seglen)            # (seglen//2+1,)
+    Xk = jnp.fft.fft(x, fft_len, axis=0)      # x 先 pad 到 fft_len
+    Hk = jnp.fft.fft(h, fft_len)              # !!! no flip
+    if x.ndim == 2: Hk = Hk[:, None]
 
-    # ④ overlap-save
-    def _os_block(carry, block):
-        buf = carry                              # shape (taps-1,2)
-        blk = jnp.concatenate([buf, block], 0)   # (seglen,2)
-        Xk = jnp.fft.rfft(blk, axis=0)
-        Yk = Xk * Hk[:,None]                     # broadcast on pol dim
-        y = jnp.fft.irfft(Yk, axis=0)[taps-1:]   # throw away first taps-1
-        return block[-(taps-1):], y              # new buf, output
+    Y_full = jnp.fft.ifft(Xk * Hk, fft_len, axis=0)
 
-    # pad x 使其能整除 L
-    pad = (-x.shape[0]) % L
-    x_pad = jnp.pad(x, ((taps-1, pad), (0,0)))
+    # ---- 取 valid，首样是 rtap -------------------------------
+    y = Y_full[rtap : rtap + N_out]
 
-    init_buf = jnp.zeros((taps-1, 2), x.dtype)
-    _, ys = lax.scan(_os_block, init_buf,          # carry buf
-                     jnp.reshape(x_pad, (-1, L, 2)))   # blocks
-    y = jnp.reshape(ys, (-1,2))[:x.shape[0]+pad]   # 去掉 pad
+    t_out = core.SigTime(t_in.start + rtap,
+                         t_in.stop  - rtap,
+                         t_in.sps)
+    return core.Signal(y, t_out)
 
-    # ⑤ 更新 slice
-    t_out = slice(t.start + (taps-1)//2, t.stop - (taps-1)//2)
-    return Signal(y, t_out)
 
 def _pad1d_or_2d(arr, left, right):
     if arr.ndim == 1:
@@ -338,15 +315,16 @@ def conv1d_fft(scope, signal, *, taps=261, seglen=None,
 
     return core.Signal(y, t_out)
 
-def dconv_pair(scope, sig: core.Signal, *, taps, kinit):
-    """双极化 FFT-conv，不降采样！"""
+def dconv_pair(scope, sig, *, taps, kinit):
     x, t = sig
     outs = []
-    for pol in range(x.shape[1]):
-        y, tp = scope.child(wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
-                            name=f'Pol{pol}')(core.Signal(x[:,pol], t))
-        outs.append(y[:,None])
-    return core.Signal(jnp.concatenate(outs,1), tp)  # t.sps 与输入相同
+    for p in range(x.shape[1]):
+        y, tp = scope.child(
+            wpartial(conv1d_fft_aligned, taps=taps, kernel_init=kinit),
+            name=f"Pol{p}"
+        )(core.Signal(x[:, p], t))
+        outs.append(y[:, None])
+    return core.Signal(jnp.concatenate(outs, 1), tp)
 # ---------------------------------------------------------------------------
 
                 
