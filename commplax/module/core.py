@@ -217,42 +217,50 @@ def _next_pow2(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
 # ---------- FFT 卷积：完全遵循 core.conv1d 的 valid 约定 ----------
-def conv1d_fft(scope: Scope,
-               signal: Signal,
-               *,
-               taps: int = 261,
-               seglen: int | None = None,
-               kernel_init = delta,
-               debug=False):
+def conv1d_fft(scope, signal, *, taps=261, seglen=None,
+               kernel_init=core.delta, debug=False):
     """
-    1-D complex convolution, **valid**, 与 core.conv1d 同对齐：
-      · kernel 不翻转；
-      · valid 首样在 rtap = (taps-1)//2；
-      · SigTime.{start,stop} 同步 ±rtap。
+    valid-mode 1-D 复数卷积   (不降采样，不 streaming)
+
+    **步骤**
+    1. kernel 先 time-reverse（与 jnp.convolve 同约定）
+    2. 把信号 & kernel zero-pad 到同一 FFT 长度
+    3. full 卷积 → 取 [taps-1 : taps-1+N_out] 得 valid 输出
     """
-    x, t_in = signal
-    h       = scope.param('kernel', kernel_init, (taps,), jnp.complex64)
+    x, t_in = signal                       # x:(N,), (N,C)
+    h_time  = scope.param("kernel", kernel_init,
+                          (taps,), jnp.complex64)
 
     N_in  = x.shape[0]
-    rtap  = (taps - 1) // 2
-    N_out = N_in - 2 * rtap
+    N_out = N_in - taps + 1                # valid 长度
 
-    fft_len = seglen or _next_pow2(N_in + taps - 1)
+    # ---------- FFT 长 ----------
+    fft_len = seglen if seglen is not None \
+                      else _next_pow2(N_in + taps - 1)
+
     if debug:
-        print(f"[conv1d_fft] N={N_in} taps={taps} fft_len={fft_len} rtap={rtap}")
+        print(f"◆ N_in={N_in}  taps={taps}  fft_len={fft_len}")
 
-    Xk = jnp.fft.fft(x,        fft_len, axis=0)
-    Hk = jnp.fft.fft(h,        fft_len)          # no flip
-    if x.ndim == 2:
-        Hk = Hk[:, None]                         # broadcast to (fft_len, C)
+    # ---------- FFT ----------
+    Xk = jnp.fft.fft(x,          fft_len, axis=0)
+    Hk = jnp.fft.fft(jnp.flip(h_time), fft_len)
+    if x.ndim == 2:                          # broadcast 到 (fft_len,2)
+        Hk = Hk[:, None]
 
-    y_full = jnp.fft.ifft(Xk * Hk, fft_len, axis=0)
-    y_val  = y_full[rtap : rtap + N_out]         # valid 部分
+    Y  = jnp.fft.ifft(Xk * Hk, fft_len, axis=0)
 
-    t_out = SigTime(t_in.start + rtap,
-                    t_in.stop  - rtap,
-                    t_in.sps)
-    return Signal(y_val, t_out)
+    # ---------- 取 valid ----------
+    y_val = Y[taps-1 : taps-1 + N_out]
+
+    # ---------- SigTime ----------
+    shift = taps - 1
+    t_out = core.SigTime(t_in.start + shift,
+                         t_in.stop  - shift,
+                         t_in.sps)
+    if debug:
+        print("◆ y[0] =", y_val[0])
+
+    return core.Signal(y_val, t_out)
 
 
 def _pad1d_or_2d(arr, left, right):
