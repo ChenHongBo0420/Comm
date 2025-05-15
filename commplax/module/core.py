@@ -222,8 +222,8 @@ def conv1d_fft(scope: Scope,
                *,
                taps: int = 261,
                seglen: int | None = None,
-               kernel_init = core.delta,
-               debug: bool = False):
+               kernel_init = delta,
+               debug: bool = True):
     """
     完全复刻  core.conv1d(mode='valid')  的
         • kernel 方向（不翻转）
@@ -246,13 +246,13 @@ def conv1d_fft(scope: Scope,
     y_full = jnp.fft.ifft(Xk * Hk, fftlen, axis=0)
     y_val  = y_full[rtap : rtap + N_out]        # ★ 首样 = rtap
 
-    t_out = core.SigTime(t_in.start + rtap,
+    t_out = SigTime(t_in.start + rtap,
                          t_in.stop  - rtap,
                          t_in.sps)
     if debug:
         print(f"[conv1d_fft] N={x.shape[0]} taps={taps} rtap={rtap} "
               f"fftlen={fftlen}  out_len={N_out}")
-    return core.Signal(y_val, t_out)
+    return Signal(y_val, t_out)
 
 # ---------- 双极化 D-filter （用上面那一版 FFT-conv） ----------
 def dconv_pair(scope: Scope,
