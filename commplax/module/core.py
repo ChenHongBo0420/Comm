@@ -259,7 +259,7 @@ def dconv_pair(scope: Scope,
                signal: core.Signal,
                *,
                taps: int = 261,
-               kinit = core.delta) -> core.Signal:
+               kinit = delta) -> Signal:
     """
     对 (N,2) 复波形作 2 × 单极化色散补偿，保持与 core.conv1d 对齐。
     """
@@ -269,9 +269,9 @@ def dconv_pair(scope: Scope,
         y, tp = scope.child(
             wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
             name=f'Pol{p}'
-        )(core.Signal(x[:, p], t))
+        )(Signal(x[:, p], t))
         outs.append(y[:, None])
-    return core.Signal(jnp.concatenate(outs, axis=1), tp)
+    return Signal(jnp.concatenate(outs, axis=1), tp)
 
 
 
