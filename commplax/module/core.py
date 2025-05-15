@@ -254,13 +254,13 @@ def conv1d_fft(scope, signal, *, taps=261, seglen=None,
 
     # ---------- SigTime ----------
     shift = taps - 1
-    t_out = core.SigTime(t_in.start + shift,
+    t_out = SigTime(t_in.start + shift,
                          t_in.stop  - shift,
                          t_in.sps)
     if debug:
         print("◆ y[0] =", y_val[0])
 
-    return core.Signal(y_val, t_out)
+    return Signal(y_val, t_out)
 
 
 def _pad1d_or_2d(arr, left, right):
