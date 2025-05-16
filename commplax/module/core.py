@@ -525,7 +525,7 @@ def fdbp(scope: Scope,
          n_init = gauss):
 
     x, t = signal
-    dconv = wpartial(dconv_pair, taps=dtaps, kinit=dispersion_init)
+    dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
     # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         # --- CD 补偿 (D)
