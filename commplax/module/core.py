@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import debug_patch          # ← 只有这一行
 import jax
 import numpy as np
 from jax import numpy as jnp
