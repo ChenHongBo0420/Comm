@@ -211,89 +211,6 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
   
-# ---------- helpers ----------
-def _next_pow2(n: int) -> int:
-    return 1 << (n - 1).bit_length()
-
-
-# ---------- FFT-conv that exactly mimics xop.convolve(valid) ----------
-def conv1d_fft(scope: Scope,
-               signal: Signal,
-               *,
-               taps: int = 261,
-               seglen: int | None = None,
-               kernel_init = delta,
-               debug: bool = False):
-
-    x, t_in = signal                      # x: (N,)  or (N, C)
-    h_time  = scope.param('kernel', kernel_init,
-                          (taps,), jnp.complex64)
-
-    rtap  = (taps - 1) // 2               # same delay rule as core.conv1d
-    Nout  = x.shape[0] - 2 * rtap
-    fftlen = seglen or _next_pow2(x.shape[0] + taps - 1)
-
-    # (★) ***key fix ––– do NOT flip the kernel***
-    Xk = jnp.fft.fft(x,      fftlen, axis=0)
-    Hk = jnp.fft.fft(h_time, fftlen)
-    if x.ndim == 2:                       # broadcast to (fftlen, C)
-        Hk = Hk[:, None]
-
-    y_full = jnp.fft.ifft(Xk * Hk, fftlen, axis=0)
-    y_val  = y_full[rtap : rtap + Nout]   # identical cropping
-
-    t_out = SigTime(t_in.start + rtap,
-                    t_in.stop  - rtap,
-                    t_in.sps)
-
-    if debug and scope.is_initializing():
-        print(f"[conv1d_fft] N={x.shape[0]}  taps={taps}  "
-              f"rtap={rtap}  fftlen={fftlen}  out_len={Nout}")
-
-    return Signal(y_val, t_out)
-
-
-# ---------- 2-pol wrapper ----------
-def dconv_pair(scope: Scope,
-               sig: Signal,
-               *,
-               taps: int,
-               kinit):
-
-    x, t = sig                               # x:(N,2)
-    outs = []
-    for p in range(x.shape[1]):
-        y, tp = scope.child(
-            wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
-            name=f"Pol{p}"
-        )(Signal(x[:, p], t))
-        outs.append(y[:, None])               # (Nout,1)
-    return Signal(jnp.concatenate(outs, axis=1), tp)
-
-
-def _pad1d_or_2d(arr, left, right):
-    if arr.ndim == 1:
-        return jnp.pad(arr, (left, right))
-    else:                        # (N,2) or (N,C)
-        return jnp.pad(arr, ((left, right), (0, 0)))
-
-                
-def dispersion_init(a, *, steps=3):
-    """
-    根据链路色散 β2, 距离 L, 步数 steps 生成 time-domain h[n] (complex)
-    """
-    def _init(key, shape, dtype=jnp.complex64):
-        taps = shape[0]
-        h, _ = comm.dbp_params(
-            a['samplerate'],
-            a['distance'] / a['spans'],
-            a['spans'],
-            taps,
-            a['lpdbm'] - 3,
-            virtual_spans = steps        # 理论 profile / steps
-        )
-        return h[0, :, 0]               # (taps,)
-    return _init
   
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -494,53 +411,23 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# def fdbp(
-#     scope: Scope,
-#     signal,
-#     steps=3,
-#     dtaps=261,
-#     ntaps=41,
-#     sps=2,
-#     d_init=delta,
-#     n_init=gauss):
-#     x, t = signal
-#     # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-#     dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
-#     for i in range(steps):
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-#                                                             taps=ntaps,
-#                                                             kernel_init=n_init)
-#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#     return Signal(x, t)
-
-def fdbp(scope: Scope,
-         signal: Signal,
-         *,
-         steps: int = 3,
-         dtaps: int = 261,
-         ntaps: int = 41,
-         d_init = delta,
-         n_init = gauss):
-
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss):
     x, t = signal
-    dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
-    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        # --- CD 补偿 (D)
-        x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-
-        # --- 非线性相位 (N)
-        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-
-        # **关键：把 x 截断到 c 的长度，防止尺寸漂移**
-        seg0 = tN.start - td.start
-        x_seg = x[seg0 : seg0 + c.shape[0]]     # (len(c), 2)
-
-        x = jnp.exp(1j * c) * x_seg             # 应用相位
-        t = tN                                  # 更新 SigTime
-
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
 
@@ -719,48 +606,6 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
 #     return Signal(x, t)
 
 
-
-# ------------------- fdbp  (完整替换) ----------------------------
-# def fdbp(scope: Scope,
-#          signal,
-#          steps=3,
-#          dtaps=261,
-#          ntaps=41,
-#          sps=2,
-#          d_init=delta,
-#          n_init=gauss,
-#          hidden_dim=2,
-#          use_alpha=True):
-
-#     x, t = signal                          # x:(N,2)
-#     dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
-
-#     alpha = scope.param('res_alpha', nn.initializers.zeros, ()) if use_alpha else 1.0
-
-#     for i in range(steps):
-#         # (A) CD 补偿 ------------------------------------------------------------------
-#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
-
-#         # (B) 非线性相位补偿 -----------------------------------------------------------
-#         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
-
-#         # **关键：把 x 截成与 c 完全同长**  (防尺寸漂移)
-#         seg0 = tN.start - td.start
-#         seg1 = seg0 + c.shape[0]           # = seg0 + len(c)
-#         x_seg = x[seg0:seg1]               # (len(c),2)
-
-#         x_new = jnp.exp(1j * c) * x_seg    # 相位应用
-
-#         # (C) residual-MLP  —— 在幅度域做一点可学习偏置 ----------------------------
-#         res, _ = scope.child(residual_mlp, name=f'ResMLP_{i}')(
-#             Signal(jnp.abs(x_new)**2, tN), hidden_dim=hidden_dim)
-#         x_new += alpha * res[:, None].astype(x_new.dtype)
-
-#         x, t = x_new, tN                   # 进入下一步
-
-#     return Signal(x, t)
-# ----------------------------------------------------------------
 
 # def fdbp(
 #     scope: Scope,
