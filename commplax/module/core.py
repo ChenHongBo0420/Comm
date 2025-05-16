@@ -212,11 +212,12 @@ def conv1d(
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
   
-# ---------- 辅助 ----------
+# ---------- helpers ----------
 def _next_pow2(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
-# ---------- FFT 卷积：完全遵循 core.conv1d 的 valid 约定 ----------
+
+# ---------- FFT-conv that exactly mimics xop.convolve(valid) ----------
 def conv1d_fft(scope: Scope,
                signal: Signal,
                *,
@@ -225,49 +226,49 @@ def conv1d_fft(scope: Scope,
                kernel_init = delta,
                debug: bool = False):
 
-    x, t_in = signal                       # x: (N,) or (N,C)
+    x, t_in = signal                      # x: (N,)  or (N, C)
     h_time  = scope.param('kernel', kernel_init,
                           (taps,), jnp.complex64)
 
-    rtap   = (taps - 1) // 2               # == core.conv1d 默认
-    N_out  = x.shape[0] - 2 * rtap
+    rtap  = (taps - 1) // 2               # same delay rule as core.conv1d
+    Nout  = x.shape[0] - 2 * rtap
     fftlen = seglen or _next_pow2(x.shape[0] + taps - 1)
 
-    # ① FFT
-    Xk = jnp.fft.fft(x,          fftlen, axis=0)
-    Hk = jnp.fft.fft(jnp.flip(h_time), fftlen)      # ← ★ 必须 flip
-    if x.ndim == 2:                                 # (fftlen, C)
+    # (★) ***key fix ––– do NOT flip the kernel***
+    Xk = jnp.fft.fft(x,      fftlen, axis=0)
+    Hk = jnp.fft.fft(h_time, fftlen)
+    if x.ndim == 2:                       # broadcast to (fftlen, C)
         Hk = Hk[:, None]
 
-    # ② IFFT & 取 valid
     y_full = jnp.fft.ifft(Xk * Hk, fftlen, axis=0)
-    y_val  = y_full[rtap : rtap + N_out]            # 和 core.conv1d 一致
+    y_val  = y_full[rtap : rtap + Nout]   # identical cropping
 
-    # ③ SigTime
     t_out = SigTime(t_in.start + rtap,
                     t_in.stop  - rtap,
                     t_in.sps)
 
     if debug and scope.is_initializing():
-        print(f"[conv1d_fft] N={x.shape[0]} taps={taps} "
-              f"rtap={rtap} fftlen={fftlen}  out_len={N_out}")
+        print(f"[conv1d_fft] N={x.shape[0]}  taps={taps}  "
+              f"rtap={rtap}  fftlen={fftlen}  out_len={Nout}")
 
     return Signal(y_val, t_out)
 
+
+# ---------- 2-pol wrapper ----------
 def dconv_pair(scope: Scope,
                sig: Signal,
                *,
                taps: int,
                kinit):
-    """两个极化独立地跑 conv1d_fft，再在通道维拼起来"""
-    x, t = sig
+
+    x, t = sig                               # x:(N,2)
     outs = []
-    for p in range(x.shape[1]):                 # (N,2)
+    for p in range(x.shape[1]):
         y, tp = scope.child(
             wpartial(conv1d_fft, taps=taps, kernel_init=kinit),
-            name=f'Pol{p}'
+            name=f"Pol{p}"
         )(Signal(x[:, p], t))
-        outs.append(y[:, None])                 # (N_out,1)
+        outs.append(y[:, None])               # (Nout,1)
     return Signal(jnp.concatenate(outs, axis=1), tp)
 
 
@@ -524,8 +525,8 @@ def fdbp(scope: Scope,
          n_init = gauss):
 
     x, t = signal
-    # dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    dconv = wpartial(dconv_pair, taps=dtaps, kinit=dispersion_init)
+    # dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
         # --- CD 补偿 (D)
         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
