@@ -868,71 +868,61 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-# ────────────────────────────────────────────────────────────────
-#  Flatten  +  Dense  投影层
-# ────────────────────────────────────────────────────────────────
-def flatten(scope: Scope, signal: Signal, keep_batch_axis: bool = True):
+# ───────────────── ① 归一化 Flatten ─────────────────
+def flatten(scope: Scope, signal: Signal, keep_batch_axis: bool = True,
+            norm: bool = True):
     """
-    把 Signal.val 除 batch 轴外全部展平成一维。
-    例：val shape (B, C, C) → (B, C*C)
+    (B,C,C) → (B,C*C)  并可选 /√(C*C) 防爆炸
     """
     x, t = signal
     new_shape = (x.shape[0], -1) if keep_batch_axis else (-1,)
-    return Signal(x.reshape(new_shape), t)
+    x_flat = x.reshape(new_shape)
+    if norm:
+        x_flat = x_flat / jnp.sqrt(x_flat.shape[-1]).astype(x.dtype)
+    return Signal(x_flat, t)
 
-
-def dense(
-    scope : Scope,
-    signal: Signal,
-    out_features   : int,
-    use_bias       : bool = True,
-    kernel_init    = complex_glorot_uniform,   # ⇐ 复数版 Glorot
-    bias_init      = zeros                    # 实 / 复皆可
-):
+# ───────────────── ② 稳健 Dense ─────────────────
+def dense(scope: Scope,
+          signal: Signal,
+          out_features: int,
+          use_bias  : bool = True,
+          gain      : float = 1.0,
+          kernel_init = complex_glorot_uniform,
+          bias_init   = zeros):
     """
-    复数全连接：y = x·W + b
-    W.shape = (in_features, out_features)
+    复数全连接，额外支持 gain 缩放 ⇒ W_init *= gain
     """
     x, t = signal
     in_features = x.shape[-1]
-
     W = scope.param('kernel', kernel_init,
-                    (in_features, out_features), x.dtype)
+                    (in_features, out_features), x.dtype) * gain
     y = jnp.dot(x, W)
     if use_bias:
-        b = scope.param('bias', bias_init,
-                        (out_features,), x.dtype)
+        b = scope.param('bias', bias_init, (out_features,), x.dtype)
         y = y + b
     return Signal(y, t)
 
-
+# ───────────────── ③ 投影层 ─────────────────
 def gram_projection(scope: Scope,
                     signal: Signal,
-                    out_dim: Optional[int] = None):
+                    out_dim: Optional[int] = None,
+                    dense_gain: float = 0.1):
     """
-    ★ 一行可插的投影层 ★
-      输入 : Signal, val shape (B, C, C) 或 (B, *, C, C)
-      输出 : Signal, val shape (B, out_dim)   (默认 out_dim = C)
-    用法示例：
-        layer.Serial(
-            ...之前你的 FanInMean...,   # 输出 Gram [B,C,C]
-            gram_projection,            # ← 投影到 C 维
-        )
+    Gram [B,C,C]  →  Flatten (/√C²) → Dense(gain) →  [B,C]
     """
     x, _ = signal
     if x.ndim != 3:
-        raise ValueError(f"expect Gram [B,C,C], got {x.shape}")
+        raise ValueError(f'gram_projection expects (B,C,C), got {x.shape}')
     C = x.shape[-1]
-    if out_dim is None:
-        out_dim = C
+    out_dim = C if out_dim is None else out_dim
 
-    # 1) 展平
-    sig_flat = scope.child(flatten, name='flatten')(signal)
-    # 2) Dense 投影
+    sig_flat = scope.child(flatten, name='flatten')(signal)     # 归一化
     sig_proj = scope.child(dense,   name='proj_dense')(
-        sig_flat, out_features=out_dim)
-    return sig_proj
+        sig_flat, out_features=out_dim, gain=dense_gain)
 
+    # 最后一道护栏：把 NaN / Inf 替成 0
+    y_safe = jnp.nan_to_num(sig_proj.val)
+    return Signal(y_safe, sig_proj.t)
 
 def fanin_mean(scope, inputs):
     # inputs : list of Signal, val shape [B, C]
