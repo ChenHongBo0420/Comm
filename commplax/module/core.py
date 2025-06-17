@@ -869,7 +869,7 @@ def fanin_sum(scope, inputs):
 #     return Signal(val, t)
 
 
-def fanin_triu_mean(scope, inputs):
+def fanin_mean(scope, inputs):
     """
     • 先求均值 μ ∈ ℂ^{C}
     • 计算 Gram = μ μᴴ ，取对角+上三角，共 K=C(C+1)/2 维
