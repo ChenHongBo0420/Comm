@@ -76,7 +76,7 @@ MIMOAF = make_layer(core.mimoaf, mutable=('af_state',))
 FDBP = make_layer(core.fdbp)
 
 FDBP1 = make_layer(core.fdbp1)
-# BatchPowerNorm1 = make_layer(core.batchpowernorm1, mutable=('norm',))
+Gram = make_layer(core.gram_projection)
 SimpleFn = make_layer(core.simplefn)
 MIMOFOEAf = make_layer(core.mimofoeaf, mutable=('af_state',))
 Identity = make_layer(core.identity)
