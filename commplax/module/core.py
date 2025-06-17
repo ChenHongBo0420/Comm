@@ -869,13 +869,13 @@ def fanin_sum(scope, inputs):
 #     return Signal(val, t)
 
 def fanin_mean(scope, inputs):
-    # inputs: list of Signal(val: [batch, C]) 
-    # 先堆叠成 [batch, N, C]
-    stacked = jnp.stack([s.val for s in inputs], axis=1)
-    # 计算每个位置的外积，再沿 N 聚合：
-    # result: [batch, C, C]
-    gram = jnp.einsum('b n c, b n d -> b c d', stacked, stacked)
-    return Signal(gram, inputs[0].t)
+    stacked = jnp.stack([s.val for s in inputs], axis=1)    # [b, N, C]
+    mean = jnp.mean(stacked, axis=1)                        # [b, C]
+    # 去中心化，再算协方差对角 = 方差
+    centered = stacked - mean[:, None, :]
+    cov_diag = jnp.mean(centered ** 2, axis=1)              # [b, C]
+    enriched = jnp.concatenate([mean, cov_diag], axis=-1)   # [b, 2C]
+    return Signal(enriched, inputs[0].t)
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
