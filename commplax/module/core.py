@@ -867,6 +867,71 @@ def fanin_sum(scope, inputs):
 #     val = sum(signal.val for signal in inputs) / len(inputs)
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
+# ────────────────────────────────────────────────────────────────
+#  Flatten  +  Dense  投影层
+# ────────────────────────────────────────────────────────────────
+def flatten(scope: Scope, signal: Signal, keep_batch_axis: bool = True):
+    """
+    把 Signal.val 除 batch 轴外全部展平成一维。
+    例：val shape (B, C, C) → (B, C*C)
+    """
+    x, t = signal
+    new_shape = (x.shape[0], -1) if keep_batch_axis else (-1,)
+    return Signal(x.reshape(new_shape), t)
+
+
+def dense(
+    scope : Scope,
+    signal: Signal,
+    out_features   : int,
+    use_bias       : bool = True,
+    kernel_init    = complex_glorot_uniform,   # ⇐ 复数版 Glorot
+    bias_init      = zeros                    # 实 / 复皆可
+):
+    """
+    复数全连接：y = x·W + b
+    W.shape = (in_features, out_features)
+    """
+    x, t = signal
+    in_features = x.shape[-1]
+
+    W = scope.param('kernel', kernel_init,
+                    (in_features, out_features), x.dtype)
+    y = jnp.dot(x, W)
+    if use_bias:
+        b = scope.param('bias', bias_init,
+                        (out_features,), x.dtype)
+        y = y + b
+    return Signal(y, t)
+
+
+def gram_projection(scope: Scope,
+                    signal: Signal,
+                    out_dim: Optional[int] = None):
+    """
+    ★ 一行可插的投影层 ★
+      输入 : Signal, val shape (B, C, C) 或 (B, *, C, C)
+      输出 : Signal, val shape (B, out_dim)   (默认 out_dim = C)
+    用法示例：
+        layer.Serial(
+            ...之前你的 FanInMean...,   # 输出 Gram [B,C,C]
+            gram_projection,            # ← 投影到 C 维
+        )
+    """
+    x, _ = signal
+    if x.ndim != 3:
+        raise ValueError(f"expect Gram [B,C,C], got {x.shape}")
+    C = x.shape[-1]
+    if out_dim is None:
+        out_dim = C
+
+    # 1) 展平
+    sig_flat = scope.child(flatten, name='flatten')(signal)
+    # 2) Dense 投影
+    sig_proj = scope.child(dense,   name='proj_dense')(
+        sig_flat, out_features=out_dim)
+    return sig_proj
+
 
 def fanin_mean(scope, inputs):
     stacked = jnp.stack([s.val for s in inputs], axis=1)    # [b, N, C]
