@@ -868,67 +868,23 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-# ───────────────── ① 归一化 Flatten ─────────────────
-def flatten(scope: Scope, signal: Signal, keep_batch_axis: bool = True,
-            norm: bool = True):
-    """
-    (B,C,C) → (B,C*C)  并可选 /√(C*C) 防爆炸
-    """
-    x, t = signal
-    new_shape = (x.shape[0], -1) if keep_batch_axis else (-1,)
-    x_flat = x.reshape(new_shape)
-    if norm:
-        x_flat = x_flat / jnp.sqrt(x_flat.shape[-1]).astype(x.dtype)
-    return Signal(x_flat, t)
 
-# ───────────────── ② 稳健 Dense ─────────────────
-def dense(scope: Scope,
-          signal: Signal,
-          out_features: int,
-          use_bias  : bool = True,
-          gain      : float = 1.0,
-          kernel_init = complex_glorot_uniform,
-          bias_init   = zeros):
+def fanin_triu_mean(scope, inputs):
     """
-    复数全连接，额外支持 gain 缩放 ⇒ W_init *= gain
+    • 先求均值 μ ∈ ℂ^{C}
+    • 计算 Gram = μ μᴴ ，取对角+上三角，共 K=C(C+1)/2 维
+    • /√K 做幅度归一化，避免数值爆炸
     """
-    x, t = signal
-    in_features = x.shape[-1]
-    W = scope.param('kernel', kernel_init,
-                    (in_features, out_features), x.dtype) * gain
-    y = jnp.dot(x, W)
-    if use_bias:
-        b = scope.param('bias', bias_init, (out_features,), x.dtype)
-        y = y + b
-    return Signal(y, t)
+    stacked = jnp.stack([s.val for s in inputs], axis=1)    # [B,N,C]
+    mu      = jnp.mean(stacked, axis=1)                     # [B,C]
 
-# ───────────────── ③ 投影层 ─────────────────
-def gram_projection(scope: Scope,
-                    signal: Signal,
-                    out_dim: Optional[int] = None,
-                    dense_gain: float = 0.1):
-    """
-    Gram [B,C,C]  →  Flatten (/√C²) → Dense(gain) →  [B,C]
-    """
-    x, _ = signal
-    if x.ndim != 3:
-        raise ValueError(f'gram_projection expects (B,C,C), got {x.shape}')
-    C = x.shape[-1]
-    out_dim = C if out_dim is None else out_dim
+    # Gram 并取上三角
+    g_full  = jnp.einsum('bc,bd->bcd', mu, mu)              # [B,C,C]
+    i, j    = jnp.triu_indices(g_full.shape[-1])
+    g_vec   = g_full[:, i, j]                               # [B,K]
+    g_vec   = g_vec / jnp.sqrt(g_vec.shape[-1]).astype(g_vec.dtype)
 
-    sig_flat = scope.child(flatten, name='flatten')(signal)     # 归一化
-    sig_proj = scope.child(dense,   name='proj_dense')(
-        sig_flat, out_features=out_dim, gain=dense_gain)
-
-    # 最后一道护栏：把 NaN / Inf 替成 0
-    y_safe = jnp.nan_to_num(sig_proj.val)
-    return Signal(y_safe, sig_proj.t)
-
-def fanin_mean(scope, inputs):
-    # inputs : list of Signal, val shape [B, C]
-    stacked = jnp.stack([s.val for s in inputs], axis=1)          # [B, N, C]
-    gram    = jnp.einsum('b n c, b n d -> b c d', stacked, stacked)  # [B, C, C]
-    return Signal(gram, inputs[0].t)
+    return Signal(g_vec, inputs[0].t)                       # K ≈ C²/2
 
 
 def fanin_concat(scope, inputs, axis=-1):
