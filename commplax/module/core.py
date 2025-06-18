@@ -870,14 +870,21 @@ def fanin_sum(scope, inputs):
 
 def fanin_mean(scope, inputs):
     """
-    inputs : list length=N, each.val shape [B,C]
-    → 堆成 [B, N*C] 后取 Gram(上三角)
+    inputs : list[Signal]，每个 .val 形状 [B,C]
+    输出   : Signal, .val 形状 [B, 2C] ＝ [均值 | 方差对角]
     """
-    stacked = jnp.concatenate([s.val for s in inputs], axis=-1)   # [B, N*C]
-    g = jnp.einsum('bc,bd->bcd', stacked, stacked)                # [B,NC,NC]
-    i, j = jnp.triu_indices(g.shape[-1])
-    gvec = g[:, i, j] / jnp.sqrt(g.shape[-1])                     # [B,K]
-    return Signal(gvec, inputs[0].t)
+    # [B,N,C]
+    stacked = jnp.stack([s.val for s in inputs], axis=1)
+
+    # 一阶均值 μ(t)
+    mean = jnp.mean(stacked, axis=1)                # [B,C]
+
+    # 去中心化求方差 diag(Cov)
+    centered = stacked - mean[:, None, :]
+    var_diag = jnp.mean(centered ** 2, axis=1)      # [B,C]
+
+    enriched = jnp.concatenate([mean, var_diag], axis=-1)  # [B,2C]
+    return Signal(enriched, inputs[0].t)
 
 
 def fanin_concat(scope, inputs, axis=-1):
