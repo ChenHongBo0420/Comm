@@ -863,32 +863,10 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
-# def fanin_mean(scope, inputs):
-#     val = sum(signal.val for signal in inputs) / len(inputs)
-#     t = inputs[0].t  # 假设所有的 t 都相同
-#     return Signal(val, t)
-
 def fanin_mean(scope, inputs):
-    """
-    Soft-Attention 融合（保持 C 维）  
-    • xs : list[Signal]，每条 .val 形状 [B,C] (复数)  
-    • 先取幅度 |x| 得到注意力 logits，再加权复数符号
-    """
-    # 1) 叠 N 路 —— xs_shape : [B,C,N]
-    xs = jnp.stack([s.val for s in inputs], axis=-1)          # complex
-    B, C, N = xs.shape                                        # ← 这行确保 N 定义
-
-    # 2) 用实数幅度 |x| 计算注意力
-    mag = jnp.abs(xs)                                         # [B,C,N] real
-    W   = scope.param('logit_w', nn.initializers.zeros, (N, C))
-    logits = jnp.einsum('bcn,nc->bc', mag, W)                 # [B,C] real
-    α = jax.nn.softmax(logits, axis=-1)                       # [B,C] real
-
-    # 3) 加权复数符号
-    fused = jnp.sum(xs * α[..., None], axis=-1)               # [B,C] complex
-    return Signal(fused, inputs[0].t)
-
-
+    val = sum(signal.val for signal in inputs) / len(inputs)
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(val, t)
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
