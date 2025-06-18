@@ -868,14 +868,31 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-def fanin_mean(scope, inputs, r=4):
-    x = jnp.stack([s.val for s in inputs], axis=-1).sum(-1)   # [B,C]
-    z = jnp.mean(x, axis=0, keepdims=True)                    # [1,C]
-    hidden = scope.param('W1', nn.initializers.xavier_uniform(), (C, C//r))
-    gate   = scope.param('W2', nn.initializers.xavier_uniform(), (C//r, C))
-    s = jax.nn.relu(jnp.dot(z, hidden))
-    α = jax.nn.sigmoid(jnp.dot(s, gate))                      # [1,C]
-    return Signal(x * α, inputs[0].t)
+def fanin_mean(scope, inputs, r: int = 4):
+    """
+    N 路输入 -> 求和后做 SE Gate，输出维度 = C
+    r: reduction ratio for bottleneck (建议 2 ~ 4)
+    """
+    # 1) 合并 N 路   xs : [B,C,N]   x : [B,C]
+    xs = jnp.stack([s.val for s in inputs], axis=-1)
+    x  = xs.sum(-1)                           # [B,C]
+    C  = x.shape[-1]
+
+    # 2) Squeeze (全局均值池化)
+    z = jnp.mean(x, axis=0, keepdims=True)    # [1,C]
+
+    # 3) Excitation : 1×1 MLP   (C → C/r → C)  （复数特征也可）
+    hidden = scope.param('W1', nn.initializers.xavier_uniform(),
+                         (C, max(C // r, 1)))             # (C,C/r)
+    gate_w = scope.param('W2', nn.initializers.xavier_uniform(),
+                         (max(C // r, 1), C))             # (C/r,C)
+
+    s = jax.nn.relu(jnp.dot(z, hidden))                   # [1,C/r]
+    α = jax.nn.sigmoid(jnp.dot(s, gate_w))                # [1,C]
+
+    # 4) 逐通道缩放
+    out = x * α                                           # [B,C]
+    return Signal(out, inputs[0].t)
 
 
 def fanin_concat(scope, inputs, axis=-1):
