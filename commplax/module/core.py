@@ -868,23 +868,16 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-
 def fanin_mean(scope, inputs):
     """
-    • 先求均值 μ ∈ ℂ^{C}
-    • 计算 Gram = μ μᴴ ，取对角+上三角，共 K=C(C+1)/2 维
-    • /√K 做幅度归一化，避免数值爆炸
+    inputs : list length=N, each.val shape [B,C]
+    → 堆成 [B, N*C] 后取 Gram(上三角)
     """
-    stacked = jnp.stack([s.val for s in inputs], axis=1)    # [B,N,C]
-    mu      = jnp.mean(stacked, axis=1)                     # [B,C]
-
-    # Gram 并取上三角
-    g_full  = jnp.einsum('bc,bd->bcd', mu, mu)              # [B,C,C]
-    i, j    = jnp.triu_indices(g_full.shape[-1])
-    g_vec   = g_full[:, i, j]                               # [B,K]
-    g_vec   = g_vec / jnp.sqrt(g_vec.shape[-1]).astype(g_vec.dtype)
-
-    return Signal(g_vec, inputs[0].t)                       # K ≈ C²/2
+    stacked = jnp.concatenate([s.val for s in inputs], axis=-1)   # [B, N*C]
+    g = jnp.einsum('bc,bd->bcd', stacked, stacked)                # [B,NC,NC]
+    i, j = jnp.triu_indices(g.shape[-1])
+    gvec = g[:, i, j] / jnp.sqrt(g.shape[-1])                     # [B,K]
+    return Signal(gvec, inputs[0].t)
 
 
 def fanin_concat(scope, inputs, axis=-1):
