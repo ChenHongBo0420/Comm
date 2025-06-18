@@ -870,19 +870,18 @@ def fanin_sum(scope, inputs):
 
 def fanin_mean(scope, inputs):
     """
-    xs : [B,C,N]  → α_cn = softmax_n(W_n,c · x_c) → Σ_n α_cn·x_cn
+    • 对 N 路，每个通道用幅度 |x| 产生 softmax 权重
+    • 输出仍是复数符号的加权和
     """
-    xs = jnp.stack([s.val for s in inputs], axis=-1)      # [B,C,N]
-    B, C, N = xs.shape
+    xs = jnp.stack([s.val for s in inputs], axis=-1)      # [B,C,N]  complex
+    mag = jnp.abs(xs)                                     # [B,C,N]  real
 
-    # per-branch per-channel logits parameter W  (N,C)
-    W = scope.param('W', nn.initializers.zeros, (N, C))   # 初始化 0 → 均匀
+    # learnable logits per branch per channel (N,C)
+    W = scope.param('logit_w', nn.initializers.zeros, (N, xs.shape[1]))
+    logits = jnp.einsum('bcn,nc->bc', mag, W)             # [B,C] real
+    α = jax.nn.softmax(logits, axis=-1)                   # [B,C] real
 
-    # logits  : [B,C] = Σ_n x_cn·W_nc
-    logits = jnp.einsum('bcn,nc->bc', xs, W)
-    α = jax.nn.softmax(logits, axis=-1)                   # soft-max over N
-
-    fused = jnp.sum(xs * α[..., None], axis=-1)           # [B,C]
+    fused = jnp.sum(xs * α[..., None], axis=-1)           # [B,C] complex
     return Signal(fused, inputs[0].t)
 
 
