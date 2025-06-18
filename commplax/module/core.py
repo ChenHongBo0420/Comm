@@ -868,7 +868,7 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-def fanin_softatt(scope, inputs):
+def fanin_mean(scope, inputs):
     """
     xs : [B,C,N]  → α_cn = softmax_n(W_n,c · x_c) → Σ_n α_cn·x_cn
     """
