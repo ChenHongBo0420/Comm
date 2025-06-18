@@ -868,31 +868,23 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-def fanin_mean(scope, inputs, r: int = 2):
+def fanin_softatt(scope, inputs):
     """
-    N 路输入 -> 求和后做 SE Gate，输出维度 = C
-    r: reduction ratio for bottleneck (建议 2 ~ 4)
+    xs : [B,C,N]  → α_cn = softmax_n(W_n,c · x_c) → Σ_n α_cn·x_cn
     """
-    # 1) 合并 N 路   xs : [B,C,N]   x : [B,C]
-    xs = jnp.stack([s.val for s in inputs], axis=-1)
-    x  = xs.sum(-1)                           # [B,C]
-    C  = x.shape[-1]
+    xs = jnp.stack([s.val for s in inputs], axis=-1)      # [B,C,N]
+    B, C, N = xs.shape
 
-    # 2) Squeeze (全局均值池化)
-    z = jnp.mean(x, axis=0, keepdims=True)    # [1,C]
+    # per-branch per-channel logits parameter W  (N,C)
+    W = scope.param('W', nn.initializers.zeros, (N, C))   # 初始化 0 → 均匀
 
-    # 3) Excitation : 1×1 MLP   (C → C/r → C)  （复数特征也可）
-    hidden = scope.param('W1', nn.initializers.xavier_uniform(),
-                         (C, max(C // r, 1)))             # (C,C/r)
-    gate_w = scope.param('W2', nn.initializers.xavier_uniform(),
-                         (max(C // r, 1), C))             # (C/r,C)
+    # logits  : [B,C] = Σ_n x_cn·W_nc
+    logits = jnp.einsum('bcn,nc->bc', xs, W)
+    α = jax.nn.softmax(logits, axis=-1)                   # soft-max over N
 
-    s = jax.nn.relu(jnp.dot(z, hidden))                   # [1,C/r]
-    α = jax.nn.sigmoid(jnp.dot(s, gate_w))                # [1,C]
+    fused = jnp.sum(xs * α[..., None], axis=-1)           # [B,C]
+    return Signal(fused, inputs[0].t)
 
-    # 4) 逐通道缩放
-    out = x * α                                           # [B,C]
-    return Signal(out, inputs[0].t)
 
 
 def fanin_concat(scope, inputs, axis=-1):
