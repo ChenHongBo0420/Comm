@@ -868,23 +868,14 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-def fanin_mean(scope, inputs):
-    """
-    inputs : list[Signal]，每个 .val 形状 [B,C]
-    输出   : Signal, .val 形状 [B, 2C] ＝ [均值 | 方差对角]
-    """
-    # [B,N,C]
-    stacked = jnp.stack([s.val for s in inputs], axis=1)
-
-    # 一阶均值 μ(t)
-    mean = jnp.mean(stacked, axis=1)                # [B,C]
-
-    # 去中心化求方差 diag(Cov)
-    centered = stacked - mean[:, None, :]
-    var_diag = jnp.mean(centered ** 2, axis=1)      # [B,C]
-
-    enriched = jnp.concatenate([mean, var_diag], axis=-1)  # [B,2C]
-    return Signal(enriched, inputs[0].t)
+def fanin_mean(scope, inputs, r=4):
+    x = jnp.stack([s.val for s in inputs], axis=-1).sum(-1)   # [B,C]
+    z = jnp.mean(x, axis=0, keepdims=True)                    # [1,C]
+    hidden = scope.param('W1', nn.initializers.xavier_uniform(), (C, C//r))
+    gate   = scope.param('W2', nn.initializers.xavier_uniform(), (C//r, C))
+    s = jax.nn.relu(jnp.dot(z, hidden))
+    α = jax.nn.sigmoid(jnp.dot(s, gate))                      # [1,C]
+    return Signal(x * α, inputs[0].t)
 
 
 def fanin_concat(scope, inputs, axis=-1):
