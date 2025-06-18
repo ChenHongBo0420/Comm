@@ -868,7 +868,7 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-def fanin_mean(scope, inputs, r: int = 4):
+def fanin_mean(scope, inputs, r: int = 2):
     """
     N 路输入 -> 求和后做 SE Gate，输出维度 = C
     r: reduction ratio for bottleneck (建议 2 ~ 4)
