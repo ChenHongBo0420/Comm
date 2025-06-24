@@ -133,15 +133,28 @@ class NeuralBP(nn.Module):
 # 5 - bit-BCE loss                                                          #
 # ---------------------------------------------------------------------------#
 @jax.jit
-def bit_bce_loss(pred: jnp.ndarray, ref: jnp.ndarray) -> jnp.ndarray:
-    logits = -jnp.square(jnp.abs(pred[...,None] - _CONST))
-    logp   = logits - jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-    p1     = jnp.exp(logp) @ _BIT_MAP
+def bit_bce_loss(pred_sym: jnp.ndarray,
+                 true_sym: jnp.ndarray,
+                 eps: float = 1e-5  # ← 比以前的大一档
+                 ) -> jnp.ndarray:
+    """bit-weighted BCE on 16-QAM (NaN-safe)"""
+    # 计算每个星座点的“负平方距离对数似然”
+    logits = -jnp.square(jnp.abs(pred_sym[..., None] - _CONST))         # (...,16)
+    logp   = logits - jax.nn.logsumexp(logits, axis=-1, keepdims=True)  # softmax
+    probs  = jnp.exp(logp)
+
+    # clip 避免 log(0)
+    probs  = jnp.clip(probs, eps, 1 - eps)
+
+    p1     = probs @ _BIT_MAP
     p0     = 1.0 - p1
-    idx    = jnp.argmin(jnp.abs(ref[...,None]-_CONST), axis=-1)
-    bits_t = _BIT_MAP[idx]
-    bce    = -(bits_t*jnp.log(p1+1e-12) + (1.-bits_t)*jnp.log(p0+1e-12))
-    return jnp.mean(bce * _BIT_W)
+
+    idx_t  = jnp.argmin(jnp.abs(true_sym[..., None] - _CONST), axis=-1)
+    bits_t = _BIT_MAP[idx_t]
+
+    bce    = -(bits_t * jnp.log(p1) + (1. - bits_t) * jnp.log(p0))
+    return (bce * _BIT_W).mean()
+
 
 # ---------------------------------------------------------------------------#
 # 6 - 三阶段 Optax optimizer                                                #
