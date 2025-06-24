@@ -65,32 +65,36 @@ def tx_pipeline(bits: jnp.ndarray, G_soft: jnp.ndarray,
 # ---------------------------------------------------------------------------#
 def qc_to_adj(H_qc: jnp.ndarray):
     """
-    QC-LDPC 0/1 矩阵 → 邻接表
-      vn_adj: (N, dv_max)  variable→check  (填 -1 代表空)
-      cn_adj: (M, dc_max)  check→variable
+    QC-LDPC (0/1) → (vn_adj, cn_adj)  
+        vn_adj: (N, dv_max)   variable → check index，空位=-1  
+        cn_adj: (M, dc_max)   check    → variable index，空位=-1
     """
     M, N   = H_qc.shape
     vn_idx = [jnp.where(H_qc[:, j])[0] for j in range(N)]
     cn_idx = [jnp.where(H_qc[i])[0]     for i in range(M)]
     dv_max = max(len(v) for v in vn_idx)
     dc_max = max(len(c) for c in cn_idx)
-    pad    = lambda arr, L: jnp.array(list(arr)+[-1]*(L-len(arr)), jnp.int32)
-    vn_adj = jnp.stack([pad(v,dv_max) for v in vn_idx])    # (N,dv_max)
-    cn_adj = jnp.stack([pad(c,dc_max) for c in cn_idx])    # (M,dc_max)
-    return vn_adj, cn_adj
 
+    pad = lambda arr, L: jnp.array(list(arr)+[-1]*(L-len(arr)), jnp.int32)
+    vn_adj = jnp.stack([pad(v, dv_max) for v in vn_idx])   # (N,dv_max)
+    cn_adj = jnp.stack([pad(c, dc_max) for c in cn_idx])   # (M,dc_max)
+    return vn_adj, cn_adj
 # ---------------------------------------------------------------------------#
 # 4b - 稀疏 Neural-BP                                                        #
 # ---------------------------------------------------------------------------#
 class NeuralBP(nn.Module):
     """
-    简化版 Scaled-Min-Sum BP  
-    * learn_gamma=True 时 γ 可训练；否则固定 1
-    * 输入 / 输出均为 **variable-node LLR**，shape=(N,)
-    * 线程安全：无内部状态
+    简化 Scaled-Min-Sum BP（无循环依赖状态，线程安全）
+
+    Args
+    ----
+    vn_adj   : (N,dv_max) int32，variable-node 相邻 check 下标，空位=-1
+    cn_adj   : (M,dc_max) int32，check-node  相邻 variable 下标，空位=-1
+    n_iter   : BP 迭代次数
+    learn_gamma : 若 True，则 γ 为可学习标量；否则 γ=1
     """
-    vn_adj: jnp.ndarray   # (N,dv_max)  int32  – 由 qc_to_adj 得到
-    cn_adj: jnp.ndarray   # (M,dc_max)
+    vn_adj: jnp.ndarray
+    cn_adj: jnp.ndarray
     n_iter: int = 5
     learn_gamma: bool = True
 
@@ -99,40 +103,43 @@ class NeuralBP(nn.Module):
             self.gamma = self.param('gamma', nn.initializers.ones, ())
 
     # ------------------------------------------------------------------ #
-    def __call__(self, llr0: jnp.ndarray) -> jnp.ndarray:               # (N,)
-        γ   = self.gamma if self.learn_gamma else 1.0
-        N   = self.vn_adj.shape[0]
-        dv  = self.vn_adj.shape[1]
-        dc  = self.cn_adj.shape[1]
+    def __call__(self, llr0: jnp.ndarray) -> jnp.ndarray:     # llr0: (N,)
+        γ         = self.gamma if self.learn_gamma else 1.0
+        N, dv_max = self.vn_adj.shape
+        M, dc_max = self.cn_adj.shape
 
-        # 初始 var→check 消息全 0
-        v2c = jnp.zeros((N, dv), llr0.dtype)            # (N,dv)
+        # 初始化 var → check 消息
+        v2c = jnp.zeros((N, dv_max), llr0.dtype)              # (N,dv_max)
 
-        # ---- 单次 BP 迭代 ------------------------------------------------- #
-        def bp_iter(v2c, _):
-            # -------- check ➜ variable (scaled min-sum) --------
-            msgs = v2c[self.cn_adj]                     # (M,dc,dv)
-            # 处理 dv==1 时产生的多余维，避免 broadcast 报错
+        # ---- 单次迭代 --------------------------------------------------- #
+        def bp_step(v2c, _):
+            # ------- check → var (scaled min-sum) -------- #
+            msgs = v2c[self.cn_adj]                          # (M,dc_max,dv_max)
+            # 当 dv_max==1 时 squeeze 掉最后一维，避免冗余
             if msgs.ndim == 3 and msgs.shape[-1] == 1:
-                msgs = jnp.squeeze(msgs, -1)            # → (M,dc)
+                msgs = jnp.squeeze(msgs, -1)                 # → (M,dc_max)
 
-            sgn = jnp.prod(jnp.sign(msgs + 1e-12), axis=1, keepdims=True)  # (M,1)
-            mag = jnp.min(jnp.abs(msgs), axis=1, keepdims=True)            # (M,1)
-            c2v = γ * sgn * mag                                           # (M,1)
-            c2v = jnp.broadcast_to(c2v, self.cn_adj.shape)                 # (M,dc)
+            sign = jnp.prod(jnp.sign(msgs + 1e-12), axis=1)  # (M,)
+            mag  = jnp.min(jnp.abs(msgs), axis=1)            # (M,)
+            c2v  = γ * sign * mag                            # (M,)
 
-            # scatter-add 到对应 variable 槽位
-            v_acc = jnp.zeros_like(v2c)
-            v_acc = v_acc.at[self.cn_adj].add(c2v)        # (N,dv)
+            # ------- 聚合到 variable-nodes (scatter_add) --- #
+            idx_flat   = self.cn_adj.flatten()               # (M*dc_max,)
+            msg_flat   = jnp.repeat(c2v, dc_max)             # broadcast
+            mask       = idx_flat >= 0
+            idx_valid  = idx_flat[mask]
+            msg_valid  = msg_flat[mask]
 
-            # extrinsic：去掉之前发出的那条消息
-            v2c_new = (llr0[:, None] + v_acc) - v2c
+            v_sum = jnp.zeros(N, llr0.dtype).at[idx_valid].add(msg_valid)  # (N,)
+
+            # ------- extrinsic & 更新 v2c ----------------- #
+            v2c_new = (llr0 + v_sum)[:, None] - v2c          # broadcast减去旧消息
             return v2c_new, None
 
-        # ---- 迭代 n_iter 次 --------------------------------------------- #
-        v2c_final, _ = lax.scan(bp_iter, v2c, None, length=self.n_iter)
+        # ---- scan 迭代 n_iter 次 --------------------------------------- #
+        v2c_final, _ = lax.scan(bp_step, v2c, None, length=self.n_iter)
 
-        # total LLR ＝ 原始 llr0 + 所有来自 check 的消息
+        # variable 节点最终 LLR
         llr_out = llr0 + jnp.sum(v2c_final, axis=1)
         return llr_out
 
