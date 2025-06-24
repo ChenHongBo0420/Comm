@@ -82,24 +82,51 @@ def tx_pipeline(bits: jnp.ndarray,           # (K,)
 # ---------------------------------------------------------------------------#
 # 4 -  Neural-BP Decoder (简版 Scaled Min-Sum)                                #
 # ---------------------------------------------------------------------------#
+import flax.linen as nn
+import jax.lax as lax
+
 class NeuralBP(nn.Module):
-    H:  jnp.ndarray        # (M,N) parity
+    vn_adj: jnp.ndarray   # (N, dv_max)
+    cn_adj: jnp.ndarray   # (M, dc_max)
     n_iter: int = 5
     learn_gamma: bool = True
+
     def setup(self):
         if self.learn_gamma:
             self.gamma = self.param('gamma', nn.initializers.ones, ())
-    def __call__(self, llr: jnp.ndarray) -> jnp.ndarray:   # (N,)
-        γ = self.gamma if self.learn_gamma else 1.0
-        v2c = jnp.tile(llr, (self.H.shape[0],1))           # (M,N)
-        for _ in range(self.n_iter):
-            # check-to-var: scaled-min-sum
-            c2v_sign = jnp.sign(self.H @ jnp.sign(v2c.T))
-            c2v_mag  = jnp.min(jnp.where(self.H, jnp.abs(v2c), 1e9), axis=1, keepdims=True)
-            c2v      = γ * c2v_sign * c2v_mag
-            # var-to-check
-            v2c = llr + (self.H.T @ c2v)
-        return llr + (self.H.T @ c2v)        # extrinsic soft bit LLR
+
+    def __call__(self, llr0):        # llr0:(N,)
+        γ   = self.gamma if self.learn_gamma else 1.0
+        N   = self.vn_adj.shape[0]
+        dv  = self.vn_adj.shape[1]
+        dc  = self.cn_adj.shape[1]
+
+        # 初始化 var→check 消息，全 0
+        v2c = jnp.zeros((N, dv), llr0.dtype)
+
+        def bp_iter(carry, _):
+            v2c = carry                           # (N,dv)
+
+            # —— check→var —— #
+            # 取每个 check 邻接的 v2c
+            msgs = v2c[self.cn_adj]              # (M,dc)
+            sgn  = jnp.prod(jnp.sign(msgs+1e-12), axis=1, keepdims=True)
+            mag  = jnp.min(jnp.abs(msgs),  axis=1, keepdims=True)
+            c2v  = γ * sgn * mag                 # (M,1)
+            c2v  = jnp.broadcast_to(c2v, (self.cn_adj.shape))
+
+            # —— 写回到 variable ——
+            v_acc = jnp.zeros_like(v2c)
+            v_acc = v_acc.at[self.cn_adj].add(c2v)  # scatter-add
+
+            v2c_new = (llr0[:,None] + v_acc) - v2c  # extrinsic
+            return v2c_new, None
+
+        v2c_final, _ = lax.scan(bp_iter, v2c, None, length=self.n_iter)
+        # 求 total LLR = 原始 + 所有 C2V
+        llr = llr0 + jnp.sum(v2c_final, axis=1)
+        return llr
+
 
 # ---------------------------------------------------------------------------#
 # 5 -  Bit-BCE 损失                                                          #
