@@ -428,8 +428,6 @@ def fdbp(
                                                             taps=ntaps,
                                                             kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        scope.sow('beat', f'y_{i}', Signal(x, t),
-                  reduce_fn=lambda a, b: b)
     return Signal(x, t)
 
 
@@ -820,8 +818,6 @@ def fdbp1(
             Signal(ixpm_power, td), taps=ntaps, kernel_init=n_init)
         # 更新信号 x
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-        scope.sow('beat', f'y_{i}', Signal(x, t),
-                  reduce_fn=lambda a, b: b)
     return Signal(x, t)
 
       
