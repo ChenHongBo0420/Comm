@@ -358,7 +358,7 @@ from jax.nn.initializers import orthogonal, zeros, glorot_uniform
 # ------------------------------------------------------------
 # Time‑domain 1‑D CNN  （等价于 vmap(conv1d) + GELU）
 # ------------------------------------------------------------
-def TimeCNN(scope, signal, taps=61, hidden=16,
+def TimeCNN(scope, signal, taps=61, hidden=2,
             k_init=delta,                # <<< 替换成 glorot_uniform if you like
             act=jax.nn.gelu, name='TimeCNN'):
     x, t = signal                       # x:(N,C)
@@ -372,7 +372,7 @@ def TimeCNN(scope, signal, taps=61, hidden=16,
 # ------------------------------------------------------------
 # 轻量 Gated RNN  （单步循环，保持时长）
 # ------------------------------------------------------------
-def GatedRNN(scope, signal, hidden=16, hippo=True,
+def GatedRNN(scope, signal, hidden=2, hippo=True,
              name='GatedRNN'):
     x, t = signal                       # x:(N,T,H)
     if x.ndim == 2: x = x[:, None, :]   # (N,1,H) 兼容单符号
