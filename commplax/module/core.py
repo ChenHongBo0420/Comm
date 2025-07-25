@@ -492,64 +492,44 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     out_1d = out.squeeze(axis=-1)
     return out_1d, t
 
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    保持原 fdbp(D->N)结构:
-      1) D
-      2) N
-      + 3) residual MLP => out shape=(N,) and add to x
-    """
+def fdbp(scope: Scope,
+         signal,
+         *,
+         steps=3,
+         dtaps=261,
+         ntaps=41,          # 仍保留形参，先不动
+         hidden_dim=2,
+         use_alpha=True,
+         d_init=delta,      # 仅用于卷积核 delta 初始化
+         **_unused):
     x, t = signal
-    # 1) 色散
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    # 可选: 对res加个可训练缩放
-    if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-    # debug.print("alpha = {}", alpha)
+    # --------- D‑CNN：一条卷积层，参数共享 ---------
+    conv_layer = scope.child(
+        partial(nn.Conv, features=x.shape[-1],
+                kernel_size=(dtaps,), strides=(1,),
+                padding='SAME', use_bias=False,
+                dtype=jnp.complex64,
+                kernel_init=d_init),          # delta → CDC 起点
+        name='DConv')
+
+    # 可选 residual α
+    alpha = scope.param('res_alpha', nn.initializers.zeros, ()) if use_alpha else 1.0
+
     for i in range(steps):
-        # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # --- (B) 非线性补偿 (N)
-        # c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-        #     Signal(jnp.abs(x)**2, td),
-        #     taps=ntaps,
-        #     kernel_init=n_init
-        # )
-        # # 应用相位: x_new = exp(j*c) * x[...]
-        # x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        # x = x_new
-        # --- (C) residual MLP
-        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        # res_val => (N_new,)
-        # cast to complex, or interpret as real
-        # 这里示例 "在幅度上+res"
-        # x_new += alpha * res_val
-        # 不分real/imag => 全部 real offset => x_new + alpha * res
-        # 只要 x_new是complex => convert
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-        x_new = x_new + alpha * res_val_cplx_2d 
-        
-        # update x,t
-        x, t = x_new, t_res
+        # ----- (A) Dispersion CNN -----
+        x = conv_layer(x[None, ...]).squeeze(0)  # 长度不变
+
+        # ----- (B) Non‑linear Mimoconv 保留 -----
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(x)**2, t), taps=ntaps, kernel_init=gauss)
+        x = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
+        t = tN
+
+        # ----- (C) Residual‑MLP 保留 -----
+        res, _  = scope.child(residual_mlp, name=f'ResMLP_{i}')(Signal(jnp.abs(x)**2, t),
+                                                                hidden_dim=hidden_dim)
+        x += alpha * jnp.asarray(res, x.dtype)[:, None]
+
     return Signal(x, t)
 
 
