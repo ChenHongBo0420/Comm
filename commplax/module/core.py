@@ -422,56 +422,62 @@ def DenseHead(scope, signal, out_dim=2, name='DenseHead'):
 # ───────────────────────────────────────────────────────────────
 # 新   f d b p   ：D‑Conv → Gated‑RNN → 输出 (N,2) complex64
 # ───────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# 新 f d b p  :  D‑Conv  →  Gated‑RNN  →  (N,2) complex64
+# ───────────────────────────────────────────────────────────────
 def fdbp(scope: Scope,
          signal,
          *,
          steps      = 3,
          dtaps      = 261,
-         ntaps      = 41,     # ← 仍保留形参以兼容外层调用
+         ntaps      = 41,     # 仍保留旧参数以兼容外层
          sps        = 2,
-         d_init=delta,
-         n_init=gauss,
-         hidden_dim = 32):    # 新增可选隐藏维度
+         d_init = delta,
+         n_init = gauss,
+         hidden_dim = 32):    # 新增，可不填
     """
-    • 仍接受与旧版完全相同的形参；
-    • 内部先做一次 D‑Conv (与旧版形状/时轴对齐)，
-      然后把 (N,2) complex64 ==> (N,4) real［实/虚 × X/Y］送入 Gated‑RNN，
-      最后再映射回 (N,2) complex64 并封装为 Signal 返还。
+    • 接口/返回类型与旧版完全兼容；
+    • 内部仅做一次 D‑Conv，其余由一层复值 Gated‑RNN 近似；
+    • 最终输出形状 (N,2) complex64，可无缝喂给后续 MIMOAF。
     """
-    # ---------- 1. 色散补偿 (只做 1 次即可) ---------------------
-    x_cplx, t = signal
+    # ---------- 1. 色散补偿 (vector‑map 1‑D SAME) ---------------
+    x_cplx, t = signal                               # x:(N,2) complex
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     x_cplx, t = scope.child(dconv, name='DConv')(Signal(x_cplx, t))
 
-    # ---------- 2. 复数拆分为实向量 (N,4) ----------------------
-    # [Re X, Im X, Re Y, Im Y]
-    x_real = jnp.concatenate([jnp.real(x_cplx), jnp.imag(x_cplx)], axis=-1)
+    # ---------- 2. 复数 → 实向量 (N,4) --------------------------
+    #      [Re X, Im X, Re Y, Im Y]
+    x_real4 = jnp.concatenate([jnp.real(x_cplx), jnp.imag(x_cplx)], axis=-1)
 
-    # ---------- 3. 单层 Gated‑RNN 处理 -------------------------
-    H = hidden_dim
-    dtype = x_real.dtype
-    Wz = scope.param('Wz', glorot_uniform(), (x_real.shape[-1], H), dtype)
+    # ---------- 3. 单层 Gated‑RNN ------------------------------
+    H     = hidden_dim
+    dtype = x_real4.dtype
+    Wz = scope.param('Wz', glorot_uniform(), (4, H), dtype)
     Uz = scope.param('Uz', glorot_uniform(), (H, H), dtype)
-    Wr = scope.param('Wr', glorot_uniform(), (x_real.shape[-1], H), dtype)
+    Wr = scope.param('Wr', glorot_uniform(), (4, H), dtype)
     Ur = scope.param('Ur', glorot_uniform(), (H, H), dtype)
-    Wh = scope.param('Wh', glorot_uniform(), (x_real.shape[-1], H), dtype)
+    Wh = scope.param('Wh', glorot_uniform(), (4, H), dtype)
     Uh = scope.param('Uh', glorot_uniform(), (H, H), dtype)
 
     def gru_step(h, x_t):
         z = jax.nn.sigmoid(x_t @ Wz + h @ Uz)
         r = jax.nn.sigmoid(x_t @ Wr + h @ Ur)
         h_bar = jax.nn.gelu(x_t @ Wh + (r * h) @ Uh)
-        return (1 - z) * h + z * h_bar, h_bar
+        h_next = (1 - z) * h + z * h_bar
+        return h_next, h_next
 
-    h0 = jnp.zeros((x_real.shape[0], H), dtype)
-    _, h_seq = jax.lax.scan(gru_step, h0, x_real)     # (N,H)
+    h0 = jnp.zeros((x_real4.shape[0], H), dtype)
+    _, h_seq = jax.lax.scan(gru_step, h0, x_real4)   # (N,H)
 
-    # ---------- 4. 映射回 (N,2) complex64 ----------------------
-    out = scope.param('W_out', glorot_uniform(), (H, 2), dtype)  # 2 => Re, Im
-    x_out_real = h_seq @ out                                     # (N,2)
-    x_out = (x_out_real[..., 0] + 1j * x_out_real[..., 1]).astype(jnp.complex64)
+    # ---------- 4. 全连接回 4 实量 → 2 复通道 -------------------
+    W_out = scope.param('W_out', glorot_uniform(), (H, 4), dtype)
+    y_real4 = h_seq @ W_out                          # (N,4)
+    re = y_real4[..., :2]
+    im = y_real4[..., 2:]
+    x_out = (re + 1j * im).astype(jnp.complex64)     # (N,2) complex
 
     return Signal(x_out, t)
+
 
 
 
