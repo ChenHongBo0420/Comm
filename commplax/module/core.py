@@ -372,33 +372,33 @@ def TimeCNN(scope, signal, taps=61, hidden=2,
 # ------------------------------------------------------------
 # 轻量 Gated RNN  （单步循环，保持时长）
 # ------------------------------------------------------------
-def GatedRNN(scope, signal, hidden=2, hippo=False, name='GatedRNN'):
-    x, t = signal                # x:(N, Cin), complex64
-    H, dtype = hidden, x.dtype
+import commplax.module.core as cxcore
+from commplax.module import core as ccore    
 
+def GatedRNN(scope, signal, hidden=2, hippo=False, name='GatedRNN'):
+    x, t = signal
+    H, dtype = hidden, x.dtype
     init_h = jnp.zeros((x.shape[0], H), dtype=dtype)
 
-    # weight helper -------------------------------------------------
     def w(n, shape):
         return scope.param(n, glorot_uniform(), shape, dtype).astype(dtype)
 
     if hippo:
         A = generate_hippo_matrix(H).astype(dtype)
 
-    def step(h, x_t):            # x_t:(Cin,)
+    def step(h, x_t):
         z = jax.nn.sigmoid(h @ w('Wz', (H, H)))
         r = jax.nn.sigmoid(h @ w('Wr', (H, H)))
-        h_tilde = jax.nn.tanh(x_t @ w('Wx', (x.shape[-1], H)) +
-                              (r * h) @ w('Wh', (H, H)))
+        h_tilde = jnp.tanh(x_t @ w('Wx', (x.shape[-1], H)) +
+                           (r * h) @ w('Wh', (H, H)))
         h_next = (1 - z) * h + z * h_tilde
         if hippo:
             h_next = h_next + h_next @ A
-        return h_next, h_next    # carry & output
+        return h_next, h_next
 
-    # 关键：直接用 x 作为 scan 的 iterable（N 个时间步）
-    _, h_seq = jax.lax.scan(step, init_h, x)   # (N,H)
-    y = h_seq                                 # 不再 swap
-    return core.Signal(y, t)
+    _, h_seq = jax.lax.scan(step, init_h, x)      # 不再 swap
+    y = h_seq
+    return ccore.Signal(y, t) 
 
 
 
