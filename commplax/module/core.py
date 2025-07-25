@@ -424,52 +424,48 @@ def fdbp(scope: Scope,
          *,
          steps      = 3,
          dtaps      = 261,
-         ntaps      = 41,      # 保留形参兼容外层
+         ntaps      = 41,      # 保留形参占位
          sps        = 2,
          d_init = delta,
-         n_init = gauss,       # ← 不再使用，但保持签名
-         hidden_dim = 32):     # 可在 make_base_module 调整
+         hidden_dim = 32):     # <= 64 通常足够
     """
-    ‑ 与旧版接口/返回完全一致；
-    ‑ 内部做：一次 D‑Conv  ➜  轻量复值 Gated‑RNN  ➜  回 2‑pol complex；
-    ‑ 输出 shape = (N, 2) complex64，可直接送后续 MIMO‑AF。
+    • 仍叫 fdbp，接口/返回完全兼容旧代码
+    • 用正交初始化的线性 RNN（SSM）做微幅残差建模
+      - h_{t+1} = A·h_t + B·x_t
+      - y_t     = C·h_{t+1}
+    • 保证输出 shape = (N,2) complex64
     """
-    # ===== 1. Dispersion compensation (SAME) ====================
-    x_cplx, t_sig = signal                       # x:(N,2) complex
+
+    # ---------- 1. 先做一次色散补偿 (SAME 长度) ------------------
+    x_c, t_sig = signal                        # complex (N,2)
     dconv = vmap(wpartial(conv1d,
                           taps=dtaps,
+                          mode='same',
                           kernel_init=d_init))
-    x_cplx, t = scope.child(dconv, 'DConv')(Signal(x_cplx, t_sig))
+    x_c, t = scope.child(dconv,'DConv')(Signal(x_c,t_sig))
 
-    # ===== 2. 复→实向量  (N,4)  [ReX, ImX, ReY, ImY] ============
-    x4 = jnp.concatenate([jnp.real(x_cplx),
-                          jnp.imag(x_cplx)], axis=-1)
+    # ---------- 2. 把复数拆成实向量 (N,4) -----------------------
+    x4 = jnp.concatenate([jnp.real(x_c), jnp.imag(x_c)], axis=-1)
 
-    # ===== 3. 单层 Gated‑RNN  ===================================
+    # ---------- 3. 线性状态空间模型 -----------------------------
     H = hidden_dim
-    dtype = x4.dtype
+    dtype = x4.dtype                            # float32
 
-    # 参数
-    Wi = scope.param('Wi', glorot_uniform(), (4, 3*H), dtype)  # input→[z,r,ĥ]
-    Wh = scope.param('Wh', glorot_uniform(), (H, 3*H), dtype)  # hidden→…
-    b  = scope.param('b',  zeros,           (3*H,),  dtype)
+    # 正交初始化能保持谱半径 ≈ 1，避免爆炸/消失
+    A = scope.param('A', orthogonal(), (H, H), dtype)
+    B = scope.param('B', glorot_uniform(), (4, H), dtype)
+    C = scope.param('C', glorot_uniform(), (H, 4), dtype)
 
-    def gru_cell(h, x_t):
-        z_r_h = x_t @ Wi + h @ Wh + b         # (3H,)
-        z, r, h_hat = jnp.split(z_r_h, 3)
-        z = jax.nn.sigmoid(z)
-        r = jax.nn.sigmoid(r)
-        h_hat = jax.nn.gelu(h_hat)
-        h_new = (1 - z) * h + z * h_hat
-        return h_new, h_new                   # carry, y
+    def step(h, x_t):
+        h_next = jnp.dot(h, A) + jnp.dot(x_t, B)   # 纯线性
+        y_t    = jnp.dot(h_next, C)
+        return h_next, y_t
 
-    h0 = jnp.zeros((H,), dtype)               # (H,)
-    _, h_seq = jax.lax.scan(gru_cell, h0, x4) # (N,H)
+    h0 = jnp.zeros((H,), dtype)
+    _, y_seq = jax.lax.scan(step, h0, x4)          # (N,4)
 
-    # ===== 4. 全连接回 2‑pol complex  ===========================
-    W_out = scope.param('W_out', glorot_uniform(), (H, 4), dtype)
-    y4 = h_seq @ W_out                        # (N,4)
-    re, im = jnp.split(y4, 2, axis=-1)        # 各 (N,2)
+    # ---------- 4. 还原成 (N,2) 复信号 ---------------------------
+    re, im = jnp.split(y_seq, 2, axis=-1)
     x_out = (re + 1j*im).astype(jnp.complex64)
 
     return Signal(x_out, t)
