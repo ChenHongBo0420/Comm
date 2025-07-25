@@ -524,13 +524,14 @@ def fdbp(
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         
         # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        # c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+        #     Signal(jnp.abs(x)**2, td),
+        #     taps=ntaps,
+        #     kernel_init=n_init
+        # )
+        # # 应用相位: x_new = exp(j*c) * x[...]
+        # x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+        # x = x_new
         # --- (C) residual MLP
         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
