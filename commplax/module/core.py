@@ -422,50 +422,53 @@ def DenseHead(scope, signal, out_dim=2, name='DenseHead'):
 def fdbp(scope: Scope,
          signal,
          *,
-         steps       = 3,
-         dtaps       = 261,
-         ntaps       = 41,          # 仍保留以兼容调用
-         sps         = 2,
-         d_init      = delta,
-         n_init      = gauss,       # ← 只是占位，不用
-         hidden_dim  = 32):
+         steps      = 3,
+         dtaps      = 261,
+         ntaps      = 41,          # 仅为兼容保留，不再使用
+         sps        = 2,
+         d_init     = delta,
+         n_init     = gauss,       # idem
+         hidden_dim = 32):
     """
-    线性状态空间 (正交初始化) 版 FDBP
-    - 完全线性、幅度稳定
-    - 签名保留  n_init  等所有形参 ⇒ 不会再触发 TypeError
-    返回 Signal(x_out, t) 与旧实现一致
+    • 先做 dispersion linear conv（与旧逻辑保持一步）
+    • 再用一个小尺寸的线性 SSM / RNN 做细节处理
+    • **绝不**引入幅度平方 / exp(j·φ) 之类非线性 —— 不会出现 Inf/NaN
+    • 输出与输入同维度 (N,2) 复数，整个网络梯度稳定
     """
-    # ---------- 色散补偿 (SAME) ----------------------------------
-    x_c, t_sig = signal
-    dconv = vmap(wpartial(conv1d,
-                          taps=dtaps,
-                          mode='same',
-                          kernel_init=d_init))
-    x_c, t = scope.child(dconv, 'DConv')(Signal(x_c, t_sig))
 
-    # ---------- 拆成实值 (N,4) -----------------------------------
-    x4 = jnp.concatenate([jnp.real(x_c), jnp.imag(x_c)], axis=-1)
+    # ---------- (1) 色散补偿（SAME 长度不变） --------------------
+    x, t_in = signal                                   # x: (N,2) complex64
+    dconv = vmap(
+        wpartial(conv1d,
+                 taps        = dtaps,
+                 mode        = 'same',                 # 长度对齐
+                 kernel_init = d_init)
+    )
+    x, t = scope.child(dconv, name='DConv')(Signal(x, t_in))
 
-    # ---------- 线性 SSM -----------------------------------------
-    H      = hidden_dim
-    dtype  = x4.dtype
-    A = scope.param('A', orthogonal(),      (H, H), dtype)
-    B = scope.param('B', glorot_uniform(),  (4, H), dtype)
-    C = scope.param('C', glorot_uniform(),  (H, 4), dtype)
+    # ---------- (2) 把 (N,2 complex) → (N,4 real) --------------
+    x_real = jnp.concatenate([jnp.real(x), jnp.imag(x)], axis=-1)  # (N,4)
+
+    # ---------- (3) 线性 SSM / RNN ------------------------------
+    H  = hidden_dim
+    dt = x_real.dtype
+    A  = scope.param('A', orthogonal(),     (H, H), dt)
+    B  = scope.param('B', glorot_uniform(), (4, H), dt)
+    C  = scope.param('C', glorot_uniform(), (H, 4), dt)
 
     def step(h, x_t):
         h1 = jnp.dot(h, A) + jnp.dot(x_t, B)
         y  = jnp.dot(h1, C)
         return h1, y
 
-    h0       = jnp.zeros((H,), dtype)
-    _, y_seq = jax.lax.scan(step, h0, x4)        # (N,4)
+    h0       = jnp.zeros((H,), dt)
+    _, y_seq = jax.lax.scan(step, h0, x_real)          # (N,4)
 
-    # ---------- 还原 (N,2) complex -------------------------------
+    # ---------- (4) 还原回 (N,2) 复数 ---------------------------
     re, im = jnp.split(y_seq, 2, axis=-1)
-    x_out  = (re + 1j*im).astype(jnp.complex64)
-    return Signal(x_out, t)
+    x_out  = (re + 1j * im).astype(jnp.complex64)      # (N,2) complex64
 
+    return Signal(x_out, t)
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
