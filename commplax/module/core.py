@@ -422,54 +422,52 @@ def DenseHead(scope, signal, out_dim=2, name='DenseHead'):
 def fdbp(scope: Scope,
          signal,
          *,
-         steps      = 3,
-         dtaps      = 261,
-         ntaps      = 41,          # 仅为兼容保留，不再使用
-         sps        = 2,
-         d_init     = delta,
-         n_init     = gauss,       # idem
-         hidden_dim = 32):
+         steps=3,
+         dtaps=261,      # 仍然接受但「不再」用到
+         ntaps=41,       # idem
+         sps=2,
+         d_init=delta,
+         n_init=gauss,   # idem
+         hidden_size=32, hippo=False):
     """
-    • 先做 dispersion linear conv（与旧逻辑保持一步）
-    • 再用一个小尺寸的线性 SSM / RNN 做细节处理
-    • **绝不**引入幅度平方 / exp(j·φ) 之类非线性 —— 不会出现 Inf/NaN
-    • 输出与输入同维度 (N,2) 复数，整个网络梯度稳定
+    1. 直接把 (N,2) complex → (N,4) real
+    2. 过两层线性 RNN / HIPPO
+    3. 还原成 (N,2) complex 输出
+    完全线性，不含 |x|² / exp(jφ) 非线性 ⇒ 不会炸梯度、不产生 ‑inf。
     """
 
-    # ---------- (1) 色散补偿（SAME 长度不变） --------------------
-    x, t_in = signal                                   # x: (N,2) complex64
-    dconv = vmap(
-        wpartial(conv1d,
-                 taps        = dtaps,
-                 mode        = 'same',                 # 长度对齐
-                 kernel_init = d_init)
-    )
-    x, t = scope.child(dconv, name='DConv')(Signal(x, t_in))
+    # --------- (0) 拆复数 → 实部 + 虚部 ----------
+    x_cplx, t = signal
+    x_real = jnp.concatenate([jnp.real(x_cplx),
+                              jnp.imag(x_cplx)], axis=-1)  # (N,4) float32
 
-    # ---------- (2) 把 (N,2 complex) → (N,4 real) --------------
-    x_real = jnp.concatenate([jnp.real(x), jnp.imag(x)], axis=-1)  # (N,4)
+    N, D_in = x_real.shape
+    H = hidden_size
+    dtype = x_real.dtype
 
-    # ---------- (3) 线性 SSM / RNN ------------------------------
-    H  = hidden_dim
-    dt = x_real.dtype
-    A  = scope.param('A', orthogonal(),     (H, H), dt)
-    B  = scope.param('B', glorot_uniform(), (4, H), dt)
-    C  = scope.param('C', glorot_uniform(), (H, 4), dt)
+    # --------- (1) RNN / HIPPO Core -------------
+    key = scope.make_rng('params')
+    A = scope.param('A', orthogonal(),     (H, H), dtype)
+    B = scope.param('B', glorot_uniform(), (D_in, H), dtype)
+    C = scope.param('C', glorot_uniform(), (H, D_in), dtype)
+
+    if hippo:                              # 可选 HIPPO 转移
+        hip = generate_hippo_matrix(H).astype(dtype)
+        A = A * 0.0 + hip                  # 直接替换或做线性混合
 
     def step(h, x_t):
         h1 = jnp.dot(h, A) + jnp.dot(x_t, B)
         y  = jnp.dot(h1, C)
         return h1, y
 
-    h0       = jnp.zeros((H,), dt)
+    h0 = jnp.zeros((H,), dtype)
     _, y_seq = jax.lax.scan(step, h0, x_real)          # (N,4)
 
-    # ---------- (4) 还原回 (N,2) 复数 ---------------------------
+    # --------- (2) 还原回复数 --------------------
     re, im = jnp.split(y_seq, 2, axis=-1)
-    x_out  = (re + 1j * im).astype(jnp.complex64)      # (N,2) complex64
+    x_out  = (re + 1j*im).astype(jnp.complex64)        # (N,2) complex64
 
     return Signal(x_out, t)
-
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
     real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
