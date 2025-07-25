@@ -372,21 +372,33 @@ def TimeCNN(scope, signal, taps=61, hidden=2,
 # ------------------------------------------------------------
 # 轻量 Gated RNN  （单步循环，保持时长）
 # ------------------------------------------------------------
-def GatedRNN(scope, signal, hidden=2, hippo=True,
-             name='GatedRNN'):
-    x, t = signal                       # x:(N,T,H)
-    if x.ndim == 2: x = x[:, None, :]   # (N,1,H) 兼容单符号
-    H = x.shape[-1]
-    W = scope.param('W_hh', orthogonal(), (H, H))
+def GatedRNN(scope, signal, hidden=2, hippo=False, name='GatedRNN'):
+    x, t = signal                               # x:(N,Cin), dtype=complex64
+    H = hidden
+    dtype = x.dtype                             # 继承输入的复数 dtype
+
+    # 👉 用复数 0 初始化
+    init_h = jnp.zeros((x.shape[0], H), dtype=dtype)
+
+    # 可选：把 HIPPO‑A 矩阵也 cast 成相同 dtype
     if hippo:
-        A = scope.param('A', lambda k,s: generate_hippo_matrix(H), (H,H))
-    def step(h, xt):
-        h = jnp.tanh(xt + h @ W)
-        if hippo: h = h + (h @ A)
-        return h, h
-    _, hseq = jax.lax.scan(step, jnp.zeros((x.shape[0], H)), jnp.swapaxes(x,0,1))
-    y = jnp.swapaxes(hseq,0,1)          # (N,T,H)
-    return Signal(y.squeeze(1), t)      # squeeze if T==1
+        A = generate_hippo_matrix(H).astype(dtype)
+
+    def step(h, x_t):
+        # h, x_t 皆 complex64
+        z = jax.nn.gelu(h @ scope.param('Wz', glorot_uniform(), (H, H), dtype))
+        r = jax.nn.sigmoid(h @ scope.param('Wr', glorot_uniform(), (H, H), dtype))
+        h_tilde = jax.nn.gelu(x_t @ scope.param('Wx', glorot_uniform(), (x.shape[-1], H), dtype) +
+                              (r * h) @ scope.param('Wh', glorot_uniform(), (H, H), dtype))
+        h_next = (1 - z) * h + z * h_tilde
+        if hippo:
+            h_next += h_next @ A                # 仍保持 complex64
+        return h_next, h_next                   # carry / y both complex64
+
+    _, h_seq = jax.lax.scan(step, init_h, jnp.swapaxes(x, 0, 1))
+    y = jnp.swapaxes(h_seq, 0, 1)               # (N, T, H)
+    return core.Signal(y.squeeze(1), t)         # 若 T==1 则 squeeze
+
 
 # ------------------------------------------------------------
 # Dense head  -> I/Q (或你想要的维度)
