@@ -492,42 +492,53 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     out_1d = out.squeeze(axis=-1)
     return out_1d, t
 
+# -------- 函数式 1‑D CNN（共享权重，SAME padding） ----------
+def dcnn_layer(scope, sig: Signal, taps, k_init):
+    x, t = sig
+    # kernel 形状 (taps, 1) ⇒ 实质按列广播到每个极化/通道
+    k = scope.param('kernel', k_init, (taps, 1), jnp.complex64)
+    x_out = xop.convolve(x, k, mode='same')        # 长度不变
+    return Signal(x_out, t)
+
+# -------- fdbp 主体 -----------------------------------------
 def fdbp(scope: Scope,
          signal,
          *,
-         steps=3,
-         dtaps=261,
-         ntaps=41,          # 仍保留形参，先不动
-         hidden_dim=2,
-         use_alpha=True,
-         d_init=delta,      # 仅用于卷积核 delta 初始化
-         **_unused):
-    x, t = signal
-    # --------- D‑CNN：一条卷积层，参数共享 ---------
-    conv_layer = scope.child(
-        partial(nn.Conv, features=x.shape[-1],
-                kernel_size=(dtaps,), strides=(1,),
-                padding='SAME', use_bias=False,
-                dtype=jnp.complex64,
-                kernel_init=d_init),          # delta → CDC 起点
-        name='DConv')
+         steps      = 3,
+         dtaps      = 261,
+         ntaps      = 41,
+         hidden_dim = 2,
+         use_alpha  = True,
+         d_init     = delta,     # 仍用 delta 作 CDC 起点
+         n_init     = gauss,     # Mimoconv 初始
+         **_ignored):
 
-    # 可选 residual α
+    x, t = signal
+
+    # ① 只实例化一次卷积核，后续循环复用
+    dconv = scope.child(
+        wpartial(dcnn_layer, taps=dtaps, k_init=d_init),
+        name='DConv'
+    )
+
+    # ② 可训练残差缩放
     alpha = scope.param('res_alpha', nn.initializers.zeros, ()) if use_alpha else 1.0
 
     for i in range(steps):
-        # ----- (A) Dispersion CNN -----
-        x = conv_layer(x[None, ...]).squeeze(0)  # 长度不变
 
-        # ----- (B) Non‑linear Mimoconv 保留 -----
+        # ---- (A) Dispersion CNN ----
+        x, t = dconv(Signal(x, t))
+
+        # ---- (B) Mimoconv (非线性) ----
         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-            Signal(jnp.abs(x)**2, t), taps=ntaps, kernel_init=gauss)
+                    Signal(jnp.abs(x)**2, t),
+                    taps=ntaps, kernel_init=n_init)
         x = jnp.exp(1j * c) * x[tN.start - t.start : x.shape[0] + (tN.stop - t.stop)]
-        t = tN
+        t = tN                                           # 更新时间标签
 
-        # ----- (C) Residual‑MLP 保留 -----
-        res, _  = scope.child(residual_mlp, name=f'ResMLP_{i}')(Signal(jnp.abs(x)**2, t),
-                                                                hidden_dim=hidden_dim)
+        # ---- (C) Residual‑MLP ----
+        res, _ = scope.child(residual_mlp, name=f'ResMLP_{i}')(
+                    Signal(jnp.abs(x)**2, t), hidden_dim=hidden_dim)
         x += alpha * jnp.asarray(res, x.dtype)[:, None]
 
     return Signal(x, t)
