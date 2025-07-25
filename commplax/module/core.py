@@ -422,52 +422,48 @@ def DenseHead(scope, signal, out_dim=2, name='DenseHead'):
 def fdbp(scope: Scope,
          signal,
          *,
-         steps      = 3,
-         dtaps      = 261,
-         ntaps      = 41,      # 保留形参占位
-         sps        = 2,
-         d_init = delta,
-         hidden_dim = 32):     # <= 64 通常足够
+         steps       = 3,
+         dtaps       = 261,
+         ntaps       = 41,          # 仍保留以兼容调用
+         sps         = 2,
+         d_init      = delta,
+         n_init      = gauss,       # ← 只是占位，不用
+         hidden_dim  = 32):
     """
-    • 仍叫 fdbp，接口/返回完全兼容旧代码
-    • 用正交初始化的线性 RNN（SSM）做微幅残差建模
-      - h_{t+1} = A·h_t + B·x_t
-      - y_t     = C·h_{t+1}
-    • 保证输出 shape = (N,2) complex64
+    线性状态空间 (正交初始化) 版 FDBP
+    - 完全线性、幅度稳定
+    - 签名保留  n_init  等所有形参 ⇒ 不会再触发 TypeError
+    返回 Signal(x_out, t) 与旧实现一致
     """
-
-    # ---------- 1. 先做一次色散补偿 (SAME 长度) ------------------
-    x_c, t_sig = signal                        # complex (N,2)
+    # ---------- 色散补偿 (SAME) ----------------------------------
+    x_c, t_sig = signal
     dconv = vmap(wpartial(conv1d,
                           taps=dtaps,
                           mode='same',
                           kernel_init=d_init))
-    x_c, t = scope.child(dconv,'DConv')(Signal(x_c,t_sig))
+    x_c, t = scope.child(dconv, 'DConv')(Signal(x_c, t_sig))
 
-    # ---------- 2. 把复数拆成实向量 (N,4) -----------------------
+    # ---------- 拆成实值 (N,4) -----------------------------------
     x4 = jnp.concatenate([jnp.real(x_c), jnp.imag(x_c)], axis=-1)
 
-    # ---------- 3. 线性状态空间模型 -----------------------------
-    H = hidden_dim
-    dtype = x4.dtype                            # float32
-
-    # 正交初始化能保持谱半径 ≈ 1，避免爆炸/消失
-    A = scope.param('A', orthogonal(), (H, H), dtype)
-    B = scope.param('B', glorot_uniform(), (4, H), dtype)
-    C = scope.param('C', glorot_uniform(), (H, 4), dtype)
+    # ---------- 线性 SSM -----------------------------------------
+    H      = hidden_dim
+    dtype  = x4.dtype
+    A = scope.param('A', orthogonal(),      (H, H), dtype)
+    B = scope.param('B', glorot_uniform(),  (4, H), dtype)
+    C = scope.param('C', glorot_uniform(),  (H, 4), dtype)
 
     def step(h, x_t):
-        h_next = jnp.dot(h, A) + jnp.dot(x_t, B)   # 纯线性
-        y_t    = jnp.dot(h_next, C)
-        return h_next, y_t
+        h1 = jnp.dot(h, A) + jnp.dot(x_t, B)
+        y  = jnp.dot(h1, C)
+        return h1, y
 
-    h0 = jnp.zeros((H,), dtype)
-    _, y_seq = jax.lax.scan(step, h0, x4)          # (N,4)
+    h0       = jnp.zeros((H,), dtype)
+    _, y_seq = jax.lax.scan(step, h0, x4)        # (N,4)
 
-    # ---------- 4. 还原成 (N,2) 复信号 ---------------------------
+    # ---------- 还原 (N,2) complex -------------------------------
     re, im = jnp.split(y_seq, 2, axis=-1)
-    x_out = (re + 1j*im).astype(jnp.complex64)
-
+    x_out  = (re + 1j*im).astype(jnp.complex64)
     return Signal(x_out, t)
 
 
