@@ -419,66 +419,60 @@ def DenseHead(scope, signal, out_dim=2, name='DenseHead'):
     return Signal(y, t)
 
 
-# ───────────────────────────────────────────────────────────────
-# 新   f d b p   ：D‑Conv → Gated‑RNN → 输出 (N,2) complex64
-# ───────────────────────────────────────────────────────────────
-# ───────────────────────────────────────────────────────────────
-# 新 f d b p  :  D‑Conv  →  Gated‑RNN  →  (N,2) complex64
-# ───────────────────────────────────────────────────────────────
 def fdbp(scope: Scope,
          signal,
          *,
          steps      = 3,
          dtaps      = 261,
-         ntaps      = 41,     # 仍保留旧参数以兼容外层
+         ntaps      = 41,      # 保留形参兼容外层
          sps        = 2,
          d_init = delta,
-         n_init = gauss,
-         hidden_dim = 32):    # 新增，可不填
+         n_init = gauss,       # ← 不再使用，但保持签名
+         hidden_dim = 32):     # 可在 make_base_module 调整
     """
-    • 接口/返回类型与旧版完全兼容；
-    • 内部仅做一次 D‑Conv，其余由一层复值 Gated‑RNN 近似；
-    • 最终输出形状 (N,2) complex64，可无缝喂给后续 MIMOAF。
+    ‑ 与旧版接口/返回完全一致；
+    ‑ 内部做：一次 D‑Conv  ➜  轻量复值 Gated‑RNN  ➜  回 2‑pol complex；
+    ‑ 输出 shape = (N, 2) complex64，可直接送后续 MIMO‑AF。
     """
-    # ---------- 1. 色散补偿 (vector‑map 1‑D SAME) ---------------
-    x_cplx, t = signal                               # x:(N,2) complex
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    x_cplx, t = scope.child(dconv, name='DConv')(Signal(x_cplx, t))
+    # ===== 1. Dispersion compensation (SAME) ====================
+    x_cplx, t_sig = signal                       # x:(N,2) complex
+    dconv = vmap(wpartial(conv1d,
+                          taps=dtaps,
+                          kernel_init=d_init))
+    x_cplx, t = scope.child(dconv, 'DConv')(Signal(x_cplx, t_sig))
 
-    # ---------- 2. 复数 → 实向量 (N,4) --------------------------
-    #      [Re X, Im X, Re Y, Im Y]
-    x_real4 = jnp.concatenate([jnp.real(x_cplx), jnp.imag(x_cplx)], axis=-1)
+    # ===== 2. 复→实向量  (N,4)  [ReX, ImX, ReY, ImY] ============
+    x4 = jnp.concatenate([jnp.real(x_cplx),
+                          jnp.imag(x_cplx)], axis=-1)
 
-    # ---------- 3. 单层 Gated‑RNN ------------------------------
-    H     = hidden_dim
-    dtype = x_real4.dtype
-    Wz = scope.param('Wz', glorot_uniform(), (4, H), dtype)
-    Uz = scope.param('Uz', glorot_uniform(), (H, H), dtype)
-    Wr = scope.param('Wr', glorot_uniform(), (4, H), dtype)
-    Ur = scope.param('Ur', glorot_uniform(), (H, H), dtype)
-    Wh = scope.param('Wh', glorot_uniform(), (4, H), dtype)
-    Uh = scope.param('Uh', glorot_uniform(), (H, H), dtype)
+    # ===== 3. 单层 Gated‑RNN  ===================================
+    H = hidden_dim
+    dtype = x4.dtype
 
-    def gru_step(h, x_t):
-        z = jax.nn.sigmoid(x_t @ Wz + h @ Uz)
-        r = jax.nn.sigmoid(x_t @ Wr + h @ Ur)
-        h_bar = jax.nn.gelu(x_t @ Wh + (r * h) @ Uh)
-        h_next = (1 - z) * h + z * h_bar
-        return h_next, h_next
+    # 参数
+    Wi = scope.param('Wi', glorot_uniform(), (4, 3*H), dtype)  # input→[z,r,ĥ]
+    Wh = scope.param('Wh', glorot_uniform(), (H, 3*H), dtype)  # hidden→…
+    b  = scope.param('b',  zeros,           (3*H,),  dtype)
 
-    h0 = jnp.zeros((x_real4.shape[0], H), dtype)
-    _, h_seq = jax.lax.scan(gru_step, h0, x_real4)   # (N,H)
+    def gru_cell(h, x_t):
+        z_r_h = x_t @ Wi + h @ Wh + b         # (3H,)
+        z, r, h_hat = jnp.split(z_r_h, 3)
+        z = jax.nn.sigmoid(z)
+        r = jax.nn.sigmoid(r)
+        h_hat = jax.nn.gelu(h_hat)
+        h_new = (1 - z) * h + z * h_hat
+        return h_new, h_new                   # carry, y
 
-    # ---------- 4. 全连接回 4 实量 → 2 复通道 -------------------
+    h0 = jnp.zeros((H,), dtype)               # (H,)
+    _, h_seq = jax.lax.scan(gru_cell, h0, x4) # (N,H)
+
+    # ===== 4. 全连接回 2‑pol complex  ===========================
     W_out = scope.param('W_out', glorot_uniform(), (H, 4), dtype)
-    y_real4 = h_seq @ W_out                          # (N,4)
-    re = y_real4[..., :2]
-    im = y_real4[..., 2:]
-    x_out = (re + 1j * im).astype(jnp.complex64)     # (N,2) complex
+    y4 = h_seq @ W_out                        # (N,4)
+    re, im = jnp.split(y4, 2, axis=-1)        # 各 (N,2)
+    x_out = (re + 1j*im).astype(jnp.complex64)
 
     return Signal(x_out, t)
-
-
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
