@@ -412,25 +412,21 @@ from jax.nn.initializers import orthogonal, zeros
 #     return x1_updated, x2_updated    
   
 # ====== core_cnn.py ======
-def cnn1d_with_time(scope: Scope,
-                    signal: Signal,
-                    taps:   int,
-                    rtap:   int | None = None,
-                    stride: int = 1,
-                    mode:   str = 'valid',
-                    k_init        = delta):
-    """
-    • 核形状 (taps , C , C)  —— 输入/输出通道数相同
-    • 时间戳通过 conv1d_t() 计算，保留框架的长度对齐逻辑
-    """
-    x, t      = signal
-    dims      = x.shape[-1]               # Cin = Cout = dims
-    t_new     = scope.variable('const', 't',
-                               conv1d_t, t, taps, rtap, stride, mode).value
-    k         = scope.param('kernel', k_init,
-                            (taps, dims, dims), jnp.complex64)
-    y         = xcomm.mimoconv(x, k, mode=mode)   # 和官方 D‑Conv 相同接口
+def cnn1d_single(scope: Scope,
+                 sig   : Signal,
+                 taps  : int,
+                 rtap  : int | None = None,
+                 mode  : str = 'valid',
+                 stride: int = 1,
+                 k_init        = delta):
+    """单通道 1‑D 卷积并维护时间戳"""
+    x, t = sig                    # x: (N,)
+    t_new = scope.variable('const', 't',
+                           conv1d_t, t, taps, rtap, stride, mode).value
+    h = scope.param('kernel', k_init, (taps,), jnp.complex64)
+    y = xop.convolve(x, h, mode=mode)
     return Signal(y, t_new)
+
 
 def fdbp(scope: Scope,
          signal,
@@ -440,26 +436,27 @@ def fdbp(scope: Scope,
          d_init     = delta,
          n_init     = gauss,
          **_unused):
-    x, t  = signal
-    # vmap 方式与原来保持一致（每次对两个偏振分量并行卷积）
-    d_cnn = vmap(wpartial(cnn1d_with_time,
-                          taps   = dtaps,
-                          k_init = d_init),
-                 in_axes=(Signal(-1, None),))       # (-1,None) 让 vmap 作用在最后一维 channel
-
+    x, t = signal                 # x:(N,2)   — 两个偏振分量
     for i in range(steps):
-        # ---------- Dispersion CNN ----------
-        x, td = scope.child(d_cnn, name=f'DCNN_{i}')(Signal(x, t))
+        # ------- Dispersion CNN (每通道独立) -------
+        y_ch = []
+        for ch in range(x.shape[1]):
+            ch_sig = Signal(x[:, ch], t)
+            ch_out = scope.child(cnn1d_single,
+                                 name=f'DCNN{i}_ch{ch}')(
+                                 ch_sig, taps=dtaps, k_init=d_init)
+            y_ch.append(ch_out.val)
+            # 所有通道的 t_new 相同，随便取一个
+            t = ch_out.t
+        x = jnp.stack(y_ch, axis=-1)      # 重新拼回 (N,2)
 
-        # ---------- Non‑linear phase ----------
+        # ------- Non‑linear phase 与官方保持一致 -------
         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
-                    Signal(jnp.abs(x)**2, td),
+                    Signal(jnp.abs(x)**2, t),
                     taps=ntaps, kernel_init=n_init)
-
-        x = jnp.exp(1j * c) * x[tN.start - td.start :
-                                x.shape[0] + (tN.stop - td.stop)]
-        t = tN               # 更新时间戳
-
+        x = jnp.exp(1j * c) * x[tN.start - t.start :
+                                x.shape[0] + (tN.stop - t.stop)]
+        t = tN                            # 更新时间戳
     return Signal(x, t)
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
