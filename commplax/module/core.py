@@ -462,7 +462,6 @@ def fdbp(scope: Scope,
 
     return Signal(x, t)
 
-
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
     real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
