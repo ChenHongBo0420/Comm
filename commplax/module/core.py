@@ -425,23 +425,28 @@ from jax.nn.initializers import orthogonal, zeros
 #     y = xop.convolve(x, h, mode='same')      # ★ SAME
 #     return Signal(y, t)                      # t 不变
 
-# --- 仅改动 cnn1d_single 这一处 ----------------------------------
 def cnn1d_single(scope: Scope,
                  sig: Signal,
                  taps: int,
                  rtap: int | None = None,
-                 mode: str = 'same',          # ← 改成 'same'
+                 mode: str = 'same',   # 继续用 same
                  stride: int = 1,
                  k_init = delta):
-    """
-    1‑D 卷积 (单通道) 并维护时间戳：
-    mode='same' ⇒ 输出长度与输入一致 ⇒ 时间轴不再被裁短
-    """
     x, t = sig
     t_new = scope.variable('const', 't',
                            conv1d_t, t, taps, rtap, stride, mode).value
     h = scope.param('kernel', k_init, (taps,), jnp.complex64)
-    y = xop.convolve(x, h, mode=mode)         # SAME‑conv
+
+    y = xop.convolve(x, h, mode=mode)
+
+    # ---------- 关键补偿 ---------- #
+    delay = (taps - 1) // 2            # 核中心带来的群时延
+    y = jnp.roll(y, -delay, axis=0)    # 向左回滚补偿
+    # 同时修正时间戳保持一致
+    t_new = core.SigTime(t_new.start + delay//stride,
+                         t_new.stop  + delay//stride,
+                         t_new.sps)
+
     return Signal(y, t_new)
 
 
