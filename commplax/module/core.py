@@ -411,19 +411,38 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
+# def cnn1d_single(scope: Scope,
+#                  sig   : Signal,
+#                  taps  : int,
+#                  rtap  : int | None = None,
+#                  k_init        = delta):
+#     """
+#     单通道 1‑D 卷积，mode='same' 保持长度 & 时间轴
+#     """
+#     x, t = sig                               # x:(N,)
+#     # SAME → 输出与输入同长，时间戳直接复用
+#     h = scope.param('kernel', k_init, (taps,), jnp.complex64)
+#     y = xop.convolve(x, h, mode='same')      # ★ SAME
+#     return Signal(y, t)                      # t 不变
+
+# --- 仅改动 cnn1d_single 这一处 ----------------------------------
 def cnn1d_single(scope: Scope,
-                 sig   : Signal,
-                 taps  : int,
-                 rtap  : int | None = None,
-                 k_init        = delta):
+                 sig: Signal,
+                 taps: int,
+                 rtap: int | None = None,
+                 mode: str = 'same',          # ← 改成 'same'
+                 stride: int = 1,
+                 k_init = delta):
     """
-    单通道 1‑D 卷积，mode='same' 保持长度 & 时间轴
+    1‑D 卷积 (单通道) 并维护时间戳：
+    mode='same' ⇒ 输出长度与输入一致 ⇒ 时间轴不再被裁短
     """
-    x, t = sig                               # x:(N,)
-    # SAME → 输出与输入同长，时间戳直接复用
+    x, t = sig
+    t_new = scope.variable('const', 't',
+                           conv1d_t, t, taps, rtap, stride, mode).value
     h = scope.param('kernel', k_init, (taps,), jnp.complex64)
-    y = xop.convolve(x, h, mode='same')      # ★ SAME
-    return Signal(y, t)                      # t 不变
+    y = xop.convolve(x, h, mode=mode)         # SAME‑conv
+    return Signal(y, t_new)
 
 
 # def fdbp(scope: Scope,
