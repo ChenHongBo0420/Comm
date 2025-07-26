@@ -411,25 +411,20 @@ from jax.nn.initializers import orthogonal, zeros
 #     x2_updated = x2 + weight * x1
 #     return x1_updated, x2_updated    
   
-# ====== core_cnn.py ======
 def cnn1d_single(scope: Scope,
                  sig   : Signal,
                  taps  : int,
                  rtap  : int | None = None,
-                 mode  : str = 'same',          # ← 改成 same
-                 stride: int = 1,
                  k_init        = delta):
     """
-    对 1‑D 复数序列做卷积并准确维护时间戳
-    * mode='same' → 输出与输入等长，时间轴不偏移
+    单通道 1‑D 卷积，mode='same' 保持长度 & 时间轴
     """
-    x, t = sig                              # x:(N,)
-    t_new = scope.variable('const', 't',
-                           conv1d_t, t, taps, rtap,
-                           stride, mode).value
+    x, t = sig                               # x:(N,)
+    # SAME → 输出与输入同长，时间戳直接复用
     h = scope.param('kernel', k_init, (taps,), jnp.complex64)
-    y = xop.convolve(x, h, mode=mode)       # SAME 卷积
-    return Signal(y, t_new)                 # t_new == t  (等长)
+    y = xop.convolve(x, h, mode='same')      # ★ SAME
+    return Signal(y, t)                      # t 不变
+
 
 def fdbp(scope: Scope,
          signal      : Signal,
@@ -439,40 +434,36 @@ def fdbp(scope: Scope,
          d_init            = delta,
          n_init            = gauss,
          **_unused):
-    """
-    Dispersion 用 SAME‑CNN（各偏振独立）
-    Non‑linear 相位保持官方 mimoconv1d（valid），
-    slice 时严格按时间戳对齐。
-    """
-    x, t = signal            # x:(N,2) — 双偏振
-    for i in range(steps):
 
-        # ---------- ① Dispersion CNN (SAME 长度) ----------
-        ch_outs = []
-        for ch in range(x.shape[1]):        # loop 两个偏振
+    x, t = signal                             # x:(N,2)
+
+    for i in range(steps):
+        # ---------- ① Dispersion SAME‑CNN ----------
+        ch_out = []
+        for ch in range(x.shape[1]):          # 两个偏振独立卷积
             out = scope.child(
                     cnn1d_single,
                     name=f'DCNN_{i}_ch{ch}')(
-                    Signal(x[:, ch], t),    # 单通道 Signal
+                    Signal(x[:, ch], t),
                     taps=dtaps,
-                    mode='same',            # 保长
                     k_init=d_init)
-            ch_outs.append(out.val)
-            # SAME 卷积 → t 不变，随便取一个即可
-        x = jnp.stack(ch_outs, axis=-1)
+            ch_out.append(out.val)
+        x = jnp.stack(ch_out, axis=-1)        # (N,2) 重新拼回
+        # t 未改变，仍为 0/0
 
-        # ---------- ② Non‑linear phase (valid) ------------
-        c, tN = scope.child(
-                    mimoconv1d, name=f'NConv_{i}')(
-                    Signal(jnp.abs(x)**2, t),
-                    taps=ntaps, kernel_init=n_init)
+        # ---------- ② Non‑linear phase (也用 SAME) ---
+        c, _ = scope.child(
+                   mimoconv1d, name=f'NConv_{i}')(
+                   Signal(jnp.abs(x)**2, t),
+                   taps=ntaps,
+                   mode='same',               # ★ SAME
+                   kernel_init=n_init)
 
-        # slice x → tN  区间肯定有重叠
-        x = jnp.exp(1j * c) * \
-            x[(tN.start - t.start) : x.shape[0] + (tN.stop - t.stop)]
-        t = tN                                   # 更新时间戳
+        x = jnp.exp(1j * c) * x               # 不再切片
+        # t 依旧不变
 
-    return Signal(x, t)
+    return Signal(x, t)                       # t.start==0, t.stop==0
+
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
