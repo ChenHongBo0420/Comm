@@ -426,44 +426,62 @@ def cnn1d_single(scope: Scope,
     return Signal(y, t)                      # t 不变
 
 
-def fdbp(scope: Scope,
-         signal      : Signal,
-         steps       : int = 3,
-         dtaps       : int = 261,
-         ntaps       : int = 41,
-         d_init            = delta,
-         n_init            = gauss,
-         **_unused):
+# def fdbp(scope: Scope,
+#          signal      : Signal,
+#          steps       : int = 3,
+#          dtaps       : int = 261,
+#          ntaps       : int = 41,
+#          d_init            = delta,
+#          n_init            = gauss,
+#          **_unused):
 
-    x, t = signal                             # x:(N,2)
+#     x, t = signal                             # x:(N,2)
 
+#     for i in range(steps):
+#         # ---------- ① Dispersion SAME‑CNN ----------
+#         ch_out = []
+#         for ch in range(x.shape[1]):          # 两个偏振独立卷积
+#             out = scope.child(
+#                     cnn1d_single,
+#                     name=f'DCNN_{i}_ch{ch}')(
+#                     Signal(x[:, ch], t),
+#                     taps=dtaps,
+#                     k_init=d_init)
+#             ch_out.append(out.val)
+#         x = jnp.stack(ch_out, axis=-1)        # (N,2) 重新拼回
+#         # t 未改变，仍为 0/0
+
+#         # ---------- ② Non‑linear phase (也用 SAME) ---
+#         c, _ = scope.child(
+#                    mimoconv1d, name=f'NConv_{i}')(
+#                    Signal(jnp.abs(x)**2, t),
+#                    taps=ntaps,
+#                    mode='same',               # ★ SAME
+#                    kernel_init=n_init)
+
+#         x = jnp.exp(1j * c) * x               # 不再切片
+#         # t 依旧不变
+
+#     return Signal(x, t)     
+
+def fdbp(
+    scope: Scope,
+    signal,
+    steps=3,
+    dtaps=261,
+    ntaps=41,
+    sps=2,
+    d_init=delta,
+    n_init=gauss):
+    x, t = signal
+    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     for i in range(steps):
-        # ---------- ① Dispersion SAME‑CNN ----------
-        ch_out = []
-        for ch in range(x.shape[1]):          # 两个偏振独立卷积
-            out = scope.child(
-                    cnn1d_single,
-                    name=f'DCNN_{i}_ch{ch}')(
-                    Signal(x[:, ch], t),
-                    taps=dtaps,
-                    k_init=d_init)
-            ch_out.append(out.val)
-        x = jnp.stack(ch_out, axis=-1)        # (N,2) 重新拼回
-        # t 未改变，仍为 0/0
-
-        # ---------- ② Non‑linear phase (也用 SAME) ---
-        c, _ = scope.child(
-                   mimoconv1d, name=f'NConv_{i}')(
-                   Signal(jnp.abs(x)**2, t),
-                   taps=ntaps,
-                   mode='same',               # ★ SAME
-                   kernel_init=n_init)
-
-        x = jnp.exp(1j * c) * x               # 不再切片
-        # t 依旧不变
-
-    return Signal(x, t)                       # t.start==0, t.stop==0
-
+        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+                                                            taps=ntaps,
+                                                            kernel_init=n_init)
+        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+    return Signal(x, t)
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
