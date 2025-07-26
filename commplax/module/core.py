@@ -26,19 +26,15 @@ from flax import linen as nn
 from flax.core import Scope, init, apply
 from typing import Tuple
 from functools import partial
-
 Array = Any
 from jax import debug
 from jax.nn import sigmoid
-
-
 # related: https://github.com/google/jax/issues/6853
 @struct.dataclass
 class SigTime:
-    start: int = struct.field(pytree_node=False)
-    stop: int = struct.field(pytree_node=False)
-    sps: int = struct.field(pytree_node=False)
-
+  start: int = struct.field(pytree_node=False)
+  stop: int = struct.field(pytree_node=False)
+  sps: int = struct.field(pytree_node=False)
 
 class Signal(NamedTuple):
     val: Array
@@ -54,6 +50,7 @@ class Signal(NamedTuple):
     def __add__(self, other):
         Signal._check_type(other)
         return Signal(self.val + other, self.t)
+        
 
     def __sub__(self, other):
         Signal._check_type(other)
@@ -85,19 +82,12 @@ class Signal(NamedTuple):
     @classmethod
     def _check_type(cls, other):
         assert not isinstance(other, cls), 'not implemented'
-
-
+      
 def zeros(key, shape, dtype=jnp.float32): return jnp.zeros(shape, dtype)
-
-
 def ones(key, shape, dtype=jnp.float32): return jnp.ones(shape, dtype)
-
-
 def delta(key, shape, dtype=jnp.float32):
     k1d = comm.delta(shape[0], dtype=dtype)
     return jnp.tile(np.expand_dims(k1d, axis=list(range(1, len(shape)))), (1,) + shape[1:])
-
-
 def gauss(key, shape, dtype=jnp.float32):
     taps = shape[0]
     k1d = comm.gauss(comm.gauss_minbw(taps), taps=taps, dtype=dtype)
@@ -133,7 +123,7 @@ def conv1d_t(t, taps, rtap, stride, mode):
         rtap = (taps - 1) // 2
     delay = -(-(rtap + 1) // stride) - 1
     if mode == 'full':
-        tslice = (-delay * stride, taps - stride * (rtap + 1))  # TODO: think more about this
+        tslice = (-delay * stride, taps - stride * (rtap + 1)) #TODO: think more about this
     elif mode == 'same':
         tslice = (0, 0)
     elif mode == 'valid':
@@ -151,7 +141,6 @@ def conv1d_slicer(taps, rtap=None, stride=1, mode='valid'):
         zt = SigTime(yt.start * D, yt.stop * D, xt.sps)
         x = x[zt.start - xt.start: x.shape[0] + zt.stop - xt.stop]
         return Signal(x, zt)
-
     return slicer
 
 
@@ -175,7 +164,7 @@ def vmap(f,
     vf = lift.vmap(f,
                    variable_axes=variable_axes, split_rngs=split_rngs,
                    in_axes=in_axes, out_axes=out_axes)
-    vf.__name__ = 'vmapped_' + f.__name__  # [Workaround]: lifted transformation does not keep the original name
+    vf.__name__ = 'vmapped_' + f.__name__ # [Workaround]: lifted transformation does not keep the original name
     return vf
 
 
@@ -198,7 +187,7 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     running_mean = scope.variable('norm', 'running_mean',
                                   lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
     if mode == 'train':
-        mean = jnp.mean(jnp.abs(signal.val) ** 2, axis=0)
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
         running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
     else:
         mean = running_mean.value
@@ -206,42 +195,43 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
 
 
 def conv1d(
-        scope: Scope,
-        signal,
-        taps=31,
-        rtap=None,
-        mode='valid',
-        kernel_init=delta,
-        conv_fn=xop.convolve):
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    mode='valid',
+    kernel_init=delta,
+    conv_fn = xop.convolve):
+
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel',
-                    kernel_init,
-                    (taps,), np.complex64)
+                     kernel_init,
+                     (taps,), np.complex64)
     x = conv_fn(x, h, mode=mode)
     return Signal(x, t)
-
-
+  
+  
 def kernel_initializer(rng, shape):
-    return random.normal(rng, shape)
-
+    return random.normal(rng, shape)  
 
 def mimoconv1d(
-        scope: Scope,
-        signal,
-        taps=31,
-        rtap=None,
-        dims=2,
-        mode='valid',
-        kernel_init=zeros,
-        conv_fn=xop.convolve):
+    scope: Scope,
+    signal,
+    taps=31,
+    rtap=None,
+    dims=2,
+    mode='valid',
+    kernel_init=zeros,
+    conv_fn=xop.convolve):
+
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
-
-
+      
+      
 def mimofoeaf(scope: Scope,
               signal,
               framesize=100,
@@ -252,6 +242,7 @@ def mimofoeaf(scope: Scope,
               mimofn=af.rde,
               mimokwargs={},
               mimoinitargs={}):
+
     sps = 2
     dims = 2
     tx = signal.t
@@ -263,7 +254,7 @@ def mimofoeaf(scope: Scope,
                          mimokwargs=mimokwargs,
                          mimoinitargs=mimoinitargs,
                          name='MIMO4FOE')(slisig)
-    y, ty = auxsig  # assume y is continuous in time
+    y, ty = auxsig # assume y is continuous in time
     yf = xop.frame(y, framesize, framesize)
 
     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
@@ -286,18 +277,19 @@ def mimofoeaf(scope: Scope,
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
 
-
+                
 def mimoaf(
-        scope: Scope,
-        signal,
-        taps=32,
-        rtap=None,
-        dims=2,
-        sps=2,
-        train=False,
-        mimofn=af.ddlms,
-        mimokwargs={},
-        mimoinitargs={}):
+    scope: Scope,
+    signal,
+    taps=32,
+    rtap=None,
+    dims=2,
+    sps=2,
+    train=False,
+    mimofn=af.ddlms,
+    mimokwargs={},
+    mimoinitargs={}):
+
     x, t = signal
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
     x = xop.frame(x, taps, sps)
@@ -314,7 +306,7 @@ def mimoaf(
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
     return Signal(y, t)
-
+      
 
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
@@ -324,7 +316,25 @@ def channel_shuffle(x, groups):
     x = jnp.transpose(x, (0, 2, 1)).reshape(batch_size, -1)
     return x
 
+from jax.nn.initializers import orthogonal
+from jax.nn.initializers import orthogonal, glorot_uniform 
 
+
+# class LinearRNN:
+#     def __init__(self, input_dim, hidden_size, output_dim):
+#         self.hidden_size = hidden_size
+#         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+#         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+#         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+    
+#     def __call__(self, x, hidden_state=None):
+#         if hidden_state is None:
+#             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+        
+#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+#         output = jnp.dot(hidden_state, self.Why)
+        
+#         return output
 
 def squeeze_excite_attention(x):
     avg_pool = jnp.max(x, axis=0, keepdims=True)
@@ -332,7 +342,6 @@ def squeeze_excite_attention(x):
     attention = jnp.tile(attention, (x.shape[0], 1))
     x = x * attention
     return attention
-
 
 def complex_channel_attention(x):
     x_real = jnp.real(x)
@@ -342,82 +351,131 @@ def complex_channel_attention(x):
     x = x_real + 1j * x_imag
     return x
 
+# class LinearRNN:
+#     def __init__(self, input_dim, hidden_size, output_dim):
+#         self.hidden_size = hidden_size
+#         self.Wxh = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size))
+#         self.Whh = orthogonal()(random.PRNGKey(1), (hidden_size, hidden_size))
+#         self.Why = orthogonal()(random.PRNGKey(2), (hidden_size, output_dim))
+    
+#     def __call__(self, x, hidden_state=None):
+#         if hidden_state is None:
+#             hidden_state = jnp.zeros((x.shape[0], self.hidden_size))
+        
+#         hidden_state = jnp.dot(x, self.Wxh) + jnp.dot(hidden_state, self.Whh)
+#         output = jnp.dot(hidden_state, self.Why)
+        
+#         return output
+      
+# class TwoLayerRNN:
+#     def __init__(self, input_dim, hidden_size1, hidden_size2, output_dim):
+#         self.hidden_size1 = hidden_size1
+#         self.hidden_size2 = hidden_size2
+
+#         self.Wxh1 = orthogonal()(random.PRNGKey(0), (input_dim, hidden_size1))
+#         self.Whh1 = orthogonal()(random.PRNGKey(1), (hidden_size1, hidden_size1))
+#         self.Wxh2 = orthogonal()(random.PRNGKey(2), (hidden_size1, hidden_size2))
+#         self.Whh2 = orthogonal()(random.PRNGKey(3), (hidden_size2, hidden_size2))
+
+#         self.Why = orthogonal()(random.PRNGKey(4), (hidden_size2, output_dim))
+    
+#     def __call__(self, x, hidden_state1=None, hidden_state2=None):
+#         if hidden_state1 is None:
+#             hidden_state1 = jnp.zeros((x.shape[0], self.hidden_size1))
+#         if hidden_state2 is None:
+#             hidden_state2 = jnp.zeros((x.shape[0], self.hidden_size2))
+        
+#         hidden_state1 = jnp.dot(x, self.Wxh1) + jnp.dot(hidden_state1, self.Whh1)
+#         hidden_state2 = jnp.dot(hidden_state1, self.Wxh2) + jnp.dot(hidden_state2, self.Whh2)
+#         output = jnp.dot(hidden_state2, self.Why)
+        
+#         return output
 
 def generate_hippo_matrix(size):
     n = size
-    P = jnp.arange(1, n + 1)
+    P = jnp.arange(1, n+1)
     A = -2.0 * jnp.tril(jnp.ones((n, n)), -1) + jnp.diag(P)
     return A
-
-
+  
 from jax.nn.initializers import normal
 import jax
 import jax.numpy as jnp
-from jax.nn.initializers import orthogonal, zeros, glorot_uniform
+from jax.nn.initializers import orthogonal, zeros
 
-# ------------------------------------------------------------
-# Time‑domain 1‑D CNN  （等价于 vmap(conv1d) + GELU）
-# ------------------------------------------------------------
-def TimeCNN(scope, signal, taps=61, hidden=2,
-            k_init=delta,                # <<< 替换成 glorot_uniform if you like
-            act=jax.nn.gelu, name='TimeCNN'):
-    x, t = signal                       # x:(N,C)
-    C_in  = x.shape[-1]
-    k = scope.param('kernel', k_init,      # (taps,Cin,Cout)
-                    (taps, C_in, hidden), np.float32)
-    y = xcomm.mimoconv(x, k, mode='same')  # SAME 长度不变
-    y = act(y)
-    return Signal(y, t)
 
-# ------------------------------------------------------------
-# 轻量 Gated RNN  （单步循环，保持时长）
-# ------------------------------------------------------------
-import commplax.module.core as cxcore
-from commplax.module import core as ccore    
+# def weighted_interaction(x1, x2):
+#     x1_normalized = (x1 - jnp.mean(x1)) / (jnp.std(x1) + 1e-6)
+#     x2_normalized = (x2 - jnp.mean(x2)) / (jnp.std(x2) + 1e-6)
+#     weight = jnp.mean(x1_normalized * x2_normalized)
+#     x1_updated = x1 + weight * x2
+#     x2_updated = x2 + weight * x1
+#     return x1_updated, x2_updated    
+  
+# ====== core_cnn.py ======
+def cnn1d_with_time(scope: Scope,
+                    signal: Signal,
+                    taps: int       = 61,
+                    hidden: int     = 2,
+                    rtap:  int | None = None,
+                    stride: int     = 1,
+                    mode:   str     = 'valid',
+                    k_init          = delta):
+    """
+    与原 conv1d ⼀样：输出长度 = 'valid' 卷积后长度；
+    但卷积核升维到 (taps, Cin, Cout)，可学多输出通道。
+    """
+    x, t = signal                         # x:(N, Cin)
 
-def GatedRNN(scope, signal, hidden=2, hippo=False, name='GatedRNN'):
+    # —— 时间戳：直接借 conv1d_t 算，确保一致 ——
+    t_new = scope.variable('const', 't',
+                           conv1d_t, t, taps, rtap, stride, mode).value
+
+    # —— 参数 ——  (taps, Cin, hidden)
+    Cin = x.shape[-1]
+    k   = scope.param('kernel', k_init,
+                      (taps, Cin, hidden), jnp.complex64)
+
+    # —— 卷积运算 ——  输出 (N_valid, Cout=hidden)
+    y = xcomm.mimoconv(x, k, mode=mode)   # 这里用 FFT‑conv / direct 均可
+    return Signal(y, t_new)
+
+def fdbp(scope: Scope,
+         signal,
+         steps      = 3,
+         dtaps      = 261,
+         ntaps      = 41,
+         hidden     = 2,       # D‑CNN 输出通道数
+         d_init     = delta,
+         n_init     = gauss,
+         **_unused):
+    """
+    • D‑Conv  →  cnn1d_with_time(valid)   (长度仍旧缩 dtaps‑1)  
+    • N‑Conv  →  原 mimoconv1d(valid)  
+    • 其余代码与官方一致
+    """
     x, t = signal
-    H, dtype = hidden, x.dtype
-    init_h = jnp.zeros((x.shape[0], H), dtype=dtype)
+    # —— 把 cnn1d_with_time 打包成可 vmap 的「多通道色散卷积」 ——
+    d_cnn = vmap(wpartial(cnn1d_with_time,
+                          taps=dtaps,
+                          hidden=hidden,
+                          k_init=d_init),
+                 in_axes=(Signal(-1, None),))      # <- 跟原 conv1d 的 vmap 接口保持相同
 
-    def w(n, shape):
-        return scope.param(n, glorot_uniform(), shape, dtype).astype(dtype)
+    for i in range(steps):
+        # -------- Dispersion (CNN) ----------
+        x, td = scope.child(d_cnn, name=f'DCNN_{i}')(Signal(x, t))
 
-    if hippo:
-        A = generate_hippo_matrix(H).astype(dtype)
+        # -------- Non‑linear phase ----------
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+                    Signal(jnp.abs(x)**2, td),
+                    taps=ntaps, kernel_init=n_init)
 
-    def step(h, x_t):
-        z = jax.nn.sigmoid(h @ w('Wz', (H, H)))
-        r = jax.nn.sigmoid(h @ w('Wr', (H, H)))
-        h_tilde = jnp.tanh(x_t @ w('Wx', (x.shape[-1], H)) +
-                           (r * h) @ w('Wh', (H, H)))
-        h_next = (1 - z) * h + z * h_tilde
-        if hippo:
-            h_next = h_next + h_next @ A
-        return h_next, h_next
+        # -------- Apply phase ---------------
+        x = jnp.exp(1j * c) * x[tN.start - td.start :
+                                x.shape[0] + (tN.stop - td.stop)]
+        t = tN                                   # 更新当前 SigTime
 
-    _, h_seq = jax.lax.scan(step, init_h, x)      # 不再 swap
-    y = h_seq
-    return ccore.Signal(y, t) 
-
-
-
-# ------------------------------------------------------------
-# Dense head  -> I/Q (或你想要的维度)
-# ------------------------------------------------------------
-def DenseHead(scope, signal, out_dim=2, name='DenseHead'):
-    x, t = signal                       # x:(N,H)
-    if x.ndim == 3:                     # 有时间维时逐符号映射
-        N,T,H = x.shape
-        x = x.reshape(-1, H)
-    H = x.shape[-1]
-    W = scope.param('W', orthogonal(), (H, out_dim))
-    b = scope.param('b', zeros, (out_dim,))
-    y = x @ W + b
-    if 'T' in locals():                 # restore time dim
-        y = y.reshape(N, T, out_dim)
-    return Signal(y, t)
-
+    return Signal(x, t)
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
@@ -425,7 +483,6 @@ def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     real_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
     imag_init = nn.initializers.glorot_uniform()(key, shape, jnp.float32)
     return real_init.astype(jnp.complex64) + 1j * imag_init.astype(jnp.complex64)
-
 
 def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     """
@@ -457,11 +514,54 @@ def residual_mlp(scope: Scope, signal: Signal, hidden_dim=2):
     # 6) squeeze 得到形状 (N,)
     out_1d = out.squeeze(axis=-1)
     return out_1d, t
+                             
+# def conv1d_ffn(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn=xop.convolve,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     对原始 1D 卷积增加一个 FFN 分支，对卷积输出的幅度信息做修正：
+#       1) 进行卷积运算得到 x_conv
+#       2) 以 |x_conv|² 为输入经过 FFN 得到修正值（offset）
+#       3) 通过一个可训练缩放系数 alpha 将修正值残差式加到 x_conv 上
+#     """
+#     # ------------------ 原始卷积部分 ------------------
+#     # 解包输入信号
+#     x, t = signal
+#     if x.ndim == 1:
+#         x = x_conv[:, None]
+    
+#     # ------------------ FFN 分支部分 ------------------
+#     # 以卷积结果的幅度平方作为 FFN 的输入特征
+#     ffn_input = Signal(jnp.abs(x)**2, t)
+    
+#     # 使用子模块调用 residual_ffn（保证 residual_ffn 的实现符合要求），
+#     # 得到修正 offset 和新的时间变量 t_ffn
+#     offset, t_ffn = scope.child(conv1d_ffn, name="Conv1dFFN")(ffn_input, hidden_dim=hidden_dim)
+    
+#     # 将 offset 转换为与卷积输出相同的数据类型，并扩展为二维，以便后续广播相加
+#     offset_cplx = jnp.asarray(offset, x_conv.dtype)[:, None]
+    
+#     # 可选：对 FFN 输出加上一个可训练缩放系数 alpha
+#     if use_alpha:
+#         alpha = scope.param('ffn_alpha', nn.initializers.ones, ())
+#     else:
+#         alpha = 1.0
+    
+#     # 将 FFN 产生的修正值以残差形式加到卷积输出上
+#     x_out = x_conv + alpha * offset_cplx
+    
+#     # 返回更新后的 Signal，使用 FFN 返回的时间变量 t_ffn（也可以保留原来的 t）
+#     return Signal(x_out, t_ffn)
 
-
-
-def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=xop.convolve,
-               hidden_dim=2, use_alpha=True):
+def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_init=delta, conv_fn=xop.convolve, hidden_dim=2, use_alpha=True):
     """
     对多通道复数输入 x(t)，先做均值（或范数）处理 => 得到每个时间步一个标量，
     然后使用两层 MLP 生成 (N,) 复数 residual。
@@ -490,89 +590,273 @@ def conv1d_ffn(scope: Scope, signal, taps=31, rtap=None, mode='valid', kernel_in
     out = jnp.dot(h, W2) + b2
     # 6) squeeze 得到形状 (N,)
     out_1d = out.squeeze(axis=-1)
-    return out_1d, t
+    return out_1d, t  
+# from jax import debug
+  
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     hidden_dim=2,
+#     use_alpha=True,
+# ):
+#     """
+#     保持原 fdbp(D->N)结构:
+#       1) D
+#       2) N
+#       + 3) residual MLP => out shape=(N,) and add to x
+#     """
+#     x, t = signal
+#     # 1) 色散
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     # 可选: 对res加个可训练缩放
+#     if use_alpha:
+#         alpha = scope.param('res_alpha', nn.initializers.zeros, ())
+#     else:
+#         alpha = 1.0
+#     # debug.print("alpha = {}", alpha)
+#     for i in range(steps):
+#         # --- (A) 色散补偿 (D)
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        
+#         # --- (B) 非线性补偿 (N)
+#         c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
+#             Signal(jnp.abs(x)**2, td),
+#             taps=ntaps,
+#             kernel_init=n_init
+#         )
+#         # 应用相位: x_new = exp(j*c) * x[...]
+#         x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
+#         # --- (C) residual MLP
+#         #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
+#         res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
+#             Signal(jnp.abs(x_new)**2, tN),
+#             hidden_dim=hidden_dim
+#         )
+#         # res_val => (N_new,)
+#         # cast to complex, or interpret as real
+#         # 这里示例 "在幅度上+res"
+#         # x_new += alpha * res_val
+#         # 不分real/imag => 全部 real offset => x_new + alpha * res
+#         # 只要 x_new是complex => convert
+#         res_val_cplx = jnp.asarray(res_val, x_new.dtype)
+#         res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
+#         x_new = x_new + alpha * res_val_cplx_2d 
+        
+#         # update x,t
+#         x, t = x_new, t_res
+#     return Signal(x, t)
 
 
-def fdbp(
+
+# def fdbp(
+#     scope: Scope,
+#     signal: Signal,
+#     steps: int = 3,
+#     dtaps: int = 261,
+#     ntaps: int = 41,
+#     sps: int = 2,
+#     ixpm_window: int = 7,           # 对 fdbp1 中 ixpm 的窗口大小
+#     d_init=delta,
+#     n_init=gauss,
+#     name='fdbp2branches'
+# ):
+#     """
+#     同时执行:
+#       - fdbp: 忽略IXPM的补偿方式
+#       - fdbp1: 带IXPM补偿
+#     并在每一步(step)后做一次融合 (bridge)，再进入下一步。
+
+#     Args:
+#       signal:  输入信号 (Signal(val, t))
+#       steps :  总共迭代多少次(与原 fdbp/fdbp1 类似)
+#       dtaps :  色散滤波器长度
+#       ntaps :  非线性滤波器长度
+#       ixpm_window: 在 fdbp1 中计算IXPM时的 roll 窗口
+#       ... 其余参见 fdbp / fdbp1 说明
+
+#     Returns:
+#       最终补偿后的 Signal。
+#     """
+#     x_in, t_in = signal
+
+#     # 分别为“忽略IXPM的fdbp”和“考虑IXPM的fdbp1”各自准备一套卷积
+#     # (可以共用也可以分开，这里演示显式分开以示区分)
+#     dconv_ignore = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     dconv_ixpm   = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+#     # 用于 IXPM 加权的可训练参数
+#     ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window + 1,))
+
+#     # 融合时的可训练权重 => 每步都使用同一个 alpha (示例)
+#     # 如果想每步不同，可以定义 alpha_list = scope.param(... shape=(steps,) ) 再逐步取索引
+#     bridge_alpha = scope.param('bridge_alpha', nn.initializers.zeros, ())
+
+#     # 初始化两条分支的输入都为同一个 x_in
+#     x_ignore = x_in
+#     t_ignore = t_in
+
+#     x_ixpm   = x_in
+#     t_ixpm   = t_in
+
+#     for i in range(steps):
+#         # --- (1) 忽略IXPM的单步 fdbp ---
+#         x_ignore, t_ignore_new = scope.child(dconv_ignore, name=f"DConv_ignore_{i}")(
+#             Signal(x_ignore, t_ignore)
+#         )
+#         # 做非线性补偿
+#         c_ignore, tN_ignore = scope.child(mimoconv1d, name=f"NConv_ignore_{i}")(
+#             Signal(jnp.abs(x_ignore)**2, t_ignore_new),
+#             taps=ntaps, kernel_init=n_init
+#         )
+#         x_ignore_new = jnp.exp(1j * c_ignore) * x_ignore[
+#             tN_ignore.start - t_ignore_new.start : x_ignore.shape[0] + (tN_ignore.stop - t_ignore_new.stop)
+#         ]
+
+#         # --- (2) 带IXPM的单步 fdbp1 ---
+#         # 同样先做色散补偿
+#         x_ixpm, t_ixpm_new = scope.child(dconv_ixpm, name=f"DConv_ixpm_{i}")(
+#             Signal(x_ixpm, t_ixpm)
+#         )
+#         # 计算IXPM加权和
+#         # 先 roll abs(x_ixpm)^2
+#         ixpm_samples = [jnp.roll(jnp.abs(x_ixpm)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
+#         weights = jax.nn.softmax(ixpm_alpha)
+#         ixpm_power = sum(w * sample for w, sample in zip(weights, ixpm_samples))
+
+#         # 做非线性补偿
+#         c_ixpm, tN_ixpm = scope.child(mimoconv1d, name=f"NConv_ixpm_{i}")(
+#             Signal(ixpm_power, t_ixpm_new),
+#             taps=ntaps, kernel_init=n_init
+#         )
+#         x_ixpm_new = jnp.exp(1j * c_ixpm) * x_ixpm[
+#             tN_ixpm.start - t_ixpm_new.start : x_ixpm.shape[0] + (tN_ixpm.stop - t_ixpm_new.stop)
+#         ]
+
+#         # 更新各自分支的 (x, t)
+#         x_ignore, t_ignore = x_ignore_new, tN_ignore
+#         x_ixpm,   t_ixpm   = x_ixpm_new,   tN_ixpm
+
+#         # --- (3) 两路结果做可训练的加权融合 => 同步更新成同一个 x_fused ---
+#         # 假设要求它们下一步起就“保持一致”，则把 x_ignore / x_ixpm 都赋值为融合结果
+#         x_fused = 0.4 * x_ignore + 0.6 * x_ixpm
+#         t_fused = t_ignore  # = t_ixpm, 假设它们相同
+
+#         # 同步更新 => 下一步大家都从 x_fused, t_fused 开始
+#         x_ignore, t_ignore = x_fused, t_fused
+#         x_ixpm,   t_ixpm   = x_fused, t_fused
+
+#     # 最终的输出就是融合后的 x_fused
+#     return Signal(x_fused, t_fused)
+
+
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss,
+#     mu=0.0001  # 学习率，用于 LMS 更新 gamma，需根据实际情况调参
+# ):
+#     """
+#     自适应 DBP：在每一步补偿中对相位补偿的缩放因子 gamma 进行自适应更新，
+#     以减少误差累积，提升整体补偿性能。
+#     """
+#     x, t = signal
+#     # 初始化自适应相位缩放因子 gamma
+#     gamma = 1.0
+#     # 构造局部时域卷积函数（通过 vmap 包裹 conv1d）
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     for i in range(steps):
+#         # 执行局部色散补偿步骤
+#         x, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+#         # 执行非线性补偿步骤：计算相位校正 c
+#         c, t = scope.child(mimoconv1d, name=f'NConv_{i}')(
+#             Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+#         # 应用自适应相位补偿：使用 gamma 对 c 进行缩放
+#         x_new = jnp.exp(1j * gamma * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        
+#         # 计算误差：例如用当前步骤补偿前后的平均功率差异作为误差信号
+#         # 这里的 error 定义可以根据实际需求进行设计
+#         power_before = jnp.mean(jnp.square(jnp.abs(x)))
+#         power_after = jnp.mean(jnp.square(jnp.abs(x_new)))
+#         error = power_after - power_before
+        
+#         # 更新 gamma（LMS 规则）：gamma_new = gamma - mu * error
+#         # 注意：根据实际误差定义，可能需要调整符号
+#         gamma = gamma - mu * error
+#         # debug.print("gamma = {}", gamma)
+#         # 将更新后的信号作为下一步输入
+#         x = x_new
+    
+#     return Signal(x, t)
+
+
+# def fdbp1(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     ixpm_window=7,  # 新增参数，设置IXPM的窗口大小
+#     d_init=delta,
+#     n_init=gauss):
+    
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+    
+#     # input_dim = x.shape[1]
+#     # hidden_size = 2 
+#     # output_dim = x.shape[1]
+#     # x1 = x[:, 0]
+#     # x2 = x[:, 1]
+#     # x1_updated, x2_updated = weighted_interaction(x1, x2)
+#     # x_updated = jnp.stack([x1_updated, x2_updated], axis=1)
+#     # rnn_layer = TwoLayerRNN(input_dim, hidden_size, hidden_size, output_dim)
+#     # x = rnn_layer(x_updated)
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         ixpm_samples = [
+#             jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window + 1)
+#         ]
+#         ixpm_power = sum(ixpm_samples) / (2 * ixpm_window + 1)
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(ixpm_power, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
+def fdbp1(
     scope: Scope,
     signal,
     steps=3,
     dtaps=261,
     ntaps=41,
     sps=2,
+    ixpm_window=3,  # IXPM 窗口大小
     d_init=delta,
-    n_init=gauss,
-    hidden_dim=2,
-    use_alpha=True,
-):
-    """
-    保持原 fdbp(D->N)结构:
-      1) D
-      2) N
-      + 3) residual MLP => out shape=(N,) and add to x
-    """
-    x, t = signal
-    # 1) 色散
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-    # 可选: 对res加个可训练缩放
-    if use_alpha:
-        alpha = scope.param('res_alpha', nn.initializers.zeros, ())
-    else:
-        alpha = 1.0
-    # debug.print("alpha = {}", alpha)
-    for i in range(steps):
-        # --- (A) 色散补偿 (D)
-        x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        
-        # --- (B) 非线性补偿 (N)
-        c, tN = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(jnp.abs(x)**2, td),
-            taps=ntaps,
-            kernel_init=n_init
-        )
-        # 应用相位: x_new = exp(j*c) * x[...]
-        x_new = jnp.exp(1j * c) * x[tN.start - td.start : x.shape[0] + (tN.stop - td.stop)]
-        # --- (C) residual MLP
-        #  对 |x_new|^2 做 MLP => residual => shape=(N_new,)
-        res_val, t_res = scope.child(residual_mlp, name=f'ResCNN_{i}')(
-            Signal(jnp.abs(x_new)**2, tN),
-            hidden_dim=hidden_dim
-        )
-        # res_val => (N_new,)
-        # cast to complex, or interpret as real
-        # 这里示例 "在幅度上+res"
-        # x_new += alpha * res_val
-        # 不分real/imag => 全部 real offset => x_new + alpha * res
-        # 只要 x_new是complex => convert
-        res_val_cplx = jnp.asarray(res_val, x_new.dtype)
-        res_val_cplx_2d = res_val_cplx[:, None]    # shape (N,1)
-        x_new = x_new + alpha * res_val_cplx_2d 
-        
-        # update x,t
-        x, t = x_new, t_res
-    return Signal(x, t)
-
-
-def fdbp1(
-        scope: Scope,
-        signal,
-        steps=3,
-        dtaps=261,
-        ntaps=41,
-        sps=2,
-        ixpm_window=3,  # IXPM 窗口大小
-        d_init=delta,
-        n_init=gauss):
+    n_init=gauss):
+    
     x, t = signal
     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
     # dconv = wpartial(dconv_pair, taps=dtaps, kinit=d_init)
     # 定义一个可训练参数 ixpm_alpha，形状为 (2*ixpm_window+1,)
-    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2 * ixpm_window + 1,))
-
+    ixpm_alpha = scope.param('ixpm_alpha', nn.initializers.zeros, (2*ixpm_window+1,))
+    
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv1_%d' % i)(Signal(x, t))
         # 对信号幅度平方进行 roll
-        ixpm_samples = [jnp.roll(jnp.abs(x) ** 2, shift) for shift in range(-ixpm_window, ixpm_window + 1)]
+        ixpm_samples = [jnp.roll(jnp.abs(x)**2, shift) for shift in range(-ixpm_window, ixpm_window+1)]
         # 用 softmax 得到归一化权重
         weights = jax.nn.softmax(ixpm_alpha)
         # 计算加权和
@@ -583,25 +867,53 @@ def fdbp1(
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
 
-
+      
 def identity(scope, inputs):
     return inputs
 
+
+# def fanout(scope, inputs, num):
+#     return (inputs,) * num
+      
+# # compositors
+
+# def serial(*fs):
+#     def _serial(scope, inputs, **kwargs):
+#         for f in fs:
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             inputs = scope.child(f, name=name)(inputs, **kwargs)
+#         return inputs
+#     return _serial
+
+
+# def parallel(*fs):
+#     def _parallel(scope, inputs, **kwargs):
+#         outputs = []
+#         for f, inp in zip(fs, inputs):
+#             if isinstance(f, tuple) or isinstance(f, list):
+#                 name, f = f
+#             else:
+#                 name = None
+#             out = scope.child(f, name=name)(inp, **kwargs)
+#             outputs.append(out)
+#         return outputs
+#     return _parallel
+
 def fanout(scope, inputs, num):
     return (inputs,) * num
-
 
 def fanin_sum(scope, inputs):
     val = sum(signal.val for signal in inputs)
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
-
-
+  
 def fanin_mean(scope, inputs):
     val = sum(signal.val for signal in inputs) / len(inputs)
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
-
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
@@ -612,6 +924,7 @@ def fanin_concat(scope, inputs, axis=-1):
     return Signal(concatenated_val, t)
 
 
+ 
 def fanin_weighted_sum(scope, inputs):
     num_inputs = len(inputs)
     print(num_inputs)
@@ -620,8 +933,7 @@ def fanin_weighted_sum(scope, inputs):
     val = sum(w * signal.val for w, signal in zip(weights, inputs))
     t = inputs[0].t
     return Signal(val, t)
-
-
+  
 def fanin_attention(scope, inputs):
     num_inputs = len(inputs)
     # 初始化可训练的权重参数，形状为 (num_inputs,)
@@ -643,9 +955,7 @@ def serial(*fs):
                 name = None
             inputs = scope.child(f, name=name)(inputs, **kwargs)
         return inputs
-
     return _serial
-
 
 def parallel(*fs):
     def _parallel(scope: Scope, inputs, **kwargs):
@@ -656,5 +966,4 @@ def parallel(*fs):
             output = scope.child(f, name=name)(inp, **kwargs)
             outputs.append(output)
         return outputs
-
     return _parallel
