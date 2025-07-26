@@ -414,29 +414,22 @@ from jax.nn.initializers import orthogonal, zeros
 # ====== core_cnn.py ======
 def cnn1d_with_time(scope: Scope,
                     signal: Signal,
-                    taps: int       = 61,
-                    hidden: int     = 2,
-                    rtap:  int | None = None,
-                    stride: int     = 1,
-                    mode:   str     = 'valid',
-                    k_init          = delta):
+                    taps:   int,
+                    rtap:   int | None = None,
+                    stride: int = 1,
+                    mode:   str = 'valid',
+                    k_init        = delta):
     """
-    与原 conv1d ⼀样：输出长度 = 'valid' 卷积后长度；
-    但卷积核升维到 (taps, Cin, Cout)，可学多输出通道。
+    • 核形状 (taps , C , C)  —— 输入/输出通道数相同
+    • 时间戳通过 conv1d_t() 计算，保留框架的长度对齐逻辑
     """
-    x, t = signal                         # x:(N, Cin)
-
-    # —— 时间戳：直接借 conv1d_t 算，确保一致 ——
-    t_new = scope.variable('const', 't',
-                           conv1d_t, t, taps, rtap, stride, mode).value
-
-    # —— 参数 ——  (taps, Cin, hidden)
-    Cin = x.shape[-1]
-    k   = scope.param('kernel', k_init,
-                      (taps, Cin, hidden), jnp.complex64)
-
-    # —— 卷积运算 ——  输出 (N_valid, Cout=hidden)
-    y = xcomm.mimoconv(x, k, mode=mode)   # 这里用 FFT‑conv / direct 均可
+    x, t      = signal
+    dims      = x.shape[-1]               # Cin = Cout = dims
+    t_new     = scope.variable('const', 't',
+                               conv1d_t, t, taps, rtap, stride, mode).value
+    k         = scope.param('kernel', k_init,
+                            (taps, dims, dims), jnp.complex64)
+    y         = xcomm.mimoconv(x, k, mode=mode)   # 和官方 D‑Conv 相同接口
     return Signal(y, t_new)
 
 def fdbp(scope: Scope,
@@ -444,36 +437,28 @@ def fdbp(scope: Scope,
          steps      = 3,
          dtaps      = 261,
          ntaps      = 41,
-         hidden     = 2,       # D‑CNN 输出通道数
          d_init     = delta,
          n_init     = gauss,
          **_unused):
-    """
-    • D‑Conv  →  cnn1d_with_time(valid)   (长度仍旧缩 dtaps‑1)  
-    • N‑Conv  →  原 mimoconv1d(valid)  
-    • 其余代码与官方一致
-    """
-    x, t = signal
-    # —— 把 cnn1d_with_time 打包成可 vmap 的「多通道色散卷积」 ——
+    x, t  = signal
+    # vmap 方式与原来保持一致（每次对两个偏振分量并行卷积）
     d_cnn = vmap(wpartial(cnn1d_with_time,
-                          taps=dtaps,
-                          hidden=hidden,
-                          k_init=d_init),
-                 in_axes=(Signal(-1, None),))      # <- 跟原 conv1d 的 vmap 接口保持相同
+                          taps   = dtaps,
+                          k_init = d_init),
+                 in_axes=(Signal(-1, None),))       # (-1,None) 让 vmap 作用在最后一维 channel
 
     for i in range(steps):
-        # -------- Dispersion (CNN) ----------
+        # ---------- Dispersion CNN ----------
         x, td = scope.child(d_cnn, name=f'DCNN_{i}')(Signal(x, t))
 
-        # -------- Non‑linear phase ----------
+        # ---------- Non‑linear phase ----------
         c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
                     Signal(jnp.abs(x)**2, td),
                     taps=ntaps, kernel_init=n_init)
 
-        # -------- Apply phase ---------------
         x = jnp.exp(1j * c) * x[tN.start - td.start :
                                 x.shape[0] + (tN.stop - td.stop)]
-        t = tN                                   # 更新当前 SigTime
+        t = tN               # 更新时间戳
 
     return Signal(x, t)
 
