@@ -769,16 +769,16 @@ def qamqot_ext(y, x,
                eval_range=(0, 0),
                scale=1.0,
                use_elliptical_llr=True,
-               llr_sign_autoflip=True,       # ⭐ 新增：LLR符号自校准开关（默认开）
+               llr_sign_autoflip=True,       # 逐位符号自校准开关
                pilot_frac=0.0,
                count_dim=True,
                count_total=True):
     """
     扩展版指标：BER/Q_dB/EVM/SNR + GMI/NGMI/AIR + 4D 香农上限 + Capacity gap
-    - 兼容你们原始口径（scale、eval_range、位宽等），零侵入旧代码
+    - 兼容你们原始口径（scale、eval_range、位宽等）
     """
     assert y.shape[0] == x.shape[0]
-    # 切片 + 缩放（沿用旧口径）
+    # 切片 + 缩放
     y = y[eval_range[0]: y.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
     x = x[eval_range[0]: x.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
 
@@ -810,12 +810,12 @@ def qamqot_ext(y, x,
             Qlin = np.sqrt(2.0) * np.maximum(special.erfcinv(2.0*BER), 0.0)
             Q_dB = 20.0*np.log10(np.maximum(Qlin, 1e-12))
 
-        # EVM/SNR（稳口径）
+        # EVM/SNR
         evm = _evm_rms(yy, xx)
         snr_lin = _snr_from_evm(evm)
         snr_dB  = 10.0*np.log10(snr_lin + 1e-18)
 
-        # LLR（可选椭圆度量）
+        # LLR（椭圆/欧氏）
         n = yy - xx
         if use_elliptical_llr:
             Sigma, sigma2 = _whiten_cov(np.vstack([n.real, n.imag]))
@@ -824,14 +824,15 @@ def qamqot_ext(y, x,
 
         llrs = _llr_awgn(yy, const_pts, labels, sigma2, Sigma)
 
-        # ⭐ 关键修复：LLR 符号自校准（防止映射/约定不一致导致 GMI/NGMI 为负）
+        # ⭐ 逐位符号自校准：哪个比特位的同向率 < 0.5 就单独翻转
         if llr_sign_autoflip:
-            agree = np.mean((llrs > 0).astype(np.uint8) == bx.astype(np.uint8))
-            if agree < 0.5:
-                llrs = -llrs
+            agree_cols = np.mean((llrs > 0).astype(np.uint8) == bx.astype(np.uint8), axis=0)  # [m]
+            flip_mask = agree_cols < 0.5
+            if np.any(flip_mask):
+                llrs[:, flip_mask] = -llrs[:, flip_mask]
 
         # GMI/NGMI/AIR（按位）
-        gmi = _gmi_from_llr_bits(llrs, bx.astype(np.uint8))  # bits / 复维符号
+        gmi = _gmi_from_llr_bits(llrs, bx.astype(np.uint8))  # bits/复维符号
         ngmi = gmi / m_per_dim
         air = gmi * (1.0 - pilot_frac)
 
@@ -847,7 +848,6 @@ def qamqot_ext(y, x,
             rows.append(per_dim_metrics(y[:, d], x[:, d])); names.append(f"dim{d}")
 
     if count_total:
-        # 合并所有维度，给出 4D 聚合指标
         yy = y.reshape(-1); xx = x.reshape(-1)
         row = per_dim_metrics(yy, xx)
 
@@ -872,7 +872,9 @@ def qamqot_ext(y, x,
 
     return pd.DataFrame(rows, index=names)
 
+
 # ======================  END:  metrics patch  ======================
+
 
 
 
