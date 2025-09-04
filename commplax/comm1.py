@@ -684,51 +684,49 @@ def firfreqz(h, sr=1, N=8192, t0=None, bw=None):
 
     return w, H
 
-# ======== [新增辅助函数：EVM/SNR/白化/LLR/GMI] ========
+
+
+# ====================== BEGIN: metrics patch ======================
+
 def _evm_rms(y, x):
+    """RMS EVM（相对理想符号x）"""
     num = np.mean(np.abs(y - x)**2)
     den = np.mean(np.abs(x)**2) + 1e-18
     return float(np.sqrt(num / den))
 
 def _snr_from_evm(e):
+    """由 EVM 反推 SNR（线性）"""
     return float(1.0 / (e*e + 1e-18))
 
 def _whiten_cov(n_reim):
-    # n_reim: 2xN, rows = [Re(n); Im(n)]
-    Sigma = np.cov(n_reim)           # 2x2 协方差
-    sigma2 = 0.5 * np.trace(Sigma)   # 平均每个实维的方差
+    """估计复残差的 2x2 协方差，并给出每实维方差均值"""
+    Sigma = np.cov(n_reim)            # 2x2
+    sigma2 = 0.5 * np.trace(Sigma)    # 每实维平均方差
     return Sigma, float(sigma2)
 
 def _logsumexp(a, axis=1):
     amax = np.max(a, axis=axis, keepdims=True)
-    out = amax + np.log(np.sum(np.exp(a - amax), axis=axis, keepdims=True))
-    return np.squeeze(out, axis=axis)
+    return np.squeeze(amax + np.log(np.sum(np.exp(a - amax), axis=axis, keepdims=True)), axis=axis)
 
 def _llr_awgn(y, const_pts, bitlabels, sigma2, Sigma=None):
     """
-    y: [N] complex
-    const_pts: [L] complex
-    bitlabels: [L, m] (0/1)
-    sigma2: 标量噪声功率（欧氏度量时用）
-    Sigma: 2x2 协方差（提供则用椭圆/马氏距离；否则欧氏）
-    return: llrs [N, m]
+    返回按位LLR（形状[N, m]）。
+    约定：LLR = log p(y|b=1) - log p(y|b=0)
     """
     N = y.shape[0]
-    L = const_pts.shape[0]
     m = bitlabels.shape[1]
 
     if Sigma is not None:
         # 椭圆度量（马氏距离）
         Sinv = np.linalg.inv(Sigma)
-        y_xy = np.stack([y.real, y.imag], axis=1)[:, None, :]     # [N,1,2]
+        y_xy = np.stack([y.real, y.imag], axis=1)[:, None, :]       # [N,1,2]
         c_xy = np.stack([const_pts.real, const_pts.imag], axis=1)[None, :, :]  # [1,L,2]
         diff = y_xy - c_xy
-        d2 = np.einsum('...i,ij,...j->...', diff, Sinv, diff)     # [N,L]
-        ll = -0.5 * d2                                           # 对数似然（常数项忽略）
+        d2 = np.einsum('...i,ij,...j->...', diff, Sinv, diff)       # [N,L]
+        ll = -0.5 * d2
     else:
-        # 欧氏度量（各向同性 AWGN）
-        y2 = y.reshape(-1, 1)
-        d2 = np.abs(y2 - const_pts.reshape(1, -1))**2             # [N,L]
+        # 欧氏度量（各向同性AWGN）
+        d2 = np.abs(y.reshape(-1,1) - const_pts.reshape(1,-1))**2   # [N,L]
         ll = -d2 / (sigma2 + 1e-18)
 
     llrs = np.zeros((N, m), dtype=np.float64)
@@ -737,63 +735,50 @@ def _llr_awgn(y, const_pts, bitlabels, sigma2, Sigma=None):
         mask0 = ~mask1
         lse1 = _logsumexp(ll[:, mask1], axis=1)
         lse0 = _logsumexp(ll[:, mask0], axis=1)
-        # 注意：这里用的是 L = log p(y|b=1) - log p(y|b=0) 的常见约定
         llrs[:, i] = lse1 - lse0
     return llrs
 
 def _gmi_from_llr_bits(llrs, bits):
     """
-    llrs: [N, m]，bits: [N, m] in {0,1}
-    GMI = m - E[ log2(1 + exp(-(-1)^b * L)) ]
-    用稳定的 softplus 写法避免溢出
+    GMI = m - E[ log2(1 + exp(-(-1)^b * L)) ]（稳定softplus写法）
     """
     m = llrs.shape[1]
-    signs = 1 - 2*bits                     # bit=0 -> +1, bit=1 -> -1
+    signs = 1 - 2*bits                 # bit=0 -> +1, bit=1 -> -1
     x = -signs * llrs
-    t = np.maximum(0, x) + np.log1p(np.exp(-np.abs(x)))  # softplus(x)
+    t = np.maximum(0, x) + np.log1p(np.exp(-np.abs(x)))
     gmi = m - np.mean(t) / np.log(2.0)
     return float(gmi)
 
 def _build_const_and_labels(L):
     """
-    用你现有的 const/qamdemod/int2bit 构造与 demod 一致的位标签。
-    由于 int2bit 的第二个参数是“位宽”，你们旧代码传的是 sqrt(L)，
-    这里也沿用这个位宽，再通过 'active mask' 仅保留实际变化的位列。
+    用现有 demod+int2bit 在星座点上反推标签，确保与判决口径一致。
+    二参位宽沿用历史口径：sqrt(L)，再用 active mask 取真正的 m=log2(L) 位。
     """
     const_pts = const(L)
-    W = int(np.sqrt(L))  # 与原 qamqot 的 M=√L 一致
-    # 用 demod 在星座点上打回整数，再由 int2bit 生成位标签
+    W = int(np.sqrt(L))                      # 历史位宽
     dec_ints = qamdemod(const_pts, L)
-    labels_full = int2bit(dec_ints, W)     # [L, W]
+    labels_full = int2bit(dec_ints, W)       # [L, W]
     col_sum = labels_full.sum(axis=0)
     active = (col_sum > 0) & (col_sum < len(labels_full))
-    labels = labels_full[:, active]        # [L, m]，m 应该等于 log2(L)
+    labels = labels_full[:, active]          # [L, m]
     return const_pts.astype(np.complex128), labels.astype(np.uint8), active
-# ========================================================
 
-
-# =============== [新增主函数：扩展指标] =================
 def qamqot_ext(y, x,
                L=None,
                d4_dims=2,
                eval_range=(0, 0),
                scale=1.0,
                use_elliptical_llr=True,
+               llr_sign_autoflip=True,       # ⭐ 新增：LLR符号自校准开关（默认开）
                pilot_frac=0.0,
                count_dim=True,
                count_total=True):
     """
-    兼容版增强：保留旧口径，同时新增：
-      EVM, SNR(再估), GMI/NGMI/AIR（按位软度量）, 4D 香农上限 C4D, CapacityGap
-
-    y, x: [N] 或 [N, D] 复数数组（接收/参考）
-    L: 每复维星座大小（如 16/64/256）；None 则由 x 推断
-    d4_dims: 每个 4D 符号的复维数（DP 系统取 2）
-    use_elliptical_llr: True=按协方差白化做椭圆度量；False=各向同性 AWGN 欧氏
-    pilot_frac: 导频占比（算 AIR 用）
+    扩展版指标：BER/Q_dB/EVM/SNR + GMI/NGMI/AIR + 4D 香农上限 + Capacity gap
+    - 兼容你们原始口径（scale、eval_range、位宽等），零侵入旧代码
     """
     assert y.shape[0] == x.shape[0]
-    # 切片+缩放，沿用你们旧口径
+    # 切片 + 缩放（沿用旧口径）
     y = y[eval_range[0]: y.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
     x = x[eval_range[0]: x.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
 
@@ -801,23 +786,21 @@ def qamqot_ext(y, x,
     x = shape_signal(x)
     N, D = y.shape
 
-    # 规范性检查 & 推断 L
-    p = np.rint(x.real) + 1j * np.rint(x.imag)
+    # canonical 检查
+    p = np.rint(x.real) + 1j*np.rint(x.imag)
     if np.max(np.abs(p - x)) > 1e-2:
         raise ValueError('the scaled x is seemly not canonical')
 
     if L is None:
         L = len(np.unique(p))
 
-    # 准备星座点与位标签（与 demod 完全一致）
     const_pts, labels, active_mask = _build_const_and_labels(L)
-    m_per_dim = int(labels.shape[1])
+    m_per_dim = int(labels.shape[1])      # ≈ log2(L)
     m_per_4D  = m_per_dim * d4_dims
-    W_bits    = int(np.sqrt(L))  # 与旧 int2bit 位宽保持一致
+    W_bits    = int(np.sqrt(L))           # 历史位宽（用于 int2bit）
 
-    # 单维/合计逐项计算
-    def per_dim_metrics(yy, xx, name):
-        # 旧 BER/Q/SNR（保持风格但我们另外给更稳的 EVM/SNR）
+    def per_dim_metrics(yy, xx):
+        # BER/Q_dB（与旧判决一致）
         by_full = int2bit(qamdemod(yy, L), W_bits)
         bx_full = int2bit(qamdemod(xx, L), W_bits)
         by = by_full[:, active_mask]
@@ -825,7 +808,7 @@ def qamqot_ext(y, x,
         BER = float(np.mean(by != bx))
         with np.errstate(divide='ignore', invalid='ignore'):
             Qlin = np.sqrt(2.0) * np.maximum(special.erfcinv(2.0*BER), 0.0)
-            QdB  = 20.0*np.log10(np.maximum(Qlin, 1e-12))
+            Q_dB = 20.0*np.log10(np.maximum(Qlin, 1e-12))
 
         # EVM/SNR（稳口径）
         evm = _evm_rms(yy, xx)
@@ -840,32 +823,38 @@ def qamqot_ext(y, x,
             Sigma, sigma2 = None, np.mean(n.real**2 + n.imag**2)
 
         llrs = _llr_awgn(yy, const_pts, labels, sigma2, Sigma)
+
+        # ⭐ 关键修复：LLR 符号自校准（防止映射/约定不一致导致 GMI/NGMI 为负）
+        if llr_sign_autoflip:
+            agree = np.mean((llrs > 0).astype(np.uint8) == bx.astype(np.uint8))
+            if agree < 0.5:
+                llrs = -llrs
+
+        # GMI/NGMI/AIR（按位）
         gmi = _gmi_from_llr_bits(llrs, bx.astype(np.uint8))  # bits / 复维符号
         ngmi = gmi / m_per_dim
         air = gmi * (1.0 - pilot_frac)
 
         return dict(
-            BER=BER, Q_dB=QdB,
+            BER=BER, Q_dB=Q_dB,
             EVM=evm, SNR_lin=snr_lin, SNR_dB=snr_dB,
             GMI_b_per_dim=gmi, NGMI=ngmi, AIR_b_per_dim=air
-        ), name
+        )
 
     rows, names = [], []
     if count_dim:
         for d in range(D):
-            row, nm = per_dim_metrics(y[:, d], x[:, d], f"dim{d}")
-            rows.append(row); names.append(nm)
+            rows.append(per_dim_metrics(y[:, d], x[:, d])); names.append(f"dim{d}")
 
     if count_total:
-        # 把所有维连接做 total，再给 4D 汇总指标
-        yy = y.reshape(-1)
-        xx = x.reshape(-1)
-        row, nm = per_dim_metrics(yy, xx, "total")
+        # 合并所有维度，给出 4D 聚合指标
+        yy = y.reshape(-1); xx = x.reshape(-1)
+        row = per_dim_metrics(yy, xx)
 
-        # 4D 香农上限（用 total 的 EVM/SNR）
+        # 4D 香农上限（用 total EVM/SNR）
         evm_total = _evm_rms(yy, xx)
         snr_total = _snr_from_evm(evm_total)
-        C4D = 2.0 * np.log2(1.0 + snr_total)            # b/4D-sym
+        C4D = 2.0 * np.log2(1.0 + snr_total)      # b/4D-sym
 
         GMI_4D = row["GMI_b_per_dim"] * d4_dims
         NGMI_4D = GMI_4D / m_per_4D
@@ -879,8 +868,11 @@ def qamqot_ext(y, x,
             AIR_b_per_4D=AIR_4D,
             CapacityGap_b_per_4D=gap
         ))
-        rows.append(row); names.append(nm)
+        rows.append(row); names.append("total")
 
     return pd.DataFrame(rows, index=names)
-# ========================================================
+
+# ======================  END:  metrics patch  ======================
+
+
 
