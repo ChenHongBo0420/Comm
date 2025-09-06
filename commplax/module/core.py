@@ -488,31 +488,49 @@ def fanin_sum(scope, inputs):
 #     t = inputs[0].t  # 假设所有的 t 都相同
 #     return Signal(val, t)
 
-def fanin_mean(scope, inputs, sigma=0.6, eps=1e-8):
-    # inputs: [Signal(yA,t), Signal(yB,t)]
-    assert len(inputs) == 2
-    yA, t = inputs[0].val, inputs[0].t
-    yB    = inputs[1].val
-    # 预先定义 16QAM 星座（已归一到 √10）
-    CONST = jnp.array([
-        -3-3j,-3-1j,-3+3j,-3+1j,
-        -1-3j,-1-1j,-1+3j,-1+1j,
-         3-3j, 3-1j, 3+3j, 3+1j,
-         1-3j, 1-1j, 1+3j, 1+1j
-    ], dtype=jnp.complex64) / jnp.sqrt(10.)
+CONST_16QAM = jnp.array([
+    -3-3j, -3-1j, -3+3j, -3+1j,
+    -1-3j, -1-1j, -1+3j, -1+1j,
+     3-3j,  3-1j,  3+3j,  3+1j,
+     1-3j,  1-1j,  1+3j,  1+1j
+], dtype=jnp.complex64) / jnp.sqrt(10.)
 
-    # 最近星座距离（逐符号）
-    def dmin(y):
-        # [T,1]-[1,16] -> [T,16]
-        d2 = jnp.abs(y[...,None] - CONST[None,...])**2
-        return jnp.sqrt(jnp.min(d2, axis=-1))
+def _min_dist2_to_const(y_tc: jnp.ndarray, const_pts: jnp.ndarray) -> jnp.ndarray:
+    """
+    y_tc: (T, C) 复数；const_pts: (L,)
+    return: (T, C) 每点到最近星座点的欧氏距离平方
+    """
+    y_exp   = y_tc[..., None]                 # -> (T, C, 1)
+    const_e = const_pts.reshape((1, 1, -1))   # -> (1, 1, L)
+    d2 = jnp.abs(y_exp - const_e) ** 2        # (T, C, L)
+    return jnp.min(d2, axis=-1)               # (T, C)
 
-    dA = dmin(yA); dB = dmin(yB)
-    wA = jnp.exp(-(dA**2)/(sigma**2))
-    wB = jnp.exp(-(dB**2)/(sigma**2))
-    y  = (wA[...,None]*yA + wB[...,None]*yB) / (wA[...,None]+wB[...,None]+eps)
-    return Signal(y, t)
+def fanin_mean(scope, inputs, tau: float = 1.0, const_pts: jnp.ndarray = CONST_16QAM):
+    """
+    置信度加权的稳健融合：对每个输入分支 i（共 K 支），
+      w_i(t,c) = exp( - d_i(t,c)^2 / tau^2 )，d_i 是到最近星座点的距离
+      y_fused   = sum_i w_i * y_i / sum_i w_i
+    形状对齐：
+      vals: (K, T, C)
+      d2,w: (K, T, C)
+    """
+    # 把每支的 Signal.val 堆到第0轴：K x T x C
+    vals = jnp.stack([sig.val for sig in inputs], axis=0)     # (K, T, C)
 
+    # 逐支计算到星座的最小距离平方（vmap 到 K 轴）
+    d2   = jax.vmap(lambda v: _min_dist2_to_const(v, const_pts), in_axes=0)(vals)  # (K, T, C)
+
+    # 置信度权重（不要加 [..., None]！保持 (K, T, C)）
+    w = jnp.exp(- d2 / (tau * tau))                           # (K, T, C)
+
+    # 加权融合（完全逐元素，形状匹配）
+    num = jnp.sum(w * vals, axis=0)                           # (T, C)
+    den = jnp.sum(w, axis=0) + 1e-12                          # (T, C)
+    fused = num / den                                         # (T, C)
+
+    # 时间戳沿用第一支（默认各支一致）
+    t = inputs[0].t
+    return Signal(fused, t)
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
