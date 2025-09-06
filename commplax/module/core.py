@@ -483,58 +483,11 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
-# def fanin_mean(scope, inputs):
-#     val = sum(signal.val for signal in inputs) / len(inputs)
-#     t = inputs[0].t  # 假设所有的 t 都相同
-#     return Signal(val, t)
+def fanin_mean(scope, inputs):
+    val = sum(signal.val for signal in inputs) / len(inputs)
+    t = inputs[0].t  # 假设所有的 t 都相同
+    return Signal(val, t)
 
-CONST_16QAM = jnp.array([
-    -3-3j, -3-1j, -3+3j, -3+1j,
-    -1-3j, -1-1j, -1+3j, -1+1j,
-     3-3j,  3-1j,  3+3j,  3+1j,
-     1-3j,  1-1j,  1+3j,  1+1j
-], dtype=jnp.complex64) / jnp.sqrt(10.)
-
-def _nearest_dist(y):
-    # y: [T, C] 复数；返回到最近星座点的欧氏距离 d(t,c)
-    y2 = y[..., None]  # [T,C,1]
-    d2 = jnp.abs(y2 - CONST_16QAM[None, None, :])**2  # [T,C,16]
-    return jnp.sqrt(jnp.min(d2, axis=-1))  # [T,C]
-
-def fanin_mean(scope, inputs,
-                   sigma2=0.12,   # 距离→可靠度 的温度；可在 [0.08, 0.20] 微调
-                   shrink=0.25,   # 收缩到 1/2 的强度；0=不收缩，1=全 1/2
-                   ema=0.85):     # 时域平滑，稳一点
-    """
-    inputs: [Signal_A, Signal_B]，每个都是你们的 Signal(val, t)
-    产出: 仍是 Signal，等价替换 FanInMean
-    """
-    assert len(inputs) == 2, "只支持两分支"
-    sA, sB = inputs
-    yA, yB = sA.val, sB.val
-    t = sA.t
-
-    # 计算两支“瞬时可靠度” r = exp(-d^2/sigma2)
-    dA = _nearest_dist(yA)
-    dB = _nearest_dist(yB)
-    rA = jnp.exp(-(dA**2) / (sigma2 + 1e-8))
-    rB = jnp.exp(-(dB**2) / (sigma2 + 1e-8))
-
-    # 归一得到瞬时权重 α̂
-    a_hat = rA / (rA + rB + 1e-8)    # [T,C]
-
-    # 收缩：α = γ*0.5 + (1-γ)*α̂
-    gamma = shrink
-    a = gamma * 0.5 + (1.0 - gamma) * a_hat
-
-    # EMA 平滑，避免符号抖动；状态挂到 scope（和自适应滤波的 state 一样）
-    state = scope.variable('aux_inputs', 'fuse_ema',
-                           lambda *_: jnp.full_like(a, 0.5), ())
-    a_ema = ema * state.value + (1. - ema) * a
-    state.value = a_ema
-
-    y = a_ema * yA + (1. - a_ema) * yB
-    return Signal(y, t)
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
