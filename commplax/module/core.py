@@ -495,42 +495,46 @@ CONST_16QAM = jnp.array([
      1-3j,  1-1j,  1+3j,  1+1j
 ], dtype=jnp.complex64) / jnp.sqrt(10.)
 
-def _min_dist2_to_const(y_tc: jnp.ndarray, const_pts: jnp.ndarray) -> jnp.ndarray:
+def _nearest_dist(y):
+    # y: [T, C] 复数；返回到最近星座点的欧氏距离 d(t,c)
+    y2 = y[..., None]  # [T,C,1]
+    d2 = jnp.abs(y2 - CONST_16QAM[None, None, :])**2  # [T,C,16]
+    return jnp.sqrt(jnp.min(d2, axis=-1))  # [T,C]
+
+def fanin_mean(scope, inputs,
+                   sigma2=0.12,   # 距离→可靠度 的温度；可在 [0.08, 0.20] 微调
+                   shrink=0.25,   # 收缩到 1/2 的强度；0=不收缩，1=全 1/2
+                   ema=0.85):     # 时域平滑，稳一点
     """
-    y_tc: (T, C) 复数；const_pts: (L,)
-    return: (T, C) 每点到最近星座点的欧氏距离平方
+    inputs: [Signal_A, Signal_B]，每个都是你们的 Signal(val, t)
+    产出: 仍是 Signal，等价替换 FanInMean
     """
-    y_exp   = y_tc[..., None]                 # -> (T, C, 1)
-    const_e = const_pts.reshape((1, 1, -1))   # -> (1, 1, L)
-    d2 = jnp.abs(y_exp - const_e) ** 2        # (T, C, L)
-    return jnp.min(d2, axis=-1)               # (T, C)
+    assert len(inputs) == 2, "只支持两分支"
+    sA, sB = inputs
+    yA, yB = sA.val, sB.val
+    t = sA.t
 
-def fanin_mean(scope, inputs, tau: float = 1.0, const_pts: jnp.ndarray = CONST_16QAM):
-    """
-    置信度加权的稳健融合：对每个输入分支 i（共 K 支），
-      w_i(t,c) = exp( - d_i(t,c)^2 / tau^2 )，d_i 是到最近星座点的距离
-      y_fused   = sum_i w_i * y_i / sum_i w_i
-    形状对齐：
-      vals: (K, T, C)
-      d2,w: (K, T, C)
-    """
-    # 把每支的 Signal.val 堆到第0轴：K x T x C
-    vals = jnp.stack([sig.val for sig in inputs], axis=0)     # (K, T, C)
+    # 计算两支“瞬时可靠度” r = exp(-d^2/sigma2)
+    dA = _nearest_dist(yA)
+    dB = _nearest_dist(yB)
+    rA = jnp.exp(-(dA**2) / (sigma2 + 1e-8))
+    rB = jnp.exp(-(dB**2) / (sigma2 + 1e-8))
 
-    # 逐支计算到星座的最小距离平方（vmap 到 K 轴）
-    d2   = jax.vmap(lambda v: _min_dist2_to_const(v, const_pts), in_axes=0)(vals)  # (K, T, C)
+    # 归一得到瞬时权重 α̂
+    a_hat = rA / (rA + rB + 1e-8)    # [T,C]
 
-    # 置信度权重（不要加 [..., None]！保持 (K, T, C)）
-    w = jnp.exp(- d2 / (tau * tau))                           # (K, T, C)
+    # 收缩：α = γ*0.5 + (1-γ)*α̂
+    gamma = shrink
+    a = gamma * 0.5 + (1.0 - gamma) * a_hat
 
-    # 加权融合（完全逐元素，形状匹配）
-    num = jnp.sum(w * vals, axis=0)                           # (T, C)
-    den = jnp.sum(w, axis=0) + 1e-12                          # (T, C)
-    fused = num / den                                         # (T, C)
+    # EMA 平滑，避免符号抖动；状态挂到 scope（和自适应滤波的 state 一样）
+    state = scope.variable('aux_inputs', 'fuse_ema',
+                           lambda *_: jnp.full_like(a, 0.5), ())
+    a_ema = ema * state.value + (1. - ema) * a
+    state.value = a_ema
 
-    # 时间戳沿用第一支（默认各支一致）
-    t = inputs[0].t
-    return Signal(fused, t)
+    y = a_ema * yA + (1. - a_ema) * yB
+    return Signal(y, t)
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
