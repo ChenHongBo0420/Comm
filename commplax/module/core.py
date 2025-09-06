@@ -483,10 +483,36 @@ def fanin_sum(scope, inputs):
     t = inputs[0].t  # 假设所有的 t 都相同
     return Signal(val, t)
   
-def fanin_mean(scope, inputs):
-    val = sum(signal.val for signal in inputs) / len(inputs)
-    t = inputs[0].t  # 假设所有的 t 都相同
-    return Signal(val, t)
+# def fanin_mean(scope, inputs):
+#     val = sum(signal.val for signal in inputs) / len(inputs)
+#     t = inputs[0].t  # 假设所有的 t 都相同
+#     return Signal(val, t)
+
+def fanin_mean(scope, inputs, sigma=0.6, eps=1e-8):
+    # inputs: [Signal(yA,t), Signal(yB,t)]
+    assert len(inputs) == 2
+    yA, t = inputs[0].val, inputs[0].t
+    yB    = inputs[1].val
+    # 预先定义 16QAM 星座（已归一到 √10）
+    CONST = jnp.array([
+        -3-3j,-3-1j,-3+3j,-3+1j,
+        -1-3j,-1-1j,-1+3j,-1+1j,
+         3-3j, 3-1j, 3+3j, 3+1j,
+         1-3j, 1-1j, 1+3j, 1+1j
+    ], dtype=jnp.complex64) / jnp.sqrt(10.)
+
+    # 最近星座距离（逐符号）
+    def dmin(y):
+        # [T,1]-[1,16] -> [T,16]
+        d2 = jnp.abs(y[...,None] - CONST[None,...])**2
+        return jnp.sqrt(jnp.min(d2, axis=-1))
+
+    dA = dmin(yA); dB = dmin(yB)
+    wA = jnp.exp(-(dA**2)/(sigma**2))
+    wB = jnp.exp(-(dB**2)/(sigma**2))
+    y  = (wA[...,None]*yA + wB[...,None]*yB) / (wA[...,None]+wB[...,None]+eps)
+    return Signal(y, t)
+
 
 def fanin_concat(scope, inputs, axis=-1):
     # 假设 inputs 是一个包含多个 Signal 对象的列表
