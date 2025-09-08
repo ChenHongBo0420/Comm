@@ -247,7 +247,7 @@ def cd_kernel_generator(scope: Scope, taps: int):
     h = h / (jnp.linalg.norm(h) + 1e-9)
     return h.astype(jnp.complex64)
 
-def conv1d(scope: Scope, signal, taps=261, mode='valid', conv_fn=xop.convolve):
+def conv1d(scope: Scope, signal, taps=261, mode='valid', kernel_init=delta, conv_fn=xop.convolve):
     x, t = signal
     t = scope.variable('const','t', conv1d_t, t, taps, None, 1, mode).value
     h = scope.param('kernel', lambda key, shape, dtype: cd_kernel_generator(scope, shape[0]),
