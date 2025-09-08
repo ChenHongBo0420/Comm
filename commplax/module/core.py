@@ -194,24 +194,67 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     return signal / jnp.sqrt(mean)
 
 
-def conv1d(
-    scope: Scope,
-    signal,
-    taps=31,
-    rtap=None,
-    mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
 
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+#     return Signal(x, t)
+  
+def cd_kernel_generator(scope: Scope, taps: int):
+    # 从 aux_inputs 取物理量（与你现有 update_aux 配套）
+    fs   = scope.variable('aux_inputs','fs',   lambda *_: 1.0, ()).value
+    dz   = scope.variable('aux_inputs','dz',   lambda *_: 1.0, ()).value
+    beta2= scope.variable('aux_inputs','beta2',lambda *_: 0.0, ()).value
+    alpha= scope.variable('aux_inputs','alpha',lambda *_: 0.0, ()).value
+
+    # 连续时间轴（中心对齐）
+    n = jnp.arange(-(taps//2), taps - taps//2)
+    t = n / fs
+
+    # 物理啁啾核（避免除零，dz>0；数值上加一点点正则）
+    eps = 1e-12
+    c   = 1.0 / jnp.sqrt(1j*2*jnp.pi*(beta2*dz + eps))
+    h_phys = c * jnp.exp(1j * (t**2) / (2*(beta2*dz + eps))) * jnp.exp(-alpha*dz/2)
+
+    # 可学习的轻残差：用 K 个基函数（例如 Gaussian 或 Chebyshev）
+    K = 24
+    # 这里示意用高斯族；更稳的是在频域学小相位再 IFFT（仍可返回 taps）
+    centers = jnp.linspace(-1.0, 1.0, K)
+    width   = 0.35
+    z = t / (taps/fs/2 + 1e-9)
+    Phi = jnp.exp(-((z[:,None]-centers[None,:])**2)/(2*width**2))  # (taps, K)
+
+    # 学复系数并“相位优先”（避免增益爆炸）
+    theta_r = scope.param('theta_r', nn.initializers.zeros, (K,))
+    theta_i = scope.param('theta_i', nn.initializers.zeros, (K,))
+    r = Phi @ (theta_r + 1j*theta_i)  # (taps,)
+
+    # 加窗 + 归一（避免边缘振铃）
+    w = jnp.kaiser(taps, beta=8.0)
+    h = (h_phys + 0.05*r) * w
+    # 归一：保证能量或 DC 群延不漂（按需选一种）
+    h = h / (jnp.linalg.norm(h) + 1e-9)
+    return h.astype(jnp.complex64)
+
+def conv1d(scope: Scope, signal, taps=261, mode='valid', conv_fn=xop.convolve):
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
-    return Signal(x, t)
-  
-  
+    t = scope.variable('const','t', conv1d_t, t, taps, None, 1, mode).value
+    h = scope.param('kernel', lambda key, shape, dtype: cd_kernel_generator(scope, shape[0]),
+                    (taps,), np.complex64)
+    y = conv_fn(x, h, mode=mode)
+    return Signal(y, t)
+
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
 
