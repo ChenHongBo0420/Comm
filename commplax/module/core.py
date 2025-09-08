@@ -194,22 +194,110 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     return signal / jnp.sqrt(mean)
 
 
-def conv1d(
+# def conv1d(
+#     scope: Scope,
+#     signal,
+#     taps=31,
+#     rtap=None,
+#     mode='valid',
+#     kernel_init=delta,
+#     conv_fn = xop.convolve):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
+#     h = scope.param('kernel',
+#                      kernel_init,
+#                      (taps,), np.complex64)
+#     x = conv_fn(x, h, mode=mode)
+#     return Signal(x, t)
+# ===== 工况：在 aux_inputs 里统一注册/读取（有默认值） =====
+
+def _aux(scope: Scope, key: str, default):
+    return scope.variable('aux_inputs', key, lambda *_: default, ()).value
+
+def _cond_z(scope: Scope):
+    """把你目前可用的工况拼成 z；没有的数据保留默认值即可。"""
+    fs    = _aux(scope, 'fs', 1.0)               # 采样率 [Hz]
+    dz    = _aux(scope, 'dz', 1.0)               # 单步等效长度 [m]
+    b2    = _aux(scope, 'beta2', 0.0)            # s^2/m
+    b3    = _aux(scope, 'beta3', 0.0)            # s^3/m
+    ptx   = _aux(scope, 'launch_power', 1.0)     # 发射功率 [W]
+    p_nei = _aux(scope, 'sum_neigh_power', 0.0)  # 邻道功率和 [W]
+    dfmin = _aux(scope, 'min_ch_spacing', 0.0)   # 最小信道间隔 [Hz]
+    # 轻量归一化（按你数据分布可再调）
+    return jnp.array([
+        b2 * 1e27, b3 * 1e39, dz * 1e-3, fs * 1e-9,
+        jnp.log10(jnp.maximum(ptx, 1e-12)), p_nei, dfmin * 1e-9
+    ], dtype=jnp.float32)
+
+def _tiny_mlp(scope: Scope, x: Array, out_dim: int, hidden: int = 16, name: str = 'lin_hyper'):
+    W1 = scope.param(name+'/W1', nn.initializers.glorot_uniform(), (x.shape[-1], hidden))
+    b1 = scope.param(name+'/b1', nn.initializers.zeros, (hidden,))
+    W2 = scope.param(name+'/W2', nn.initializers.glorot_uniform(), (hidden, out_dim))
+    b2 = scope.param(name+'/b2', nn.initializers.zeros, (out_dim,))
+    return jax.nn.gelu(x @ W1 + b1) @ W2 + b2
+
+def _chebyshev_basis_on_w(w: Array, K: int):
+    xi = w / (jnp.max(jnp.abs(w)) + 1e-12)
+    B  = []
+    T0 = jnp.ones_like(xi); B.append(T0)
+    if K == 1: return jnp.stack(B, axis=0)
+    T1 = xi; B.append(T1)
+    for _ in range(2, K):
+        T2 = 2*xi*B[-1] - B[-2]
+        B.append(T2)
+    return jnp.stack(B, axis=0)  # (K, N)
+
+def _phase_only_kernel(scope: Scope, taps: int, eps: float = 0.05, K: int = 6):
+    """|H|=1；相位 = sgn * [ -(-b2/2*(w+dw)^2 + b3/6*(w+dw)^3) * dz ] + eps*Δφ(z)
+       频率网格/因果对齐方式与 dbp_params 一致。返回时域核 h。"""
+    fs   = _aux(scope, 'fs', 1.0)
+    dz   = _aux(scope, 'dz', 1.0)
+    b2   = _aux(scope, 'beta2', 0.0)
+    b3   = _aux(scope, 'beta3', 0.0)
+    dw   = _aux(scope, 'dw', 0.0)                # 2π(fc - fref) [rad/s]
+    sgn  = _aux(scope, 'lin_sign', 1.0)          # +1 前向（与你 H 一致）；-1 逆向（DBP）
+    ign3 = _aux(scope, 'ignore_beta3', 0.0)      # >0.5 则忽略 β3
+
+    N      = taps
+    delay  = (N - 1) // 2
+    w_res  = 2 * jnp.pi * fs / N
+    k      = jnp.arange(N)
+    # ifftshift 风格频率（与你 dbp_params 的 w 完全一致）
+    w      = jnp.where(k > delay, k - N, k) * w_res   # [rad/s]
+
+    # 物理相位（严格按你 dbp_params 的公式与号位）
+    b3_term = jnp.where(ign3 > 0.5, 0.0, (b3/6.0) * (w + dw)**3)
+    phi_phys = sgn * ( - ( - b2/2.0 * (w + dw)**2 + b3_term ) * dz )  # [rad]
+
+    # 条件化残差相位 Δφ(w; z)
+    B    = _chebyshev_basis_on_w(w, K)                       # (K, N)
+    z    = _cond_z(scope)                                    # (Z,)
+    th   = _tiny_mlp(scope, z, out_dim=K, name='lin_hyper')  # (K,)
+    dphi = th @ B                                            # (N,)
+
+    H    = jnp.exp(1j * (phi_phys + eps * dphi))             # |H|=1
+    # 因果对齐（与你的 H_casual 相同：exp(-j*w*delay/fs)）
+    Hc   = H * jnp.exp(-1j * w * (delay / fs))
+    h    = jnp.fft.ifft(Hc).astype(jnp.complex64)            # (N,)
+    return h
+
+def conv1d_phase_cond(
     scope: Scope,
     signal,
-    taps=31,
-    rtap=None,
+    taps=261,
     mode='valid',
-    kernel_init=delta,
-    conv_fn = xop.convolve):
+    eps=0.05,
+    K=6,
+    conv_fn=xop.convolve):
 
     x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
-    h = scope.param('kernel',
-                     kernel_init,
-                     (taps,), np.complex64)
-    x = conv_fn(x, h, mode=mode)
-    return Signal(x, t)
+    t2 = scope.variable('const', 't', conv1d_t, t, taps, None, 1, mode).value
+    # 注意：h 由“物理 + 超网残差”生成，不作为自由可学习权重
+    h  = _phase_only_kernel(scope, taps, eps=eps, K=K)
+    y  = conv_fn(x, h, mode=mode)
+    return Signal(y, t2)
+
 
 def kernel_initializer(rng, shape):
     return random.normal(rng, shape)  
@@ -349,6 +437,25 @@ import jax.numpy as jnp
 from jax.nn.initializers import orthogonal, zeros
 
   
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps=3,
+#     dtaps=261,
+#     ntaps=41,
+#     sps=2,
+#     d_init=delta,
+#     n_init=gauss):
+#     x, t = signal
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+#     for i in range(steps):
+#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
+#                                                             taps=ntaps,
+#                                                             kernel_init=n_init)
+#         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+#     return Signal(x, t)
+
 def fdbp(
     scope: Scope,
     signal,
@@ -357,17 +464,23 @@ def fdbp(
     ntaps=41,
     sps=2,
     d_init=delta,
-    n_init=gauss):
+    n_init=gauss,
+    linear_mode: str = 'phase_cond',  # 'phase_cond' or 'free'
+    eps_lin: float = 0.05,
+    K_lin: int = 6):
     x, t = signal
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
+    if linear_mode == 'phase_cond':
+        dconv = vmap(wpartial(conv1d_phase_cond, taps=dtaps, mode='valid', eps=eps_lin, K=K_lin))
+    else:
+        dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
+
     for i in range(steps):
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(Signal(jnp.abs(x)**2, td),
-                                                            taps=ntaps,
-                                                            kernel_init=n_init)
+        c, t  = scope.child(mimoconv1d, name='NConv_%d' % i)(
+                    Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
-
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
