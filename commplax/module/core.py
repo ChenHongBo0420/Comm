@@ -213,7 +213,21 @@ def conv1d(
 # ===== 工况：在 aux_inputs 里统一注册/读取（有默认值） =====
 
 def _aux(scope: Scope, key: str, default):
-    return scope.variable('aux_inputs', key, lambda *_: default, ()).value
+    """安全读取 aux_inputs[key]；不存在就返回默认值，不在 init 里创建变量。"""
+    v = scope.get_variable('aux_inputs', key)
+    if v is None:
+        return jnp.asarray(default)
+    return v.value
+  
+def vmap_share_params(f,
+         in_axes=(Signal(-1, None),), out_axes=Signal(-1, None)):
+    vf = lift.vmap(f,
+                   variable_axes={'params': None, 'const': None},  # 共享参数
+                   split_rngs={'params': False},
+                   in_axes=in_axes, out_axes=out_axes)
+    vf.__name__ = 'vmapped_shared_' + f.__name__
+    return vf
+
 
 def _cond_z(scope: Scope):
     """把你目前可用的工况拼成 z；没有的数据保留默认值即可。"""
@@ -471,8 +485,12 @@ def fdbp(
     x, t = signal
 
     if linear_mode == 'phase_cond':
-        dconv = vmap(wpartial(conv1d_phase_cond, taps=dtaps, mode='valid', eps=eps_lin, K=K_lin))
+        # 关键：共享超网参数（不沿最后一维 vmap 复制参数）
+        dconv = vmap_share_params(
+            wpartial(conv1d_phase_cond, taps=dtaps, mode='valid', eps=eps_lin, K=K_lin)
+        )
     else:
+        # 保持你的旧路径（这条路用的是自由核，参数在 'params'，按通道 vmap）
         dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
     for i in range(steps):
@@ -481,6 +499,7 @@ def fdbp(
                     Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
     return Signal(x, t)
+
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
     # 对实部和虚部分别使用 Glorot 均匀初始化，再组合成复数
