@@ -674,7 +674,7 @@ def _print_sig_range(label: str, sig: Signal):
     debug.print("[ORIG] {label}: len={}, t.start={}, t.stop={}, sps={}, dtype={}, max|x|={:.3e}, mean|x|={:.3e}",
                 N, tt.start, tt.stop, tt.sps, x.dtype, maxabs, meanabs, label=label)
 
-def fdbp_orig_dbg(
+def fdbp(
     scope: Scope,
     signal,
     steps: int = 3,
