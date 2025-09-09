@@ -244,27 +244,28 @@ def _build_phys_defaults():
 def _get_aux_defaults(scope: Scope):
     """
     取/建 默认工况：
+    - 若已存在，可能拿到 Variable 也可能拿到裸值(dict)；两者都要兼容
     - init 阶段可创建 'const/aux_defaults'
-    - apply 阶段若不存在，就直接返回一份字典（不写入变量）
+    - apply 阶段若不存在，就返回一份字典（不写入变量）
     """
     v = scope.get_variable('const', 'aux_defaults')
     if v is not None:
-        return v.value
-    # init 时能创建；apply 时创建会报错，所以只在 init 创建
+        return v.value if hasattr(v, 'value') else v  # 兼容两种返回类型
     if scope.is_mutable_collection('const'):
-        v = scope.variable('const', 'aux_defaults', lambda *_: _build_phys_defaults(), ())
+        v = scope.variable('const', 'aux_defaults',
+                           lambda *_: _build_phys_defaults(), ())
         return v.value
-    # apply 阶段且未被创建过：返回一份临时默认
     return _build_phys_defaults()
 
 def _aux(scope: Scope, key: str, default):
     """
     优先读 aux_inputs[key]；若没有，回落到本文件内置的默认工况表；
-    再不行用函数参数的 default。
+    再不行用函数参数的 default。兼容 Variable / 裸值 两种情形。
     """
     v = scope.get_variable('aux_inputs', key)
     if v is not None:
-        return v.value
+        v = v.value if hasattr(v, 'value') else v
+        return jnp.asarray(v)
     defs = _get_aux_defaults(scope)  # dict
     return jnp.asarray(defs.get(key, default))
 
