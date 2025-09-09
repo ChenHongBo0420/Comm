@@ -201,7 +201,16 @@ DEBUG_MAXPRINT = 3        # 每个循环最多打印几次（避免刷屏）
 # ====== 小工具：相位规约到 [-pi, pi] ======
 def _wrap_to_pi(phi: Array) -> Array:
     return (phi + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
-
+  
+def _check_array(label: str, x: Array):
+    if not DEBUG_VALIDATE:
+        return
+    maxabs = jnp.max(jnp.abs(x))
+    meanabs = jnp.mean(jnp.abs(x))
+    any_nan = jnp.any(jnp.isnan(x))
+    any_inf = jnp.any(jnp.isinf(x))
+    debug.print("[CHK] {label}: shape={}, dtype={}, max|x|={:.3e}, mean|x|={:.3e}, nan={}, inf={}",
+                x.shape, x.dtype, maxabs, meanabs, any_nan, any_inf, label=label)
 def _chk_array(label: str, x: Array):
     return _check_array(label, x)
 
