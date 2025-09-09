@@ -202,16 +202,16 @@ DEBUG_MAXPRINT = 3        # 每个循环最多打印几次（避免刷屏）
 def _wrap_to_pi(phi: Array) -> Array:
     return (phi + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
 
-# ====== 小工具：数组体检 ======
-def _check_array(label: str, x: Array):
-    if not DEBUG_VALIDATE:
-        return
-    maxabs = jnp.max(jnp.abs(x))
-    meanabs = jnp.mean(jnp.abs(x))
-    any_nan = jnp.any(jnp.isnan(x))
-    any_inf = jnp.any(jnp.isinf(x))
-    debug.print("[CHK] {label}: shape={}, dtype={}, max|x|={:.3e}, mean|x|={:.3e}, nan={}, inf={}",
-                x.shape, x.dtype, maxabs, meanabs, any_nan, any_inf, label=label)
+def _chk_array(label: str, x: Array):
+    return _check_array(label, x)
+
+# ---- 复数安全护栏：先清 NaN/Inf，再分别裁剪实部/虚部 ----
+def _guard_complex(x, clip: float = 1e3):
+    x = jnp.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    xr = jnp.clip(jnp.real(x), -clip, clip)
+    xi = jnp.clip(jnp.imag(x), -clip, clip)
+    return xr + 1j * xi
+
 
 # ====== 小工具：核体检（检查 |H|≈1、tap幅度） ======
 def _check_kernel(label: str, h: Array):
