@@ -212,12 +212,62 @@ def conv1d(
     return Signal(x, t)
 # ===== 工况：在 aux_inputs 里统一注册/读取（有默认值） =====
 
+def _build_phys_defaults():
+    """返回一份物理合理的默认工况字典。你可按数据集改数值。"""
+    C   = 299_792_458.0
+    pi  = jnp.pi
+
+    # 典型参数（与你 dbp_params 的公式一致）
+    fref = 194.1e12          # 参考光频 [Hz]
+    D    = 16.7e-6           # fiber_dispersion [s/m^2]（等价 D≈16.7 ps/nm/km）
+    S    = 0.08e3            # fiber_dispersion_slope [s/m^3]
+    lam  = C / fref
+
+    beta2 = -D * lam**2 / (2*pi*C)                              # [s^2/m]
+    beta3 = (S * lam**2 + 2*D*lam) * (lam / (2*pi*C))**2        # [s^3/m]
+
+    # 给一套“能看到补偿效果”的默认数：你可按系统改
+    defaults = {
+        'fs'             : 64e9,     # 采样率 [Hz]（举例 64 GSa/s）
+        'dz'             : 20e3,     # 每步等效长度 [m]（举例 20 km/步）
+        'beta2'          : float(beta2),
+        'beta3'          : float(beta3),
+        'dw'             : 0.0,      # 与 fref 同载频时为 0
+        'lin_sign'       : -1.0,     # -1 走逆传播(DBP)，+1 走正向
+        'ignore_beta3'   : 0.0,      # 0=启用 β3
+        'launch_power'   : 1e-3,     # 0 dBm -> 1 mW（线性值）
+        'sum_neigh_power': 0.0,
+        'min_ch_spacing' : 0.0,
+    }
+    return defaults
+
+def _get_aux_defaults(scope: Scope):
+    """
+    取/建 默认工况：
+    - init 阶段可创建 'const/aux_defaults'
+    - apply 阶段若不存在，就直接返回一份字典（不写入变量）
+    """
+    v = scope.get_variable('const', 'aux_defaults')
+    if v is not None:
+        return v.value
+    # init 时能创建；apply 时创建会报错，所以只在 init 创建
+    if scope.is_mutable_collection('const'):
+        v = scope.variable('const', 'aux_defaults', lambda *_: _build_phys_defaults(), ())
+        return v.value
+    # apply 阶段且未被创建过：返回一份临时默认
+    return _build_phys_defaults()
+
 def _aux(scope: Scope, key: str, default):
-    """安全读取 aux_inputs[key]；不存在就返回默认值，不在 init 里创建变量。"""
+    """
+    优先读 aux_inputs[key]；若没有，回落到本文件内置的默认工况表；
+    再不行用函数参数的 default。
+    """
     v = scope.get_variable('aux_inputs', key)
-    if v is None:
-        return jnp.asarray(default)
-    return v.value
+    if v is not None:
+        return v.value
+    defs = _get_aux_defaults(scope)  # dict
+    return jnp.asarray(defs.get(key, default))
+
   
 def vmap_share_params(f,
          in_axes=(Signal(-1, None),), out_axes=Signal(-1, None)):
