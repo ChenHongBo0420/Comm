@@ -372,14 +372,13 @@ def _cond_z(scope: Scope):
 
 
 def _tiny_mlp(scope: Scope, x: Array, out_dim: int, hidden: int = 16, name: str = 'lin_hyper'):
-    x = jnp.asarray(x, dtype=jnp.float32)
-    x = jnp.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
-
     W1 = scope.param(name+'/W1', nn.initializers.glorot_uniform(), (x.shape[-1], hidden))
     b1 = scope.param(name+'/b1', nn.initializers.zeros, (hidden,))
-    W2 = scope.param(name+'/W2', nn.initializers.glorot_uniform(), (hidden, out_dim))
+    # 关键：W2=0, b2=0 ⇒ 初始 th=0 ⇒ 初始 dphi=0
+    W2 = scope.param(name+'/W2', nn.initializers.zeros, (hidden, out_dim))
     b2 = scope.param(name+'/b2', nn.initializers.zeros, (out_dim,))
     return jax.nn.gelu(x @ W1 + b1) @ W2 + b2
+
 
 
 def _chebyshev_basis_on_w(w: Array, K: int):
@@ -393,10 +392,7 @@ def _chebyshev_basis_on_w(w: Array, K: int):
         B.append(T2)
     return jnp.stack(B, axis=0)  # (K, N)
 
-def _phase_only_kernel(scope: Scope, taps: int, eps: float = 0.05, K: int = 6):
-    # —— 新增：打印一次工况 —— 
-    _log_aux_once(scope)
-
+def _phase_only_kernel(scope: Scope, taps: int, eps: float = 0.05, K: int = 6, dphi_max: float = 1.0):
     fs   = _aux(scope, 'fs', 1.0)
     dz   = _aux(scope, 'dz', 1.0)
     b2   = _aux(scope, 'beta2', 0.0)
@@ -407,49 +403,35 @@ def _phase_only_kernel(scope: Scope, taps: int, eps: float = 0.05, K: int = 6):
 
     N      = taps
     delay  = (N - 1) // 2
-    w_res  = (2.0 * jnp.pi * fs) / N
+    w_res  = 2 * jnp.pi * fs / N
     k      = jnp.arange(N)
     w      = jnp.where(k > delay, k - N, k) * w_res
 
-    b3_term  = jnp.where(ign3 > 0.5, 0.0, (b3 / 6.0) * (w + dw) ** 3)
-    phi_phys = sgn * ( - ( - b2 / 2.0 * (w + dw) ** 2 + b3_term ) * dz )
+    b3_term  = jnp.where(ign3 > 0.5, 0.0, (b3/6.0) * (w + dw)**3)
+    phi_phys = sgn * ( - ( - b2/2.0 * (w + dw)**2 + b3_term ) * dz )  # 物理相位
 
-    B    = _chebyshev_basis_on_w(w, K)
-    z    = _cond_z(scope)
-    th   = _tiny_mlp(scope, z, out_dim=K, name='lin_hyper')
-    dphi = th @ B
+    B    = _chebyshev_basis_on_w(w, K)              # (K, N)
+    z    = _cond_z(scope)                           # (Z,)
+    th   = _tiny_mlp(scope, z, out_dim=K, name='lin_hyper')  # (K,)
 
-    # —— 新增：相位规约 + 统计 —— 
-    phi  = _wrap_to_pi(phi_phys + eps * dphi)
-    if DEBUG_VALIDATE:
-        debug.print("[CHK] D-kernel: max|phi_phys|={:.3e}, max|dphi|={:.3e}, max|phi_total|={:.3e}",
-                    jnp.max(jnp.abs(phi_phys)), jnp.max(jnp.abs(dphi)), jnp.max(jnp.abs(phi)))
+    # 关键：残差相位做“tanh 限幅”，并给个上限 dphi_max
+    raw  = th @ B                                   # (N,)
+    dphi = dphi_max * jnp.tanh(raw / jnp.maximum(dphi_max, 1e-6))
 
-    Hc   = jnp.exp(1j * phi) * jnp.exp(-1j * w * (delay / fs))
-    h    = jnp.fft.ifft(Hc.astype(jnp.complex64)).astype(jnp.complex64)
-
-    # —— 新增：检查 |H|≈1、tap 幅度 —— 
-    _check_kernel("phase_only_kernel", h)
+    H    = jnp.exp(1j * (phi_phys + eps * dphi))
+    Hc   = H * jnp.exp(-1j * w * (delay / fs))
+    h    = jnp.fft.ifft(Hc).astype(jnp.complex64)
     return h
 
 
-def conv1d_phase_cond(
-    scope: Scope,
-    signal,
-    taps=261,
-    mode='valid',
-    eps=0.05,
-    K=6,
-    conv_fn=xop.convolve):
 
+def conv1d_phase_cond(scope: Scope, signal, taps=261, mode='valid', eps=0.05, K=6, dphi_max=1.0, conv_fn=xop.convolve):
     x, t = signal
     t2 = scope.variable('const', 't', conv1d_t, t, taps, None, 1, mode).value
-    h  = _phase_only_kernel(scope, taps, eps=eps, K=K).astype(jnp.complex64)
-    y  = conv_fn(x.astype(jnp.complex64), h, mode=mode)
-
-    # —— 新增：检查线性步输出 —— 
-    _check_array("D-step output (conv)", y)
+    h  = _phase_only_kernel(scope, taps, eps=eps, K=K, dphi_max=dphi_max)
+    y  = conv_fn(x, h, mode=mode)
     return Signal(y, t2)
+
 
 
 
@@ -611,96 +593,69 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-def fdbp(
-    scope: Scope,
-    signal,
-    steps=3,
-    dtaps=261,
-    ntaps=41,
-    sps=2,
-    d_init=delta,
-    n_init=gauss,
-    linear_mode: str = 'phase_cond',  # 'phase_cond' or 'free'
-    eps_lin: float = 0.05,
-    K_lin: int = 6
-):
+def fdbp(scope: Scope,
+         signal,
+         steps: int = 3,
+         dtaps: int = 261,
+         ntaps: int = 41,
+         sps: int = 2,
+         d_init = delta,
+         n_init = gauss,
+         linear_mode: str = 'phase_cond',   # 'phase_cond' 或 'free'
+         eps_lin: float = 0.01,
+         K_lin: int = 4,
+         dphi_max: float = 1.0,
+         mode: str = 'valid'):
     """
-    分段 DBP：
-      - 线性步 D：可选 'phase_cond'（相位仅、条件化残差）或 'free'（自由核）
-      - 非线性步 N：MIMO 卷积得到相位，作用到信号
-    数值稳健措施：
-      - 对复数信号做幅度限幅（而非对复数 clip）
-      - 将相位 wrap 到 [-pi, pi]
-      - 在关键点做 NaN/Inf 清洗
+    - linear_mode='phase_cond'：D 步使用物理相位 + 有界残差（推荐）
+      否则使用自由核 conv1d（保持兼容）
+    - mode: 'valid'（默认）或 'same'
     """
-    x, t = signal  # x 形状 (N, C)
+    x, t = signal
 
-    # 选择线性步：共享超网参数（phase_cond）或旧的自由核（free）
+    # 入口检查
+    if DEBUG_VALIDATE:
+        _chk_array("Input to fDBP", x)
+
+    # 构建 D 步
     if linear_mode == 'phase_cond':
+        # 关键：共享参数（沿通道 vmap 但不复制 params）
         dconv = vmap_share_params(
-            wpartial(conv1d_phase_cond, taps=dtaps, mode='valid', eps=eps_lin, K=K_lin)
+            wpartial(conv1d_phase_cond, taps=dtaps, mode=mode,
+                     eps=eps_lin, K=K_lin, dphi_max=dphi_max)
         )
     else:
+        # 自由核 D（老路径）
         dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
-    # ------- 数值守护与调试工具 -------
-    def _guard(sig, lim=1e3):
-        """复数幅度限幅 + NaN/Inf 清洗；避免对复数使用 jnp.clip 的报错。"""
-        sig = jnp.nan_to_num(sig, nan=0.0, posinf=0.0, neginf=0.0)
-        amp = jnp.abs(sig)
-        scale = jnp.minimum(1.0, lim / (amp + 1e-12))
-        return sig * scale
-
-    def _wrap_to_pi(phase):
-        """把相位压到 [-pi, pi]，支持任意形状/实数相位张量。"""
-        return (phase + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
-
-    DEBUG_VALIDATE = True
-    DEBUG_MAXPRINT = 2
-
-    def _chk(tag, arr):
-        if not DEBUG_VALIDATE:
-            return
-        # 计算若干统计量（避免打印巨大数组）
-        maxabs = jnp.max(jnp.abs(arr))
-        meanabs = jnp.mean(jnp.abs(arr))
-        has_nan = jnp.any(jnp.isnan(jnp.real(arr))) | jnp.any(jnp.isnan(jnp.imag(arr)))
-        has_inf = jnp.any(jnp.isinf(jnp.real(arr))) | jnp.any(jnp.isinf(jnp.imag(arr)))
-        jax.debug.print(
-            "[CHK] {tag}: max|.|={m:.3e}, mean|.|={u:.3e}, nan={n}, inf={f}",
-            tag=tag, m=maxabs, u=meanabs, n=has_nan, f=has_inf
-        )
-
-    # ------- 迭代各步 -------
-    _chk("Input to fDBP", x)
-    x = _guard(x)
-
+    # 逐步传播
     for i in range(steps):
-        # --- D 步：色散相位卷积 ---
+        # D：线性相位卷积
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _chk(f"D[{i}] out", x)
-        x = _guard(x)
+            _chk_array(f"D[{i}] out", x)
 
-        # --- N 步：功率 -> 相位 ---
-        pwr = jnp.abs(x) ** 2  # 形状 (N_valid, C)
+        # 保护（避免后续指数溢出）
+        x = _guard_complex(x, clip=1e3)
+
+        # N：相位乘（MIMO 非线性核）
         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-            Signal(pwr, td), taps=ntaps, kernel_init=n_init
-        )
-        # 相位 wrap，避免指数爆炸
-        c = _wrap_to_pi(c)
-        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _chk(f"N[{i}] phase c", c)
+            Signal(jnp.abs(x) ** 2, td), taps=ntaps, kernel_init=n_init)
 
-        # --- 应用非线性相位并时间对齐 ---
-        # 注意：与原始实现保持一致的切片对齐方式
-        x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _chk(f"After N[{i}] mul", x)
-        x = _guard(x)
+            _chk_array(f"N[{i}] phase c", c)
+
+        # e^{j c} 逐样相位乘
+        # 对齐裁剪（仅在 mode='valid' 时需要；'same' 时可以直接逐点乘）
+        if mode == 'valid':
+            x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        else:  # mode == 'same'
+            x = jnp.exp(1j * c) * x
+
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _chk_array(f"After N[{i}] mul", x)
 
     return Signal(x, t)
-
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
