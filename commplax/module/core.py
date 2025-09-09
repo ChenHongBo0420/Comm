@@ -194,6 +194,62 @@ def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
     return signal / jnp.sqrt(mean)
 
 
+# ====== Debug switches ======
+DEBUG_VALIDATE = True     # 开启验证打印
+DEBUG_MAXPRINT = 3        # 每个循环最多打印几次（避免刷屏）
+
+# ====== 小工具：相位规约到 [-pi, pi] ======
+def _wrap_to_pi(phi: Array) -> Array:
+    return (phi + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
+
+# ====== 小工具：数组体检 ======
+def _check_array(label: str, x: Array):
+    if not DEBUG_VALIDATE:
+        return
+    maxabs = jnp.max(jnp.abs(x))
+    meanabs = jnp.mean(jnp.abs(x))
+    any_nan = jnp.any(jnp.isnan(x))
+    any_inf = jnp.any(jnp.isinf(x))
+    debug.print("[CHK] {label}: shape={}, dtype={}, max|x|={:.3e}, mean|x|={:.3e}, nan={}, inf={}",
+                x.shape, x.dtype, maxabs, meanabs, any_nan, any_inf, label=label)
+
+# ====== 小工具：核体检（检查 |H|≈1、tap幅度） ======
+def _check_kernel(label: str, h: Array):
+    if not DEBUG_VALIDATE:
+        return
+    H = jnp.fft.fft(h)
+    amp_err_max = jnp.max(jnp.abs(jnp.abs(H) - 1.0))
+    tap_max = jnp.max(jnp.abs(h))
+    tap_l1  = jnp.sum(jnp.abs(h))
+    debug.print("[CHK] {label}: max||H|-1|={:.3e}, max|h|={:.3e}, sum|h|={:.3e}",
+                amp_err_max, tap_max, tap_l1, label=label)
+
+# ====== 小工具：打印一次工况（首轮即可） ======
+def _log_aux_once(scope: Scope):
+    if not DEBUG_VALIDATE:
+        return
+    # 只在 init 阶段成功创建；apply 阶段如果没创建过则静默返回
+    if scope.get_variable('const', '_aux_logged') is None and scope.is_mutable_collection('const'):
+        fs    = _aux(scope, 'fs', 1.0)
+        dz    = _aux(scope, 'dz', 1.0)
+        b2    = _aux(scope, 'beta2', 0.0)
+        b3    = _aux(scope, 'beta3', 0.0)
+        dw    = _aux(scope, 'dw', 0.0)
+        sgn   = _aux(scope, 'lin_sign', 1.0)
+        ign3  = _aux(scope, 'ignore_beta3', 0.0)
+        ptx   = _aux(scope, 'launch_power', 1.0)
+        p_nei = _aux(scope, 'sum_neigh_power', 0.0)
+        dfmin = _aux(scope, 'min_ch_spacing', 0.0)
+        z     = _cond_z(scope)
+        debug.print(
+            "[AUX] fs={:.3e} Hz, dz={:.3e} m, beta2={:.3e} s^2/m, beta3={:.3e} s^3/m, dw={:.3e} rad/s, sign={}, ignore_b3={}, "
+            "launch_power={:.3e} W, sum_neigh={:.3e} W, min_ch_spacing={:.3e} Hz",
+            fs, dz, b2, b3, dw, sgn, ign3, ptx, p_nei, dfmin
+        )
+        debug.print("[AUX] z vector = {}", z)
+        scope.variable('const', '_aux_logged', lambda *_: True, ())
+
+
 def conv1d(
     scope: Scope,
     signal,
@@ -324,38 +380,44 @@ def _chebyshev_basis_on_w(w: Array, K: int):
     return jnp.stack(B, axis=0)  # (K, N)
 
 def _phase_only_kernel(scope: Scope, taps: int, eps: float = 0.05, K: int = 6):
-    """|H|=1；相位 = sgn * [ -(-b2/2*(w+dw)^2 + b3/6*(w+dw)^3) * dz ] + eps*Δφ(z)
-       频率网格/因果对齐方式与 dbp_params 一致。返回时域核 h。"""
+    # —— 新增：打印一次工况 —— 
+    _log_aux_once(scope)
+
     fs   = _aux(scope, 'fs', 1.0)
     dz   = _aux(scope, 'dz', 1.0)
     b2   = _aux(scope, 'beta2', 0.0)
     b3   = _aux(scope, 'beta3', 0.0)
-    dw   = _aux(scope, 'dw', 0.0)                # 2π(fc - fref) [rad/s]
-    sgn  = _aux(scope, 'lin_sign', 1.0)          # +1 前向（与你 H 一致）；-1 逆向（DBP）
-    ign3 = _aux(scope, 'ignore_beta3', 0.0)      # >0.5 则忽略 β3
+    dw   = _aux(scope, 'dw', 0.0)
+    sgn  = _aux(scope, 'lin_sign', 1.0)
+    ign3 = _aux(scope, 'ignore_beta3', 0.0)
 
     N      = taps
     delay  = (N - 1) // 2
-    w_res  = 2 * jnp.pi * fs / N
+    w_res  = (2.0 * jnp.pi * fs) / N
     k      = jnp.arange(N)
-    # ifftshift 风格频率（与你 dbp_params 的 w 完全一致）
-    w      = jnp.where(k > delay, k - N, k) * w_res   # [rad/s]
+    w      = jnp.where(k > delay, k - N, k) * w_res
 
-    # 物理相位（严格按你 dbp_params 的公式与号位）
-    b3_term = jnp.where(ign3 > 0.5, 0.0, (b3/6.0) * (w + dw)**3)
-    phi_phys = sgn * ( - ( - b2/2.0 * (w + dw)**2 + b3_term ) * dz )  # [rad]
+    b3_term  = jnp.where(ign3 > 0.5, 0.0, (b3 / 6.0) * (w + dw) ** 3)
+    phi_phys = sgn * ( - ( - b2 / 2.0 * (w + dw) ** 2 + b3_term ) * dz )
 
-    # 条件化残差相位 Δφ(w; z)
-    B    = _chebyshev_basis_on_w(w, K)                       # (K, N)
-    z    = _cond_z(scope)                                    # (Z,)
-    th   = _tiny_mlp(scope, z, out_dim=K, name='lin_hyper')  # (K,)
-    dphi = th @ B                                            # (N,)
+    B    = _chebyshev_basis_on_w(w, K)
+    z    = _cond_z(scope)
+    th   = _tiny_mlp(scope, z, out_dim=K, name='lin_hyper')
+    dphi = th @ B
 
-    H    = jnp.exp(1j * (phi_phys + eps * dphi))             # |H|=1
-    # 因果对齐（与你的 H_casual 相同：exp(-j*w*delay/fs)）
-    Hc   = H * jnp.exp(-1j * w * (delay / fs))
-    h    = jnp.fft.ifft(Hc).astype(jnp.complex64)            # (N,)
+    # —— 新增：相位规约 + 统计 —— 
+    phi  = _wrap_to_pi(phi_phys + eps * dphi)
+    if DEBUG_VALIDATE:
+        debug.print("[CHK] D-kernel: max|phi_phys|={:.3e}, max|dphi|={:.3e}, max|phi_total|={:.3e}",
+                    jnp.max(jnp.abs(phi_phys)), jnp.max(jnp.abs(dphi)), jnp.max(jnp.abs(phi)))
+
+    Hc   = jnp.exp(1j * phi) * jnp.exp(-1j * w * (delay / fs))
+    h    = jnp.fft.ifft(Hc.astype(jnp.complex64)).astype(jnp.complex64)
+
+    # —— 新增：检查 |H|≈1、tap 幅度 —— 
+    _check_kernel("phase_only_kernel", h)
     return h
+
 
 def conv1d_phase_cond(
     scope: Scope,
@@ -368,10 +430,14 @@ def conv1d_phase_cond(
 
     x, t = signal
     t2 = scope.variable('const', 't', conv1d_t, t, taps, None, 1, mode).value
-    # 注意：h 由“物理 + 超网残差”生成，不作为自由可学习权重
-    h  = _phase_only_kernel(scope, taps, eps=eps, K=K)
-    y  = conv_fn(x, h, mode=mode)
+    h  = _phase_only_kernel(scope, taps, eps=eps, K=K).astype(jnp.complex64)
+    y  = conv_fn(x.astype(jnp.complex64), h, mode=mode)
+
+    # —— 新增：检查线性步输出 —— 
+    _check_array("D-step output (conv)", y)
     return Signal(y, t2)
+
+
 
 
 def kernel_initializer(rng, shape):
@@ -540,25 +606,49 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    linear_mode: str = 'phase_cond',  # 'phase_cond' or 'free'
+    linear_mode: str = 'phase_cond',
     eps_lin: float = 0.05,
     K_lin: int = 6):
+
+    def _guard(sig):
+        sig = jnp.nan_to_num(sig, nan=0.0, posinf=0.0, neginf=0.0)
+        return jnp.clip(sig, -1e3, 1e3)
+
     x, t = signal
+    _check_array("Input to fDBP", x)
 
     if linear_mode == 'phase_cond':
-        # 关键：共享超网参数（不沿最后一维 vmap 复制参数）
         dconv = vmap_share_params(
             wpartial(conv1d_phase_cond, taps=dtaps, mode='valid', eps=eps_lin, K=K_lin)
         )
     else:
-        # 保持你的旧路径（这条路用的是自由核，参数在 'params'，按通道 vmap）
         dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
     for i in range(steps):
+        # D 步
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _check_array(f"D[{i}] out", x)
+        x = _guard(x)
+
+        # N 步相位
+        pwr = jnp.abs(x)**2
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _check_array(f"PWR[{i}] = |x|^2", pwr)
+
         c, t  = scope.child(mimoconv1d, name='NConv_%d' % i)(
-                    Signal(jnp.abs(x)**2, td), taps=ntaps, kernel_init=n_init)
+                    Signal(pwr, td), taps=ntaps, kernel_init=n_init)
+
+        # 相位规约 + 体检
+        c = _wrap_to_pi(c)
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _check_array(f"N[{i}] phase c", c)
+
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _check_array(f"After N[{i}] mul", x)
+        x = _guard(x)
+
     return Signal(x, t)
 
 
