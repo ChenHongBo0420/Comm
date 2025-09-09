@@ -347,26 +347,40 @@ def vmap_share_params(f,
 
 
 def _cond_z(scope: Scope):
-    """把你目前可用的工况拼成 z；没有的数据保留默认值即可。"""
-    fs    = _aux(scope, 'fs', 1.0)               # 采样率 [Hz]
-    dz    = _aux(scope, 'dz', 1.0)               # 单步等效长度 [m]
-    b2    = _aux(scope, 'beta2', 0.0)            # s^2/m
-    b3    = _aux(scope, 'beta3', 0.0)            # s^3/m
-    ptx   = _aux(scope, 'launch_power', 1.0)     # 发射功率 [W]
-    p_nei = _aux(scope, 'sum_neigh_power', 0.0)  # 邻道功率和 [W]
-    dfmin = _aux(scope, 'min_ch_spacing', 0.0)   # 最小信道间隔 [Hz]
-    # 轻量归一化（按你数据分布可再调）
-    return jnp.array([
-        b2 * 1e27, b3 * 1e39, dz * 1e-3, fs * 1e-9,
-        jnp.log10(jnp.maximum(ptx, 1e-12)), p_nei, dfmin * 1e-9
-    ], dtype=jnp.float32)
+    """把可用工况拼成 z；用 float64 先算，最后再安全降到 float32，避免 0*inf→NaN。"""
+    fs    = _aux(scope, 'fs', 1.0)
+    dz    = _aux(scope, 'dz', 1.0)
+    b2    = _aux(scope, 'beta2', 0.0)
+    b3    = _aux(scope, 'beta3', 0.0)
+    ptx   = _aux(scope, 'launch_power', 1.0)
+    p_nei = _aux(scope, 'sum_neigh_power', 0.0)
+    dfmin = _aux(scope, 'min_ch_spacing', 0.0)
+
+    # 先转 float64 再做缩放，避免 0*inf→NaN
+    b2s = jnp.asarray(b2,   dtype=jnp.float64) * jnp.array(1e27, dtype=jnp.float64)
+    b3s = jnp.asarray(b3,   dtype=jnp.float64) * jnp.array(1e39, dtype=jnp.float64)
+    dzs = jnp.asarray(dz,   dtype=jnp.float64) * jnp.array(1e-3, dtype=jnp.float64)
+    fss = jnp.asarray(fs,   dtype=jnp.float64) * jnp.array(1e-9, dtype=jnp.float64)
+    lps = jnp.log10(jnp.maximum(jnp.asarray(ptx, dtype=jnp.float64), 1e-12))
+    pns = jnp.asarray(p_nei, dtype=jnp.float64)
+    dfs = jnp.asarray(dfmin, dtype=jnp.float64) * jnp.array(1e-9, dtype=jnp.float64)
+
+    z64 = jnp.array([b2s, b3s, dzs, fss, lps, pns, dfs], dtype=jnp.float64)
+    # 把可能的 NaN/Inf 拉回到有限数，再降到 float32
+    z64 = jnp.nan_to_num(z64, nan=0.0, posinf=1e6, neginf=-1e6)
+    return z64.astype(jnp.float32)
+
 
 def _tiny_mlp(scope: Scope, x: Array, out_dim: int, hidden: int = 16, name: str = 'lin_hyper'):
+    x = jnp.asarray(x, dtype=jnp.float32)
+    x = jnp.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
+
     W1 = scope.param(name+'/W1', nn.initializers.glorot_uniform(), (x.shape[-1], hidden))
     b1 = scope.param(name+'/b1', nn.initializers.zeros, (hidden,))
     W2 = scope.param(name+'/W2', nn.initializers.glorot_uniform(), (hidden, out_dim))
     b2 = scope.param(name+'/b2', nn.initializers.zeros, (out_dim,))
     return jax.nn.gelu(x @ W1 + b1) @ W2 + b2
+
 
 def _chebyshev_basis_on_w(w: Array, K: int):
     xi = w / (jnp.max(jnp.abs(w)) + 1e-12)
@@ -606,17 +620,22 @@ def fdbp(
     sps=2,
     d_init=delta,
     n_init=gauss,
-    linear_mode: str = 'phase_cond',
+    linear_mode: str = 'phase_cond',  # 'phase_cond' or 'free'
     eps_lin: float = 0.05,
-    K_lin: int = 6):
+    K_lin: int = 6
+):
+    """
+    分段 DBP：
+      - 线性步 D：可选 'phase_cond'（相位仅、条件化残差）或 'free'（自由核）
+      - 非线性步 N：MIMO 卷积得到相位，作用到信号
+    数值稳健措施：
+      - 对复数信号做幅度限幅（而非对复数 clip）
+      - 将相位 wrap 到 [-pi, pi]
+      - 在关键点做 NaN/Inf 清洗
+    """
+    x, t = signal  # x 形状 (N, C)
 
-    def _guard(sig):
-        sig = jnp.nan_to_num(sig, nan=0.0, posinf=0.0, neginf=0.0)
-        return jnp.clip(sig, -1e3, 1e3)
-
-    x, t = signal
-    _check_array("Input to fDBP", x)
-
+    # 选择线性步：共享超网参数（phase_cond）或旧的自由核（free）
     if linear_mode == 'phase_cond':
         dconv = vmap_share_params(
             wpartial(conv1d_phase_cond, taps=dtaps, mode='valid', eps=eps_lin, K=K_lin)
@@ -624,32 +643,64 @@ def fdbp(
     else:
         dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
 
+    # ------- 数值守护与调试工具 -------
+    def _guard(sig, lim=1e3):
+        """复数幅度限幅 + NaN/Inf 清洗；避免对复数使用 jnp.clip 的报错。"""
+        sig = jnp.nan_to_num(sig, nan=0.0, posinf=0.0, neginf=0.0)
+        amp = jnp.abs(sig)
+        scale = jnp.minimum(1.0, lim / (amp + 1e-12))
+        return sig * scale
+
+    def _wrap_to_pi(phase):
+        """把相位压到 [-pi, pi]，支持任意形状/实数相位张量。"""
+        return (phase + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
+
+    DEBUG_VALIDATE = True
+    DEBUG_MAXPRINT = 2
+
+    def _chk(tag, arr):
+        if not DEBUG_VALIDATE:
+            return
+        # 计算若干统计量（避免打印巨大数组）
+        maxabs = jnp.max(jnp.abs(arr))
+        meanabs = jnp.mean(jnp.abs(arr))
+        has_nan = jnp.any(jnp.isnan(jnp.real(arr))) | jnp.any(jnp.isnan(jnp.imag(arr)))
+        has_inf = jnp.any(jnp.isinf(jnp.real(arr))) | jnp.any(jnp.isinf(jnp.imag(arr)))
+        jax.debug.print(
+            "[CHK] {tag}: max|.|={m:.3e}, mean|.|={u:.3e}, nan={n}, inf={f}",
+            tag=tag, m=maxabs, u=meanabs, n=has_nan, f=has_inf
+        )
+
+    # ------- 迭代各步 -------
+    _chk("Input to fDBP", x)
+    x = _guard(x)
+
     for i in range(steps):
-        # D 步
+        # --- D 步：色散相位卷积 ---
         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _check_array(f"D[{i}] out", x)
+            _chk(f"D[{i}] out", x)
         x = _guard(x)
 
-        # N 步相位
-        pwr = jnp.abs(x)**2
-        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _check_array(f"PWR[{i}] = |x|^2", pwr)
-
-        c, t  = scope.child(mimoconv1d, name='NConv_%d' % i)(
-                    Signal(pwr, td), taps=ntaps, kernel_init=n_init)
-
-        # 相位规约 + 体检
+        # --- N 步：功率 -> 相位 ---
+        pwr = jnp.abs(x) ** 2  # 形状 (N_valid, C)
+        c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
+            Signal(pwr, td), taps=ntaps, kernel_init=n_init
+        )
+        # 相位 wrap，避免指数爆炸
         c = _wrap_to_pi(c)
         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _check_array(f"N[{i}] phase c", c)
+            _chk(f"N[{i}] phase c", c)
 
+        # --- 应用非线性相位并时间对齐 ---
+        # 注意：与原始实现保持一致的切片对齐方式
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-            _check_array(f"After N[{i}] mul", x)
+            _chk(f"After N[{i}] mul", x)
         x = _guard(x)
 
     return Signal(x, t)
+
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
