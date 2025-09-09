@@ -213,33 +213,43 @@ def conv1d(
 # ===== 工况：在 aux_inputs 里统一注册/读取（有默认值） =====
 
 def _build_phys_defaults():
-    """返回一份物理合理的默认工况字典。你可按数据集改数值。"""
+    """
+    这里直接硬编码“默认链路设置”。如果不从 aux_inputs 覆盖，
+    D 步就用这套数。数值你可按需要改这张表即可。
+    """
+    # ---- 你们默认链路（示例：32 Gbaud, sps=2, fs=64e9, 每步=1 span=80 km）----
+    fs   = 64e9          # 采样率 [Hz]（例如 2 sps @ 32 Gbaud）
+    dz   = 80e3          # 每个 DBP 步长 [m]（例如每步 1 span=80 km）
+    fref = 193.4e12      # 参考光频 [Hz]（~1550 nm）
+    D_ps_nm_km = 16.7    # 色散参数 D [ps/(nm·km)]
+    S_ps_nm2_km = 0.08   # 色散斜率 S [ps/(nm^2·km)]
+    # -----------------------------------------------------------------------
+
+    # 把单位换算到 [s^2/m], [s^3/m]
     C   = 299_792_458.0
     pi  = jnp.pi
+    lam = C / fref
+    # D: ps/(nm·km) -> s/m^2 ；S: ps/(nm^2·km) -> s/m^3
+    D   = D_ps_nm_km * 1e-6        # [s/(m^2)] 等价
+    S   = S_ps_nm2_km * 1e3        # [s/(m^3)]
+    beta2 = -D * lam**2 / (2*pi*C)                         # [s^2/m]
+    beta3 = (S * lam**2 + 2*D*lam) * (lam / (2*pi*C))**2   # [s^3/m]
 
-    # 典型参数（与你 dbp_params 的公式一致）
-    fref = 194.1e12          # 参考光频 [Hz]
-    D    = 16.7e-6           # fiber_dispersion [s/m^2]（等价 D≈16.7 ps/nm/km）
-    S    = 0.08e3            # fiber_dispersion_slope [s/m^3]
-    lam  = C / fref
-
-    beta2 = -D * lam**2 / (2*pi*C)                              # [s^2/m]
-    beta3 = (S * lam**2 + 2*D*lam) * (lam / (2*pi*C))**2        # [s^3/m]
-
-    # 给一套“能看到补偿效果”的默认数：你可按系统改
+    # 如需以相对 fref 偏移的中心频率 fc，可把下面 dw 改成 2π(fc - fref)
     defaults = {
-        'fs'             : 64e9,     # 采样率 [Hz]（举例 64 GSa/s）
-        'dz'             : 20e3,     # 每步等效长度 [m]（举例 20 km/步）
+        'fs'             : float(fs),
+        'dz'             : float(dz),
         'beta2'          : float(beta2),
         'beta3'          : float(beta3),
-        'dw'             : 0.0,      # 与 fref 同载频时为 0
-        'lin_sign'       : -1.0,     # -1 走逆传播(DBP)，+1 走正向
-        'ignore_beta3'   : 0.0,      # 0=启用 β3
-        'launch_power'   : 1e-3,     # 0 dBm -> 1 mW（线性值）
+        'dw'             : 0.0,        # 2π(fc - fref) [rad/s]；同载频就填 0
+        'lin_sign'       : -1.0,       # -1=DBP 方向；+1=正向传播
+        'ignore_beta3'   : 0.0,        # 1.0 可忽略 β3
+        'launch_power'   : 1e-3,       # [W] 0 dBm
         'sum_neigh_power': 0.0,
         'min_ch_spacing' : 0.0,
     }
     return defaults
+
 
 def _get_aux_defaults(scope: Scope):
     """
