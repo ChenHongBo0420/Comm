@@ -627,10 +627,9 @@ def fdbp(scope: Scope,
 
     # --- 构建 D 步 ---
     if linear_mode == 'phase_cond':
-        dconv = vmap_share_params(
-            wpartial(conv1d_phase_cond, taps=dtaps, mode=mode,
-                     eps=eps_lin, K=K_lin, dphi_max=dphi_max)
-        )
+        dconv = vmap(wpartial(conv1d_phase_cond, taps=dtaps, mode=mode,
+             eps=eps_lin, K=K_lin, dphi_max=dphi_max))
+
     else:
         dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init, mode=mode))
 
