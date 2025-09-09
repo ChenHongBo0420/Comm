@@ -610,7 +610,7 @@ def fdbp(scope: Scope,
          sps: int = 2,
          d_init = delta,
          n_init = gauss,
-         linear_mode: str = 'phase_cond',   # 'phase_cond' 或 'free'
+         linear_mode: str = 'free',   # 'phase_cond' 或 'free'
          eps_lin: float = 0.01,
          K_lin: int = 4,
          dphi_max: float = 1.0,
