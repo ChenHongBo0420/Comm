@@ -602,122 +602,128 @@ from jax.nn.initializers import orthogonal, zeros
 #         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 #     return Signal(x, t)
 
-# def fdbp(scope: Scope,
-#          signal,
-#          steps: int = 3,
-#          dtaps: int = 261,
-#          ntaps: int = 41,
-#          sps: int = 2,
-#          d_init = delta,
-#          n_init = gauss,
-#          linear_mode: str = 'phase_cond',   # 'phase_cond' 或 'free'
-#          eps_lin: float = 0.01,
-#          K_lin: int = 4,
-#          dphi_max: float = 1.0,
-#          mode: str = 'valid'):
-#     """
-#     - linear_mode='phase_cond'：D 步使用物理相位 + 有界残差（推荐）
-#       否则使用自由核 conv1d（保持兼容）
-#     - mode: 'valid'（默认）或 'same'
-#     """
-#     x, t = signal
-
-#     # 入口检查
-#     if DEBUG_VALIDATE:
-#         _chk_array("Input to fDBP", x)
-
-#     # 构建 D 步
-#     if linear_mode == 'phase_cond':
-#         # 关键：共享参数（沿通道 vmap 但不复制 params）
-#         dconv = vmap_share_params(
-#             wpartial(conv1d_phase_cond, taps=dtaps, mode=mode,
-#                      eps=eps_lin, K=K_lin, dphi_max=dphi_max)
-#         )
-#     else:
-#         # 自由核 D（老路径）
-#         dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init))
-
-#     # 逐步传播
-#     for i in range(steps):
-#         # D：线性相位卷积
-#         x, td = scope.child(dconv, name='DConv_%d' % i)(Signal(x, t))
-#         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-#             _chk_array(f"D[{i}] out", x)
-
-#         # 保护（避免后续指数溢出）
-#         x = _guard_complex(x, clip=1e3)
-
-#         # N：相位乘（MIMO 非线性核）
-#         c, t = scope.child(mimoconv1d, name='NConv_%d' % i)(
-#             Signal(jnp.abs(x) ** 2, td), taps=ntaps, kernel_init=n_init)
-
-#         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-#             _chk_array(f"N[{i}] phase c", c)
-
-#         # e^{j c} 逐样相位乘
-#         # 对齐裁剪（仅在 mode='valid' 时需要；'same' 时可以直接逐点乘）
-#         if mode == 'valid':
-#             x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
-#         else:  # mode == 'same'
-#             x = jnp.exp(1j * c) * x
-
-#         if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
-#             _chk_array(f"After N[{i}] mul", x)
-
-#     return Signal(x, t)
-
-def _print_sig_range(label: str, sig: Signal):
-    x, tt = sig
-    N = x.shape[0]
-    maxabs = jnp.max(jnp.abs(x))
-    meanabs = jnp.mean(jnp.abs(x))
-    debug.print("[ORIG] {label}: len={}, t.start={}, t.stop={}, sps={}, dtype={}, max|x|={:.3e}, mean|x|={:.3e}",
-                N, tt.start, tt.stop, tt.sps, x.dtype, maxabs, meanabs, label=label)
-
-def fdbp(
-    scope: Scope,
-    signal,
-    steps: int = 3,
-    dtaps: int = 261,
-    ntaps: int = 41,
-    sps: int = 2,
-    d_init = delta,
-    n_init = gauss,
-    mode: str = 'valid'   # 与你原版一致：D 用 conv1d(valid)，N 用 mimoconv1d(valid)
-):
+def fdbp(scope: Scope,
+         signal,
+         steps: int = 3,
+         dtaps: int = 261,
+         ntaps: int = 41,
+         sps: int = 2,
+         d_init = delta,
+         n_init = gauss,
+         linear_mode: str = 'phase_cond',   # 'phase_cond' 或 'free'
+         eps_lin: float = 0.01,
+         K_lin: int = 4,
+         dphi_max: float = 1.0,
+         mode: str = 'valid'):
+    """
+    - linear_mode='phase_cond'：D 步使用物理相位 + 有界残差
+    - mode: 'valid'（默认，需要对齐裁剪）或 'same'（无需裁剪）
+    """
+    assert mode in ('valid', 'same')
     x, t = signal
-    # D 步：原始 conv1d（delta 初始化），沿通道 vmap
-    dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init, mode=mode))
 
-    _print_sig_range("Input", Signal(x, t))
+    if DEBUG_VALIDATE:
+        _chk_array("Input to fDBP", x)
 
-    for i in range(steps):
-        # ---- D 步 ----
-        xD, td = scope.child(dconv, name=f"DConv_{i}")(Signal(x, t))
-        _print_sig_range(f"D[{i}] out", Signal(xD, td))
-
-        # ---- N 步：功率 -> 相位卷积 ----
-        c, tN = scope.child(mimoconv1d, name=f"NConv_{i}")(
-            Signal(jnp.abs(xD) ** 2, td),
-            taps=ntaps, kernel_init=n_init, mode=mode
+    # --- 构建 D 步 ---
+    if linear_mode == 'phase_cond':
+        dconv = vmap_share_params(
+            wpartial(conv1d_phase_cond, taps=dtaps, mode=mode,
+                     eps=eps_lin, K=K_lin, dphi_max=dphi_max)
         )
-        cmax = jnp.max(jnp.abs(c))
-        cmean = jnp.mean(jnp.abs(c))
-        debug.print("[ORIG] N[{i}] phase c: len={}, t.start={}, t.stop={}, dtype={}, max|c|={:.3e}, mean|c|={:.3e}",
-                    c.shape[0], tN.start, tN.stop, c.dtype, cmax, cmean, i=i)
+    else:
+        dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init, mode=mode))
 
-        # ---- 对齐相位并相乘：与原版保持一致的切片公式 ----
-        a = tN.start - td.start
-        b = tN.stop  - td.stop   # 注意 b 一般是负数
-        out_len = (xD.shape[0] + b) - a
-        debug.print("[ORIG] Align[{i}]: slice a={} b={}  -> x[a:N+b], N={} -> out_len={}",
-                    a, b, xD.shape[0], out_len, i=i)
+    # --- 逐步传播 ---
+    for i in range(steps):
+        # D：线性卷积（保存为 xD / td，别覆盖 x 以免切错）
+        xD, td = scope.child(dconv, name=f'DConv_{i}')(Signal(x, t))
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _chk_array(f"D[{i}] out", xD)
 
-        x = jnp.exp(1j * c) * xD[a : xD.shape[0] + b]
+        xD = _guard_complex(xD, clip=1e3)
+
+        # N：|xD|^2 -> 相位 c（注意基准时标用 td）
+        c, tN = scope.child(mimoconv1d, name=f'NConv_{i}')(
+            Signal(jnp.abs(xD) ** 2, td), taps=ntaps, kernel_init=n_init, mode=mode
+        )
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _chk_array(f"N[{i}] phase c", c)
+
+        # 对齐与相位乘
+        if mode == 'valid':
+            a = tN.start - td.start   # 期望恒为 +35（给你这组参数）
+            b = tN.stop  - td.stop    # 期望恒为 -35
+            # 防呆检查（JIT 外）
+            assert a >= 0 and a == -b, f'bad align offsets: a={a}, b={b}'
+            assert xD.shape[0] + b - a == c.shape[0], \
+                f'len mismatch: xD={xD.shape[0]}, c={c.shape[0]}, a={a}, b={b}'
+            x = jnp.exp(1j * c) * xD[a : xD.shape[0] + b]
+        else:
+            # 'same' 模式长度一致，直接逐点乘
+            x = jnp.exp(1j * c) * xD
+
+        if DEBUG_VALIDATE and i < DEBUG_MAXPRINT:
+            _chk_array(f"After N[{i}] mul", x)
+
+        # 本步结束后，以 N 的时标为准
         t = tN
-        _print_sig_range(f"After N[{i}] mul", Signal(x, t))
 
     return Signal(x, t)
+
+
+# def _print_sig_range(label: str, sig: Signal):
+#     x, tt = sig
+#     N = x.shape[0]
+#     maxabs = jnp.max(jnp.abs(x))
+#     meanabs = jnp.mean(jnp.abs(x))
+#     debug.print("[ORIG] {label}: len={}, t.start={}, t.stop={}, sps={}, dtype={}, max|x|={:.3e}, mean|x|={:.3e}",
+#                 N, tt.start, tt.stop, tt.sps, x.dtype, maxabs, meanabs, label=label)
+
+# def fdbp(
+#     scope: Scope,
+#     signal,
+#     steps: int = 3,
+#     dtaps: int = 261,
+#     ntaps: int = 41,
+#     sps: int = 2,
+#     d_init = delta,
+#     n_init = gauss,
+#     mode: str = 'valid'   # 与你原版一致：D 用 conv1d(valid)，N 用 mimoconv1d(valid)
+# ):
+#     x, t = signal
+#     # D 步：原始 conv1d（delta 初始化），沿通道 vmap
+#     dconv = vmap(wpartial(conv1d, taps=dtaps, kernel_init=d_init, mode=mode))
+
+#     _print_sig_range("Input", Signal(x, t))
+
+#     for i in range(steps):
+#         # ---- D 步 ----
+#         xD, td = scope.child(dconv, name=f"DConv_{i}")(Signal(x, t))
+#         _print_sig_range(f"D[{i}] out", Signal(xD, td))
+
+#         # ---- N 步：功率 -> 相位卷积 ----
+#         c, tN = scope.child(mimoconv1d, name=f"NConv_{i}")(
+#             Signal(jnp.abs(xD) ** 2, td),
+#             taps=ntaps, kernel_init=n_init, mode=mode
+#         )
+#         cmax = jnp.max(jnp.abs(c))
+#         cmean = jnp.mean(jnp.abs(c))
+#         debug.print("[ORIG] N[{i}] phase c: len={}, t.start={}, t.stop={}, dtype={}, max|c|={:.3e}, mean|c|={:.3e}",
+#                     c.shape[0], tN.start, tN.stop, c.dtype, cmax, cmean, i=i)
+
+#         # ---- 对齐相位并相乘：与原版保持一致的切片公式 ----
+#         a = tN.start - td.start
+#         b = tN.stop  - td.stop   # 注意 b 一般是负数
+#         out_len = (xD.shape[0] + b) - a
+#         debug.print("[ORIG] Align[{i}]: slice a={} b={}  -> x[a:N+b], N={} -> out_len={}",
+#                     a, b, xD.shape[0], out_len, i=i)
+
+#         x = jnp.exp(1j * c) * xD[a : xD.shape[0] + b]
+#         t = tN
+#         _print_sig_range(f"After N[{i}] mul", Signal(x, t))
+
+#     return Signal(x, t)
 
 
 def complex_glorot_uniform(key, shape, dtype=jnp.complex64):
