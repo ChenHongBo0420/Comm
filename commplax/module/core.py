@@ -231,6 +231,51 @@ def mimoconv1d(
     return Signal(y, t)
       
       
+# def mimofoeaf(scope: Scope,
+#               signal,
+#               framesize=100,
+#               w0=0,
+#               train=False,
+#               preslicer=lambda x: x,
+#               foekwargs={},
+#               mimofn=af.rde,
+#               mimokwargs={},
+#               mimoinitargs={}):
+
+#     sps = 2
+#     dims = 2
+#     tx = signal.t
+#     # MIMO
+#     slisig = preslicer(signal)
+#     auxsig = scope.child(mimoaf,
+#                          mimofn=mimofn,
+#                          train=train,
+#                          mimokwargs=mimokwargs,
+#                          mimoinitargs=mimoinitargs,
+#                          name='MIMO4FOE')(slisig)
+#     y, ty = auxsig # assume y is continuous in time
+#     yf = xop.frame(y, framesize, framesize)
+
+#     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
+#     state = scope.variable('af_state', 'framefoeaf',
+#                            lambda *_: (0., 0, foe_init(w0)), ())
+#     phi, af_step, af_stats = state.value
+
+#     af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
+#     wp = wf.reshape((-1, dims)).mean(axis=-1)
+#     w = jnp.interp(jnp.arange(y.shape[0] * sps) / sps,
+#                    jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2, wp) / sps
+#     psi = phi + jnp.cumsum(w)
+#     state.value = (psi[-1], af_step, af_stats)
+
+#     # apply FOE to original input signal via linear extrapolation
+#     psi_ext = jnp.concatenate([w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
+#                                psi,
+#                                w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]])
+
+#     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+#     return signal
+
 def mimofoeaf(scope: Scope,
               signal,
               framesize=100,
@@ -240,42 +285,18 @@ def mimofoeaf(scope: Scope,
               foekwargs={},
               mimofn=af.rde,
               mimokwargs={},
-              mimoinitargs={}):
+              mimoinitargs={},
+              foe_strength: float = 0.5,   # ★ 新增参数：FOE 作用强度
+              ):
 
-    sps = 2
-    dims = 2
-    tx = signal.t
-    # MIMO
-    slisig = preslicer(signal)
-    auxsig = scope.child(mimoaf,
-                         mimofn=mimofn,
-                         train=train,
-                         mimokwargs=mimokwargs,
-                         mimoinitargs=mimoinitargs,
-                         name='MIMO4FOE')(slisig)
-    y, ty = auxsig # assume y is continuous in time
-    yf = xop.frame(y, framesize, framesize)
-
-    foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
-    state = scope.variable('af_state', 'framefoeaf',
-                           lambda *_: (0., 0, foe_init(w0)), ())
-    phi, af_step, af_stats = state.value
-
-    af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
-    wp = wf.reshape((-1, dims)).mean(axis=-1)
-    w = jnp.interp(jnp.arange(y.shape[0] * sps) / sps,
-                   jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2, wp) / sps
-    psi = phi + jnp.cumsum(w)
-    state.value = (psi[-1], af_step, af_stats)
-
-    # apply FOE to original input signal via linear extrapolation
+    ...
     psi_ext = jnp.concatenate([w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
                                psi,
                                w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]])
 
-    signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+    # ★ 只纠正 foe_strength 比例的相位，其余故意留下来
+    signal = signal * jnp.exp(-1j * foe_strength * psi_ext)[:, None]
     return signal
-
                 
 def mimoaf(
     scope: Scope,
