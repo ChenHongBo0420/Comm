@@ -286,17 +286,72 @@ def mimofoeaf(scope: Scope,
               mimofn=af.rde,
               mimokwargs={},
               mimoinitargs={},
-              foe_strength: float = 0.5,   # ★ 新增参数：FOE 作用强度
+              foe_strength: float = 0.5,   # 新增：FOE 作用强度 [0,1]
               ):
+    """
+    MIMO FOE + AF 联合模块，加入 foe_strength 让 FOE 只补偿一部分相位。
 
-    ...
-    psi_ext = jnp.concatenate([w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
-                               psi,
-                               w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]])
+    foe_strength = 1.0 → 完全等价原始实现
+    foe_strength = 0.0 → 完全不做 FOE，相当于只跑前面的 MIMOAF
+    中间值 → 只抵消一部分相位，刻意保留 residual 时变给后面的 NN / 结构去学
+    """
 
-    # ★ 只纠正 foe_strength 比例的相位，其余故意留下来
+    sps  = 2
+    dims = 2
+    tx   = signal.t
+
+    # 1) 先做一次 MIMO 自适应均衡（RDE / DD-LMS 之类），得到一个相对“干净”的 y
+    slisig = preslicer(signal)
+    auxsig = scope.child(
+        mimoaf,
+        mimofn=mimofn,
+        train=train,
+        mimokwargs=mimokwargs,
+        mimoinitargs=mimoinitargs,
+        name='MIMO4FOE'
+    )(slisig)
+    y, ty = auxsig                 # y: [Ns, dims]
+
+    # 2) 按 framesize 分帧，送入 frame-based CPR KF
+    yf = xop.frame(y, framesize, framesize)
+
+    foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
+    state = scope.variable(
+        'af_state',
+        'framefoeaf',
+        lambda *_: (0., 0, foe_init(w0)),  # (phi, af_step, af_stats)
+        ()
+    )
+    phi, af_step, af_stats = state.value
+
+    # 3) FOE 卡尔曼滤波，得到每个 frame 的频偏估计 wf
+    af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
+    wp = wf.reshape((-1, dims)).mean(axis=-1)  # 两极化平均 → 标量频偏轨迹
+
+    # 4) 频偏轨迹插值到每个 symbol，再积分成相位 psi
+    w = jnp.interp(
+        jnp.arange(y.shape[0] * sps) / sps,
+        jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2,
+        wp
+    ) / sps
+    psi = phi + jnp.cumsum(w)
+
+    # 状态里仍然存“完整”的 psi[-1]，保证 FOE 内部是 consistent 的
+    state.value = (psi[-1], af_step, af_stats)
+
+    # 5) 把 psi 外推到整个 tx 区间（起止位置可能超出 y）
+    psi_ext = jnp.concatenate([
+        w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
+        psi,
+        w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]
+    ])
+
+    # 6) ★ 关键改动：只消除 foe_strength 比例的相位
+    #    foe_strength=1 → 和原来完全等价
+    #    foe_strength<1 → 故意留下一部分残余相位
     signal = signal * jnp.exp(-1j * foe_strength * psi_ext)[:, None]
     return signal
+
                 
 def mimoaf(
     scope: Scope,
