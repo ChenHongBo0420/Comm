@@ -286,7 +286,7 @@ def mimofoeaf(scope: Scope,
               mimofn=af.rde,
               mimokwargs={},
               mimoinitargs={},
-              foe_strength: float = 0.5,   # 新增：FOE 作用强度 [0,1]
+              foe_strength: float = 0.9,   # 新增：FOE 作用强度 [0,1]
               ):
     """
     MIMO FOE + AF 联合模块，加入 foe_strength 让 FOE 只补偿一部分相位。
