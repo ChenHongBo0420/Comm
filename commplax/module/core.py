@@ -286,7 +286,7 @@ def mimofoeaf(scope: Scope,
               mimofn=af.rde,
               mimokwargs={},
               mimoinitargs={},
-              foe_strength: float = 0.95):
+              foe_strength: float = 0.97):
 
     sps  = 2
     dims = 2
