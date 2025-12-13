@@ -75,7 +75,7 @@ class AdaptiveFilter(NamedTuple):
 
 #     return _af_maker
 
-def adaptive_filter(af_maker: Callable, trainable: bool = False, detach_update: bool = True):
+def adaptive_filter(af_maker: Callable, trainable: bool = False, detach_update: bool = False):
     """
     Wrap an adaptive filter (init, update, apply) into an AdaptiveFilter.
 
