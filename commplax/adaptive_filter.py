@@ -42,52 +42,7 @@ class AdaptiveFilter(NamedTuple):
     eval_fn: ApplyFn
 
 
-# def adaptive_filter(af_maker: Callable, trainable=False):
-#     @functools.wraps(af_maker)
-#     def _af_maker(*args, **kwargs):
-#         init, update, apply = af_maker(*args, **kwargs)
-
-#         @functools.wraps(init)
-#         def _init(*args, **kwargs):
-#             x0 = init(*args, **kwargs)
-#             return jax.device_put(x0)
-
-#         @jax.jit
-#         @functools.wraps(update)
-#         def _update(i, af_state, af_inp):
-#             if trainable:
-#                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
-#                 af_inp = (af_inp + (0.,))[:2]
-#             else:
-#                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
-#             af_inp = jax.device_put(af_inp)
-#             af_state, af_out = stop_gradient(update(i, af_state, af_inp))
-#             return af_state, af_out
-
-#         @jax.jit
-#         @functools.wraps(apply)
-#         def _apply(af_ps, af_xs):
-#             return apply(af_ps, af_xs)
-
-#         _update.trainable = trainable
-
-#         return AdaptiveFilter(_init, _update, _apply)
-
-#     return _af_maker
-
-def adaptive_filter(af_maker: Callable, trainable: bool = False, detach_update: bool = False):
-    """
-    Wrap an adaptive filter (init, update, apply) into an AdaptiveFilter.
-
-    Args:
-        af_maker: callable returning (init, update, apply).
-        trainable: keep your original behavior (tuple input handling).
-        detach_update:
-            - True  (default): stop gradients through the *state update chain*
-              => truncated BPTT (0-step) for the tracking loop (your current behavior).
-            - False: allow gradients through update/scan
-              => full BPTT-like (through-update gradients exist).
-    """
+def adaptive_filter(af_maker: Callable, trainable=False):
     @functools.wraps(af_maker)
     def _af_maker(*args, **kwargs):
         init, update, apply = af_maker(*args, **kwargs)
@@ -100,20 +55,13 @@ def adaptive_filter(af_maker: Callable, trainable: bool = False, detach_update: 
         @jax.jit
         @functools.wraps(update)
         def _update(i, af_state, af_inp):
-            # Keep your original input convention
             if trainable:
                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
                 af_inp = (af_inp + (0.,))[:2]
             else:
                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
-
             af_inp = jax.device_put(af_inp)
-
-            # Core change: optional detachment at the update boundary
-            af_state, af_out = update(i, af_state, af_inp)
-            if detach_update:
-                af_state, af_out = lax.stop_gradient((af_state, af_out))
-
+            af_state, af_out = stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
 
         @jax.jit
@@ -122,12 +70,13 @@ def adaptive_filter(af_maker: Callable, trainable: bool = False, detach_update: 
             return apply(af_ps, af_xs)
 
         _update.trainable = trainable
-        _update.detach_update = detach_update  # for debugging/introspection
 
-        # NOTE: AdaptiveFilter class must be in your scope as before
         return AdaptiveFilter(_init, _update, _apply)
 
     return _af_maker
+
+
+
     
 # def array(af_maker, replicas, axis=-1):
 #     @functools.wraps(af_maker)
