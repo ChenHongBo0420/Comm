@@ -352,17 +352,12 @@ def mimofoeaf(scope: Scope,
               record_action: bool = True,
               act_block_len_symbols: int = 2048):
     """
-    输出/状态说明（record_action=True）：
-      state.value =
-        (phi_last, af_step, af_stats,
-         A_act_blk_std_rad,   # std(Δpsi_res_blk) : 块级动作抖动（已去线性漂移，unwrapped域）
-         A_act_w_std_rad,     # std(w_eff)        : 控制输入强度
-         slip_act_cnt)        # count(|Δpsi_res_blk| > pi) : 残差块增量异常大跳
+    输出补偿后的 signal，同时在 af_state/framefoeaf 里记录动作强度（标量）：
 
-    注意：
-      - A_act_blk_std_rad / slip_act_cnt 都基于 “psi_eff 的块级轨迹” 并先去线性趋势，
-        避免把正常CFO/FOE造成的长期漂移误判成 slip。
-      - 不再对 dpsi 做 angle(exp(j*dpsi)) 这种 wrap 操作（那会让 slip≈n_blk-1）。
+    关键点（修正你之前“全是 slip / 常数”的问题）：
+      - 不能直接用累计相位 psi 的块间 raw diff 判 slip（里面包含稳定 CFO/线性漂移）
+      - 先对 psi_blk 做 unwrap，再做线性去趋势（detrend），再对 residual 的块间增量统计
+      - w_eff 的波动（std(w_eff-mean)）是更“控制器动作能量”的口径
     """
     sps  = 2
     dims = 2
@@ -384,9 +379,10 @@ def mimofoeaf(scope: Scope,
     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
 
     # ===== state：扩展存储 =====
+    # (phi_last, af_step, af_stats, A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
     def _init_state(*_):
-        phi_last = jnp.array(0., dtype=jnp.float32)
-        af_step0 = jnp.array(0, dtype=jnp.int32)
+        phi_last  = jnp.array(0., dtype=jnp.float32)
+        af_step0  = jnp.array(0, dtype=jnp.int32)
         af_stats0 = foe_init(w0)
         if record_action:
             return (phi_last, af_step0, af_stats0,
@@ -407,7 +403,7 @@ def mimofoeaf(scope: Scope,
     af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
     wp = wf.reshape((-1, dims)).mean(axis=-1)
 
-    # wp -> 每采样的 w（按你原逻辑）
+    # wp -> 每采样的 w（按原逻辑）
     w = jnp.interp(
         jnp.arange(y.shape[0] * sps) / sps,
         jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2,
@@ -415,44 +411,50 @@ def mimofoeaf(scope: Scope,
     ) / sps
 
     w_eff   = foe_strength * w
-    psi_eff = phi + jnp.cumsum(w_eff)   # unwrapped 域（累计相位）
+    psi_eff = phi + jnp.cumsum(w_eff)
 
-    # ===== 动作强度标量（只存标量，避免 state 巨大）=====
+    # ===== 动作强度：标量统计（避免 state 巨大）=====
     if record_action:
-        blk = act_block_len_symbols * sps
+        blk = int(act_block_len_symbols) * sps
         n_blk = psi_eff.shape[0] // blk
 
+        def _unwrap_1d(phi_raw):
+            # jnp 版 unwrap：phi_u[0]=phi_raw[0], 后面累加 wrapped diff
+            d = jnp.diff(phi_raw)
+            d_mod = (d + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
+            phi_u = jnp.concatenate([phi_raw[:1], phi_raw[:1] + jnp.cumsum(d_mod)])
+            return phi_u
+
+        def _detrend(phi_u):
+            t = jnp.arange(phi_u.shape[0], dtype=phi_u.dtype)
+            t0 = jnp.mean(t)
+            p0 = jnp.mean(phi_u)
+            denom = jnp.sum((t - t0) ** 2) + 1e-12
+            a = jnp.sum((t - t0) * (phi_u - p0)) / denom
+            b = p0 - a * t0
+            return phi_u - (a * t + b)
+
         def _calc_action_metrics():
-            # 取每块“块末端相位”作为块级轨迹
+            # 每块取块末端相位
             idx = (jnp.arange(n_blk) + 1) * blk - 1
-            psi_blk = psi_eff[idx]  # [n_blk]  unwrapped
+            psi_blk_raw = psi_eff[idx]                         # [n_blk]
+            psi_blk_u   = _unwrap_1d(psi_blk_raw)              # unwrap
+            psi_blk_res = _detrend(psi_blk_u)                  # 去线性趋势（CFO/漂移）
 
-            # --- 1) 先去线性趋势（平均FOE/CFO漂移） ---
-            t = jnp.arange(n_blk, dtype=psi_blk.dtype)
-            t_mean = jnp.mean(t)
-            p_mean = jnp.mean(psi_blk)
-            denom = jnp.sum((t - t_mean) ** 2) + 1e-12
-            slope = jnp.sum((t - t_mean) * (psi_blk - p_mean)) / denom
-            intercept = p_mean - slope * t_mean
-            psi_fit = slope * t + intercept
-            psi_res = psi_blk - psi_fit
+            dpsi = jnp.diff(psi_blk_res)                       # residual 的块间“更新”
+            A_act_blk_std = jnp.std(dpsi).astype(jnp.float32)  # 动作抖动（更像你要的 action jitter）
 
-            # --- 2) 块间“残差增量”才是动作抖动/忙碌程度 ---
-            dpsi_res = jnp.diff(psi_res)  # [n_blk-1]
+            # slip：去趋势后仍出现大跳变，才算“动作 slip”
+            slip_cnt = jnp.sum(jnp.abs(dpsi) > jnp.pi).astype(jnp.int32)
 
-            # 动作块抖动：std(Δpsi_res)
-            A_act_blk_std = jnp.std(dpsi_res).astype(jnp.float32)
-
-            # 控制量强度：std(w_eff)
-            A_act_w_std = jnp.std(w_eff).astype(jnp.float32)
-
-            # “动作 slip”：残差块增量异常大跳（阈值可按需要调）
-            slip_cnt = jnp.sum(jnp.abs(dpsi_res) > jnp.pi).astype(jnp.int32)
+            # 控制量能量：w_eff 的波动（去均值）
+            w0m = w_eff - jnp.mean(w_eff)
+            A_act_w_std = jnp.std(w0m).astype(jnp.float32)
 
             return A_act_blk_std, A_act_w_std, slip_cnt
 
         A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt = jax.lax.cond(
-            n_blk >= 2,
+            n_blk >= 3,  # 至少 3 个块更稳一点
             lambda _: _calc_action_metrics(),
             lambda _: (jnp.array(jnp.nan, dtype=jnp.float32),
                        jnp.array(jnp.nan, dtype=jnp.float32),
@@ -474,6 +476,7 @@ def mimofoeaf(scope: Scope,
 
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
+
 
 
                 
