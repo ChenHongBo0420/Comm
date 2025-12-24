@@ -348,16 +348,21 @@ def mimofoeaf(scope: Scope,
               mimokwargs={},
               mimoinitargs={},
               foe_strength: float = 1,
-              # ===== 新增：动作强度统计配置 =====
+              # ===== 动作强度统计配置 =====
               record_action: bool = True,
               act_block_len_symbols: int = 2048):
     """
-    改进点：
-      - 原版只存 (psi_last, af_step, af_stats)
-      - 现在额外存 CPE/FOE 的“动作强度”标量：
-          A_act_blk_std_rad : std(Δpsi_blk)（wrap 后），块级更新抖动
-          A_act_w_std_rad   : std(w_eff)，控制量能量（更“控制器动作”口径）
-          slip_act_cnt      : sum(|Δpsi_raw|>pi)，动作相位跳变次数
+    输出/状态说明（record_action=True）：
+      state.value =
+        (phi_last, af_step, af_stats,
+         A_act_blk_std_rad,   # std(Δpsi_res_blk) : 块级动作抖动（已去线性漂移，unwrapped域）
+         A_act_w_std_rad,     # std(w_eff)        : 控制输入强度
+         slip_act_cnt)        # count(|Δpsi_res_blk| > pi) : 残差块增量异常大跳
+
+    注意：
+      - A_act_blk_std_rad / slip_act_cnt 都基于 “psi_eff 的块级轨迹” 并先去线性趋势，
+        避免把正常CFO/FOE造成的长期漂移误判成 slip。
+      - 不再对 dpsi 做 angle(exp(j*dpsi)) 这种 wrap 操作（那会让 slip≈n_blk-1）。
     """
     sps  = 2
     dims = 2
@@ -379,8 +384,6 @@ def mimofoeaf(scope: Scope,
     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
 
     # ===== state：扩展存储 =====
-    # 原： (phi_last, af_step, af_stats)
-    # 新： (phi_last, af_step, af_stats, A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
     def _init_state(*_):
         phi_last = jnp.array(0., dtype=jnp.float32)
         af_step0 = jnp.array(0, dtype=jnp.int32)
@@ -412,30 +415,39 @@ def mimofoeaf(scope: Scope,
     ) / sps
 
     w_eff   = foe_strength * w
-    psi_eff = phi + jnp.cumsum(w_eff)
+    psi_eff = phi + jnp.cumsum(w_eff)   # unwrapped 域（累计相位）
 
-    # ===== 新增：动作强度标量（只算标量，不保存整条轨迹，避免 state 巨大）=====
+    # ===== 动作强度标量（只存标量，避免 state 巨大）=====
     if record_action:
         blk = act_block_len_symbols * sps
         n_blk = psi_eff.shape[0] // blk
 
         def _calc_action_metrics():
-            # 每块取“块末端相位”作为块级动作轨迹
+            # 取每块“块末端相位”作为块级轨迹
             idx = (jnp.arange(n_blk) + 1) * blk - 1
-            psi_blk = psi_eff[idx]  # [n_blk]
+            psi_blk = psi_eff[idx]  # [n_blk]  unwrapped
 
-            # 块间增量（raw）
-            dpsi_raw = jnp.diff(psi_blk)  # [n_blk-1]
+            # --- 1) 先去线性趋势（平均FOE/CFO漂移） ---
+            t = jnp.arange(n_blk, dtype=psi_blk.dtype)
+            t_mean = jnp.mean(t)
+            p_mean = jnp.mean(psi_blk)
+            denom = jnp.sum((t - t_mean) ** 2) + 1e-12
+            slope = jnp.sum((t - t_mean) * (psi_blk - p_mean)) / denom
+            intercept = p_mean - slope * t_mean
+            psi_fit = slope * t + intercept
+            psi_res = psi_blk - psi_fit
 
-            # slip：wrapped 相位的大跳变计数
-            slip_cnt = jnp.sum(jnp.abs(dpsi_raw) > jnp.pi).astype(jnp.int32)
+            # --- 2) 块间“残差增量”才是动作抖动/忙碌程度 ---
+            dpsi_res = jnp.diff(psi_res)  # [n_blk-1]
 
-            # wrap到[-pi,pi] 再看“更新抖动”
-            dpsi_wrapped = jnp.angle(jnp.exp(1j * dpsi_raw))
-            A_act_blk_std = jnp.std(dpsi_wrapped).astype(jnp.float32)
+            # 动作块抖动：std(Δpsi_res)
+            A_act_blk_std = jnp.std(dpsi_res).astype(jnp.float32)
 
-            # 控制量能量口径（动作强度）
+            # 控制量强度：std(w_eff)
             A_act_w_std = jnp.std(w_eff).astype(jnp.float32)
+
+            # “动作 slip”：残差块增量异常大跳（阈值可按需要调）
+            slip_cnt = jnp.sum(jnp.abs(dpsi_res) > jnp.pi).astype(jnp.int32)
 
             return A_act_blk_std, A_act_w_std, slip_cnt
 
@@ -462,6 +474,7 @@ def mimofoeaf(scope: Scope,
 
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
+
 
                 
 def mimoaf(
