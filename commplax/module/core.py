@@ -276,6 +276,67 @@ def mimoconv1d(
 #     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
 #     return signal
 
+# def mimofoeaf(scope: Scope,
+#               signal,
+#               framesize=100,
+#               w0=0,
+#               train=False,
+#               preslicer=lambda x: x,
+#               foekwargs={},
+#               mimofn=af.rde,
+#               mimokwargs={},
+#               mimoinitargs={},
+#               foe_strength: float = 1):
+
+#     sps  = 2
+#     dims = 2
+#     tx   = signal.t
+
+#     slisig = preslicer(signal)
+#     auxsig = scope.child(
+#         mimoaf,
+#         mimofn=mimofn,
+#         train=train,
+#         mimokwargs=mimokwargs,
+#         mimoinitargs=mimoinitargs,
+#         name='MIMO4FOE'
+#     )(slisig)
+#     y, ty = auxsig
+
+#     yf = xop.frame(y, framesize, framesize)
+
+#     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
+#     state = scope.variable(
+#         'af_state',
+#         'framefoeaf',
+#         lambda *_: (0., 0, foe_init(w0)),
+#         ()
+#     )
+#     phi, af_step, af_stats = state.value
+
+#     af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
+#     wp = wf.reshape((-1, dims)).mean(axis=-1)
+
+#     w = jnp.interp(
+#         jnp.arange(y.shape[0] * sps) / sps,
+#         jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2,
+#         wp
+#     ) / sps
+
+#     w_eff   = foe_strength * w
+#     psi_eff = phi + jnp.cumsum(w_eff)
+
+#     state.value = (psi_eff[-1], af_step, af_stats)
+
+#     psi_ext = jnp.concatenate([
+#         w_eff[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
+#         psi_eff,
+#         w_eff[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi_eff[-1]
+#     ])
+
+#     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+#     return signal
+
 def mimofoeaf(scope: Scope,
               signal,
               framesize=100,
@@ -286,8 +347,18 @@ def mimofoeaf(scope: Scope,
               mimofn=af.rde,
               mimokwargs={},
               mimoinitargs={},
-              foe_strength: float = 1):
-
+              foe_strength: float = 1,
+              # ===== 新增：动作强度统计配置 =====
+              record_action: bool = True,
+              act_block_len_symbols: int = 2048):
+    """
+    改进点：
+      - 原版只存 (psi_last, af_step, af_stats)
+      - 现在额外存 CPE/FOE 的“动作强度”标量：
+          A_act_blk_std_rad : std(Δpsi_blk)（wrap 后），块级更新抖动
+          A_act_w_std_rad   : std(w_eff)，控制量能量（更“控制器动作”口径）
+          slip_act_cnt      : sum(|Δpsi_raw|>pi)，动作相位跳变次数
+    """
     sps  = 2
     dims = 2
     tx   = signal.t
@@ -306,17 +377,34 @@ def mimofoeaf(scope: Scope,
     yf = xop.frame(y, framesize, framesize)
 
     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
-    state = scope.variable(
-        'af_state',
-        'framefoeaf',
-        lambda *_: (0., 0, foe_init(w0)),
-        ()
-    )
-    phi, af_step, af_stats = state.value
 
+    # ===== state：扩展存储 =====
+    # 原： (phi_last, af_step, af_stats)
+    # 新： (phi_last, af_step, af_stats, A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
+    def _init_state(*_):
+        phi_last = jnp.array(0., dtype=jnp.float32)
+        af_step0 = jnp.array(0, dtype=jnp.int32)
+        af_stats0 = foe_init(w0)
+        if record_action:
+            return (phi_last, af_step0, af_stats0,
+                    jnp.array(jnp.nan, dtype=jnp.float32),
+                    jnp.array(jnp.nan, dtype=jnp.float32),
+                    jnp.array(0, dtype=jnp.int32))
+        else:
+            return (phi_last, af_step0, af_stats0)
+
+    state = scope.variable('af_state', 'framefoeaf', _init_state, ())
+
+    if record_action:
+        phi, af_step, af_stats, _, _, _ = state.value
+    else:
+        phi, af_step, af_stats = state.value
+
+    # ===== KF 更新 =====
     af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
     wp = wf.reshape((-1, dims)).mean(axis=-1)
 
+    # wp -> 每采样的 w（按你原逻辑）
     w = jnp.interp(
         jnp.arange(y.shape[0] * sps) / sps,
         jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2,
@@ -326,8 +414,46 @@ def mimofoeaf(scope: Scope,
     w_eff   = foe_strength * w
     psi_eff = phi + jnp.cumsum(w_eff)
 
-    state.value = (psi_eff[-1], af_step, af_stats)
+    # ===== 新增：动作强度标量（只算标量，不保存整条轨迹，避免 state 巨大）=====
+    if record_action:
+        blk = act_block_len_symbols * sps
+        n_blk = psi_eff.shape[0] // blk
 
+        def _calc_action_metrics():
+            # 每块取“块末端相位”作为块级动作轨迹
+            idx = (jnp.arange(n_blk) + 1) * blk - 1
+            psi_blk = psi_eff[idx]  # [n_blk]
+
+            # 块间增量（raw）
+            dpsi_raw = jnp.diff(psi_blk)  # [n_blk-1]
+
+            # slip：wrapped 相位的大跳变计数
+            slip_cnt = jnp.sum(jnp.abs(dpsi_raw) > jnp.pi).astype(jnp.int32)
+
+            # wrap到[-pi,pi] 再看“更新抖动”
+            dpsi_wrapped = jnp.angle(jnp.exp(1j * dpsi_raw))
+            A_act_blk_std = jnp.std(dpsi_wrapped).astype(jnp.float32)
+
+            # 控制量能量口径（动作强度）
+            A_act_w_std = jnp.std(w_eff).astype(jnp.float32)
+
+            return A_act_blk_std, A_act_w_std, slip_cnt
+
+        A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt = jax.lax.cond(
+            n_blk >= 2,
+            lambda _: _calc_action_metrics(),
+            lambda _: (jnp.array(jnp.nan, dtype=jnp.float32),
+                       jnp.array(jnp.nan, dtype=jnp.float32),
+                       jnp.array(0, dtype=jnp.int32)),
+            operand=None
+        )
+
+        state.value = (psi_eff[-1], af_step, af_stats,
+                       A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
+    else:
+        state.value = (psi_eff[-1], af_step, af_stats)
+
+    # ===== 外推 psi_ext 并补偿 =====
     psi_ext = jnp.concatenate([
         w_eff[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
         psi_eff,
@@ -336,7 +462,6 @@ def mimofoeaf(scope: Scope,
 
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
-
 
                 
 def mimoaf(
