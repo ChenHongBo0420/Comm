@@ -348,16 +348,19 @@ def mimofoeaf(scope: Scope,
               mimokwargs={},
               mimoinitargs={},
               foe_strength: float = 1,
-              # ===== 新增：动作强度统计配置 =====
+              # ===== 动作强度统计配置 =====
               record_action: bool = True,
               act_block_len_symbols: int = 2048):
     """
-    FOE + MIMO AF + 相位补偿
+    FOE(KF) + MIMO AF + 相位补偿，并可记录“动作强度”(control action)
 
-    额外记录“动作强度”（更像控制器动作而不是残余相位）：
-      - A_act_blk_std_rad : std(diff(block_mean(w_hp)))，块级动作变化抖动
-      - A_act_w_std_rad   : std(w_hp)，控制量能量（去趋势高通后的 w）
-      - slip_act_cnt      : 基于 dw_blk 的突变计数（阈值=5*std）
+    记录项（写入 scope.variable('af_state','framefoeaf')）：
+      - A_act_blk_std_rad : std(diff(block_mean(w_hp)))  块级动作变化抖动
+      - A_act_w_std_rad   : std(w_hp)                    控制量能量(去趋势后的 w)
+      - slip_act_cnt      : sum(|dw_blk| > 5*std(dw_blk)) 动作突变次数（更合理）
+    注意：
+      - 这里的 action 指标基于 w_eff 的去趋势高通(w_hp)，避免 psi 累积导致“全是 slip”的假象
+      - 不使用 lax.cond，保证在 jit/init tracing 下 slice/reshape 的索引是静态的
     """
     sps  = 2
     dims = 2
@@ -401,10 +404,10 @@ def mimofoeaf(scope: Scope,
     else:
         phi, af_step, af_stats = state.value
 
-    # KF 更新：得到 wf（按 frame）
+    # ----- KF 更新：得到 wf（按 frame） -----
     af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
 
-    # (frames, dims) -> 每帧一个 w（在极化上做 mean）
+    # (frames, dims) -> 每帧一个 w（极化 mean）
     wp = wf.reshape((-1, dims)).mean(axis=-1)
 
     # ----- 插值到每采样 w -----
@@ -418,49 +421,36 @@ def mimofoeaf(scope: Scope,
     w_eff   = foe_strength * w
     psi_eff = phi + jnp.cumsum(w_eff)
 
-    # ===== 动作强度统计（用 w_eff 的去趋势高通口径，避免 psi 累积导致 slip 全满/指标饱和）=====
+    # ===== 动作强度统计：完全静态索引版本（无 lax.cond）=====
     if record_action:
         # 以 symbol 为单位的 block_len -> 采样点数
-        blk = act_block_len_symbols * sps
+        blk = int(act_block_len_symbols * sps)
 
-        # 1) 控制量：w_eff（每采样的频偏/相位增量）
-        #    去均值+去线性趋势（避免 CFO/线性漂移把指标抬到饱和）
+        # 1) 去趋势高通：w_hp = w_eff - (a t + b)
         t = jnp.arange(w_eff.shape[0], dtype=w_eff.dtype)
         t0 = t - jnp.mean(t)
         denom = jnp.sum(t0 * t0) + 1e-12
         a = jnp.sum(t0 * (w_eff - jnp.mean(w_eff))) / denom
         b = jnp.mean(w_eff) - a * jnp.mean(t)
-        w_trend = a * t + b
-        w_hp = w_eff - w_trend  # high-pass / 去趋势后的“动作”
+        w_hp = w_eff - (a * t + b)
 
-        # 2) block 统计：block mean(w_hp)，再看 block 间 diff 的抖动
-        #    注意：shape[0]//blk 可能是 python int，不能 .astype
-        n_blk = jnp.asarray(w_hp.shape[0] // blk, dtype=jnp.int32)
+        # 2) n_blk 必须保持 python int（静态）
+        n_blk = int(w_hp.shape[0] // blk)
 
-        def _calc_action_metrics(_):
-            w_blk = w_hp[:n_blk * blk].reshape((n_blk, blk)).mean(axis=1)  # [n_blk]
-            dw_blk = jnp.diff(w_blk)  # [n_blk-1]
+        if n_blk >= 2:
+            w_cut = w_hp[: n_blk * blk]                       # 静态 stop
+            w_blk = w_cut.reshape((n_blk, blk)).mean(axis=1)  # [n_blk]
+            dw_blk = jnp.diff(w_blk)                          # [n_blk-1]
 
-            # 动作抖动：std(diff(block_mean(w_hp)))
-            A_act_blk_std = jnp.std(dw_blk).astype(jnp.float32)
+            A_act_blk_std_rad = jnp.std(dw_blk).astype(jnp.float32)
+            A_act_w_std_rad   = jnp.std(w_hp).astype(jnp.float32)
 
-            # 动作能量：std(w_hp)
-            A_act_w_std = jnp.std(w_hp).astype(jnp.float32)
-
-            # 突变计数：用 5*std 做阈值（比 |Δpsi|>pi 更合理）
             thr = 5.0 * (jnp.std(dw_blk) + 1e-12)
-            slip_cnt = jnp.sum(jnp.abs(dw_blk) > thr).astype(jnp.int32)
-
-            return A_act_blk_std, A_act_w_std, slip_cnt
-
-        A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt = jax.lax.cond(
-            n_blk >= 2,
-            _calc_action_metrics,
-            lambda _: (jnp.array(jnp.nan, dtype=jnp.float32),
-                       jnp.array(jnp.nan, dtype=jnp.float32),
-                       jnp.array(0, dtype=jnp.int32)),
-            operand=None
-        )
+            slip_act_cnt = jnp.sum(jnp.abs(dw_blk) > thr).astype(jnp.int32)
+        else:
+            A_act_blk_std_rad = jnp.array(jnp.nan, dtype=jnp.float32)
+            A_act_w_std_rad   = jnp.array(jnp.nan, dtype=jnp.float32)
+            slip_act_cnt      = jnp.array(0, dtype=jnp.int32)
 
         state.value = (psi_eff[-1], af_step, af_stats,
                        A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
@@ -476,7 +466,6 @@ def mimofoeaf(scope: Scope,
 
     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
     return signal
-
 
 
 
