@@ -337,137 +337,131 @@ def mimoconv1d(
 #     signal = signal * jnp.exp(-1j * psi_ext)[:, None]
 #     return signal
 
-def mimofoeaf(scope: Scope,
-              signal,
-              framesize=100,
-              w0=0,
-              train=False,
-              preslicer=lambda x: x,
-              foekwargs={},
-              mimofn=af.rde,
-              mimokwargs={},
-              mimoinitargs={},
-              foe_strength: float = 1,
-              # ===== 动作强度统计配置 =====
-              record_action: bool = True,
-              act_block_len_symbols: int = 2048):
+# ====== 把你 SDMSE.py 里的 test() 整个替换成这一版（完整可用版）======
+from functools import partial
+from jax import jit
+import numpy as np
+
+def test(model: Model,
+         params: Dict,
+         data: gdat.Input,
+         eval_range: tuple = (300000, -20000),
+         L: int = 16,
+         d4_dims: int = 2,
+         pilot_frac: float = 0.0,
+         use_oracle_noise: bool = True,
+         use_elliptical_llr: bool = True,
+         temp_grid: tuple = (0.75, 1.0, 1.25),
+         bitwidth: int = 6,
+         decoder=None,
+         return_artifacts: bool = False):
     """
-    FOE(KF) + MIMO AF + 相位补偿，并可记录“动作强度”(control action)
+    ✅ 兼容两种 apply 返回：
+      - out = z
+      - out = (z, new_state)  (当 mutable=['af_state'] 时)
 
-    记录项（写入 scope.variable('af_state','framefoeaf')）：
-      - A_act_blk_std_rad : std(diff(block_mean(w_hp)))  块级动作变化抖动
-      - A_act_w_std_rad   : std(w_hp)                    控制量能量(去趋势后的 w)
-      - slip_act_cnt      : sum(|dw_blk| > 5*std(dw_blk)) 动作突变次数（更合理）
-    注意：
-      - 这里的 action 指标基于 w_eff 的去趋势高通(w_hp)，避免 psi 累积导致“全是 slip”的假象
-      - 不使用 lax.cond，保证在 jit/init tracing 下 slice/reshape 的索引是静态的
+    return_artifacts=False: return (res, z)
+    return_artifacts=True : return (res, z, artifacts)
+        artifacts 至少包含：
+          - artifacts["module_state"] : apply 的 mutable collections（含 af_state/framefoeaf）
     """
-    sps  = 2
-    dims = 2
-    tx   = signal.t
 
-    # ----- MIMO AF -----
-    slisig = preslicer(signal)
-    auxsig = scope.child(
-        mimoaf,
-        mimofn=mimofn,
-        train=train,
-        mimokwargs=mimokwargs,
-        mimoinitargs=mimoinitargs,
-        name='MIMO4FOE'
-    )(slisig)
-    y, ty = auxsig
+    # -------- 0) 准备 variables --------
+    state, aux, const, sparams = model.initvar[1:]
+    aux = core.dict_replace(aux, {'truth': data.x})
 
-    # ----- FOE KF per-frame -----
-    yf = xop.frame(y, framesize, framesize)
-    foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
+    if params is None:
+        params = model.initvar[0]
 
-    # ===== state：扩展存储 =====
-    # 原： (phi_last, af_step, af_stats)
-    # 新： (phi_last, af_step, af_stats, A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
-    def _init_state(*_):
-        phi_last = jnp.array(0., dtype=jnp.float32)
-        af_step0 = jnp.array(0, dtype=jnp.int32)
-        af_stats0 = foe_init(w0)
-        if record_action:
-            return (phi_last, af_step0, af_stats0,
-                    jnp.array(jnp.nan, dtype=jnp.float32),
-                    jnp.array(jnp.nan, dtype=jnp.float32),
-                    jnp.array(0, dtype=jnp.int32))
-        else:
-            return (phi_last, af_step0, af_stats0)
+    variables = {
+        'params': util.dict_merge(params, sparams),
+        'aux_inputs': aux,
+        'const': const,
+        **state
+    }
 
-    state = scope.variable('af_state', 'framefoeaf', _init_state, ())
-
-    if record_action:
-        phi, af_step, af_stats, _, _, _ = state.value
+    # -------- 1) 前向：只有 return_artifacts 才请求 mutable --------
+    if return_artifacts:
+        # ✅ 关键：只有需要 artifacts 才打开 mutable，否则会变慢
+        apply_fn = partial(model.module.apply, mutable=['af_state'])
+        out = jit(apply_fn, backend='cpu')(variables, core.Signal(data.y))
     else:
-        phi, af_step, af_stats = state.value
+        out = jit(model.module.apply, backend='cpu')(variables, core.Signal(data.y))
 
-    # ----- KF 更新：得到 wf（按 frame） -----
-    af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
-
-    # (frames, dims) -> 每帧一个 w（极化 mean）
-    wp = wf.reshape((-1, dims)).mean(axis=-1)
-
-    # ----- 插值到每采样 w -----
-    w = jnp.interp(
-        jnp.arange(y.shape[0] * sps) / sps,
-        jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2,
-        wp
-    ) / sps
-
-    # 动作强度缩放
-    w_eff   = foe_strength * w
-    psi_eff = phi + jnp.cumsum(w_eff)
-
-    # ===== 动作强度统计：完全静态索引版本（无 lax.cond）=====
-    if record_action:
-        # 以 symbol 为单位的 block_len -> 采样点数
-        blk = int(act_block_len_symbols * sps)
-
-        # 1) 去趋势高通：w_hp = w_eff - (a t + b)
-        t = jnp.arange(w_eff.shape[0], dtype=w_eff.dtype)
-        t0 = t - jnp.mean(t)
-        denom = jnp.sum(t0 * t0) + 1e-12
-        a = jnp.sum(t0 * (w_eff - jnp.mean(w_eff))) / denom
-        b = jnp.mean(w_eff) - a * jnp.mean(t)
-        w_hp = w_eff - (a * t + b)
-
-        # 2) n_blk 必须保持 python int（静态）
-        n_blk = int(w_hp.shape[0] // blk)
-
-        if n_blk >= 2:
-            w_cut = w_hp[: n_blk * blk]                       # 静态 stop
-            w_blk = w_cut.reshape((n_blk, blk)).mean(axis=1)  # [n_blk]
-            dw_blk = jnp.diff(w_blk)                          # [n_blk-1]
-
-            A_act_blk_std_rad = jnp.std(dw_blk).astype(jnp.float32)
-            A_act_w_std_rad   = jnp.std(w_hp).astype(jnp.float32)
-
-            thr = 5.0 * (jnp.std(dw_blk) + 1e-12)
-            slip_act_cnt = jnp.sum(jnp.abs(dw_blk) > thr).astype(jnp.int32)
-        else:
-            A_act_blk_std_rad = jnp.array(jnp.nan, dtype=jnp.float32)
-            A_act_w_std_rad   = jnp.array(jnp.nan, dtype=jnp.float32)
-            slip_act_cnt      = jnp.array(0, dtype=jnp.int32)
-
-        state.value = (psi_eff[-1], af_step, af_stats,
-                       A_act_blk_std_rad, A_act_w_std_rad, slip_act_cnt)
+    # ✅ 兼容：out 可能是 z，也可能是 (z, new_state)
+    if isinstance(out, tuple):
+        z, new_state = out
     else:
-        state.value = (psi_eff[-1], af_step, af_stats)
+        z, new_state = out, None
 
-    # ===== 外推 psi_ext 并补偿 =====
-    psi_ext = jnp.concatenate([
-        w_eff[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
-        psi_eff,
-        w_eff[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi_eff[-1]
-    ])
+    # -------- 2) 取对齐区间 + eval_range 裁剪 --------
+    start, stop = z.t.start, z.t.stop
 
-    signal = signal * jnp.exp(-1j * psi_ext)[:, None]
-    return signal
+    y_all = np.asarray(z.val)                  # equalized output
+    x_all = np.asarray(data.x)[start:stop]     # tx ref aligned
 
+    # 兼容：既可能是 [T]，也可能是 [T,C]
+    if y_all.ndim >= 2:
+        y = y_all[:, 0]
+    else:
+        y = y_all
 
+    if x_all.ndim >= 2:
+        x = x_all[:, 0]
+    else:
+        x = x_all
+
+    # eval_range 裁剪（你原逻辑）
+    y = util.slice_signal(y, eval_range)
+    x = util.slice_signal(x, eval_range)
+
+    # -------- 3) canonical scaling（与你原版本一致）--------
+    scale = comm2.qamscale(L) if L is not None else np.sqrt(10.0)
+    y_1d = y * scale
+    x_1d = x * scale
+
+    # -------- 4) SD/HD 评估（保持你原来的 evaluate_hd_and_sd 调用方式）--------
+    sd_kwargs = dict(
+        use_oracle_noise=use_oracle_noise,
+        use_elliptical_llr=use_elliptical_llr,
+        temp_grid=temp_grid,
+        bitwidth=bitwidth,
+    )
+
+    # 这里假设你 SDMSE.py 里已有 evaluate_hd_and_sd
+    res = evaluate_hd_and_sd(
+        y_1d, x_1d,
+        L=L if L is not None else 16,
+        decoder=decoder,
+        sd_kwargs=sd_kwargs
+    )
+
+    # -------- 5) 4D 聚合指标（保持你原逻辑）--------
+    m_per_dim = int(np.log2(L if L is not None else 16))
+    gmi_dim   = float(res['SD']['GMI_bits_per_dim'])
+    gmi_4d    = gmi_dim * d4_dims
+    ngmi_4d   = gmi_4d / (m_per_dim * d4_dims)
+    air_4d    = gmi_4d * (1.0 - pilot_frac)
+
+    res['SD'].update({
+        'GMI_bits_per_4D': gmi_4d,
+        'NGMI_4D': ngmi_4d,
+        'AIR_bits_per_4D': air_4d,
+        'pilot_frac': pilot_frac,
+        'd4_dims': d4_dims
+    })
+
+    # -------- 6) 返回 --------
+    if not return_artifacts:
+        return res, z
+
+    artifacts = {
+        "module_state": new_state,   # ✅ 这里才是 mutable collections（含 af_state/framefoeaf）
+        "eval_range": eval_range,
+        "start": int(start),
+        "stop": int(stop),
+    }
+    return res, z, artifacts
 
                 
 def mimoaf(
