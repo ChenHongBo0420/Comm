@@ -349,7 +349,7 @@ def mimofoeaf(scope: Scope,
               mimokwargs={},
               mimoinitargs={},
               foe_strength: float = 1,
-              foe_ema_beta: float = 0.0):
+              foe_ema_beta: float = 0.5):
     """
     EMA-EKF 方案A：KF/EKF递推(af_stats)不变，只对用于补偿的 wp 做EMA平滑。
     foe_ema_beta=0 关闭；越接近1越慢。
