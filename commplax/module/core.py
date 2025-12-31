@@ -349,17 +349,12 @@ def mimofoeaf(scope: Scope,
               mimokwargs={},
               mimoinitargs={},
               foe_strength: float = 1,
-              foe_ema_beta: float = 0.5):
+              foe_ema_beta: float = 0.0):
     """
-    EMA-EKF (方案A)：保持KF/EKF递推不变，仅对用于补偿的频偏估计 wp 做EMA平滑，
-    以减弱闭环即时反馈强度（用于消融/诊断半梯度闭环效应）。
-
-    foe_ema_beta:
-        0.0  -> 不做EMA（等价原始行为）
-        0.9/0.99/0.999/... -> EMA平滑强度（越接近1越“慢”）
+    EMA-EKF 方案A：KF/EKF递推(af_stats)不变，只对用于补偿的 wp 做EMA平滑。
+    foe_ema_beta=0 关闭；越接近1越慢。
     """
 
-    import jax
     import jax.numpy as jnp
     from jax import lax
 
@@ -367,7 +362,6 @@ def mimofoeaf(scope: Scope,
     dims = 2
     tx   = signal.t
 
-    # MIMO
     slisig = preslicer(signal)
     auxsig = scope.child(
         mimoaf,
@@ -377,15 +371,13 @@ def mimofoeaf(scope: Scope,
         mimoinitargs=mimoinitargs,
         name='MIMO4FOE'
     )(slisig)
-    y, ty = auxsig  # assume y is continuous in time
+    y, ty = auxsig
 
-    # frame
     yf = xop.frame(y, framesize, framesize)
 
-    # KF/EKF init & update
     foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
 
-    # persistent state for EKF/KF
+    # KF/EKF persistent state (你原来就是这么写的)
     state = scope.variable(
         'af_state',
         'framefoeaf',
@@ -394,55 +386,42 @@ def mimofoeaf(scope: Scope,
     )
     phi, af_step, af_stats = state.value
 
-    # iterate EKF/KF over frames
     af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
 
-    # frame-level freq estimate
-    wp = wf.reshape((-1, dims)).mean(axis=-1)  # shape: [n_frames]
+    wp = wf.reshape((-1, dims)).mean(axis=-1)  # [n_frames]
 
-    # ---------------------------
-    # 方案A：只对 wp 做 EMA 平滑
-    # ---------------------------
     beta = float(foe_ema_beta)
     if beta > 0.0:
-        # 记住上一次调用末尾的 EMA 值，作为本次序列 EMA 的初值（跨调用也能“慢”）
+        # ✅ 注意：放进同一个 collection='af_state'，只换 name
         wp_ema_state = scope.variable(
+            'af_state',
             'foe_wp_ema_state',
-            'framefoeaf',
-            lambda *_: (0.,),   # 存一个标量
+            lambda *_: (0.,),   # 存一个标量作为跨调用EMA初值
             ()
         )
-        (wp_ema_last,) = wp_ema_state.value  # scalar
+        (wp_ema_last,) = wp_ema_state.value
 
-        # 在当前 chunk 内对 wp 做 scan-EMA
         def ema_step(prev, x):
             nxt = beta * prev + (1.0 - beta) * x
             return nxt, nxt
 
         _, wp_ema = lax.scan(ema_step, wp_ema_last, wp)
-
-        # 写回末状态：下次调用接着慢
         wp_ema_state.value = (wp_ema[-1],)
-
         wp_used = wp_ema
     else:
         wp_used = wp
 
-    # interpolate frame wp -> sample w
     w = jnp.interp(
         jnp.arange(y.shape[0] * sps) / sps,
         jnp.arange(wp_used.shape[0]) * framesize + (framesize - 1) / 2,
         wp_used
     ) / sps
 
-    # apply strength (闭环增益旋钮)
     w_eff   = foe_strength * w
     psi_eff = phi + jnp.cumsum(w_eff)
 
-    # write back KF/EKF persistent state (phi uses the *effective* compensated phase)
     state.value = (psi_eff[-1], af_step, af_stats)
 
-    # apply FOE to original input signal via linear extrapolation
     psi_ext = jnp.concatenate([
         w_eff[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
         psi_eff,
