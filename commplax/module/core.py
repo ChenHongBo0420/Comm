@@ -349,7 +349,7 @@ def mimofoeaf(scope: Scope,
               mimokwargs={},
               mimoinitargs={},
               foe_strength: float = 1,
-              foe_ema_beta: float = 0.0):
+              foe_ema_beta: float = 0.5):
     """
     EMA-EKF (方案A)：保持KF/EKF递推不变，仅对用于补偿的频偏估计 wp 做EMA平滑，
     以减弱闭环即时反馈强度（用于消融/诊断半梯度闭环效应）。
