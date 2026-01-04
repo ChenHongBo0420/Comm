@@ -433,6 +433,35 @@ def mimofoeaf(scope: Scope,
 
 
                 
+# def mimoaf(
+#     scope: Scope,
+#     signal,
+#     taps=32,
+#     rtap=None,
+#     dims=2,
+#     sps=2,
+#     train=False,
+#     mimofn=af.ddlms,
+#     mimokwargs={},
+#     mimoinitargs={}):
+
+#     x, t = signal
+#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+#     x = xop.frame(x, taps, sps)
+#     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+#     state = scope.variable('af_state', 'mimoaf',
+#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+#     truth_var = scope.variable('aux_inputs', 'truth',
+#                                lambda *_: None, ())
+#     truth = truth_var.value
+#     if truth is not None:
+#         truth = truth[t.start: truth.shape[0] + t.stop]
+#     af_step, af_stats = state.value
+#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+#     y = mimo_apply(af_weights, x)
+#     state.value = (af_step, af_stats)
+#     return Signal(y, t)
+
 def mimoaf(
     scope: Scope,
     signal,
@@ -441,27 +470,37 @@ def mimoaf(
     dims=2,
     sps=2,
     train=False,
-    mimofn=af.ddlms,
+    mimofn=af.rde,          # ✅ 改成相位不敏感的 RDE（或 af.cma）
     mimokwargs={},
-    mimoinitargs={}):
-
+    mimoinitargs={}
+):
     x, t = signal
+
+    # time support（保持不变）
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+
+    # T/2 fractionally-spaced framing（保持不变）
     x = xop.frame(x, taps, sps)
+
+    # adaptive MIMO
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-    state = scope.variable('af_state', 'mimoaf',
-                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-    truth_var = scope.variable('aux_inputs', 'truth',
-                               lambda *_: None, ())
-    truth = truth_var.value
-    if truth is not None:
-        truth = truth[t.start: truth.shape[0] + t.stop]
+    state = scope.variable(
+        'af_state', 'mimoaf',
+        lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
+    )
+
     af_step, af_stats = state.value
-    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
+
+    # ✅ 关键：不使用 truth（否则就会把相位对齐目标引入更新）
+    truth = None
+
+    af_step, (af_stats, (af_weights, _)) = af.iterate(
+        mimo_update, af_step, af_stats, x, truth
+    )
+
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
     return Signal(y, t)
-      
 
 def channel_shuffle(x, groups):
     batch_size, channels = x.shape
