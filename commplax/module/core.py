@@ -433,35 +433,6 @@ def mimofoeaf(scope: Scope,
 
 
                 
-def mimoaf(
-    scope: Scope,
-    signal,
-    taps=32,
-    rtap=None,
-    dims=2,
-    sps=2,
-    train=False,
-    mimofn=af.ddlms,
-    mimokwargs={},
-    mimoinitargs={}):
-
-    x, t = signal
-    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-    x = xop.frame(x, taps, sps)
-    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-    state = scope.variable('af_state', 'mimoaf',
-                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-    truth_var = scope.variable('aux_inputs', 'truth',
-                               lambda *_: None, ())
-    truth = truth_var.value
-    if truth is not None:
-        truth = truth[t.start: truth.shape[0] + t.stop]
-    af_step, af_stats = state.value
-    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-    y = mimo_apply(af_weights, x)
-    state.value = (af_step, af_stats)
-    return Signal(y, t)
-
 # def mimoaf(
 #     scope: Scope,
 #     signal,
@@ -470,52 +441,81 @@ def mimoaf(
 #     dims=2,
 #     sps=2,
 #     train=False,
-#     mimofn=af.rde,          # ✅ 相位不敏感（或 af.cma）
+#     mimofn=af.ddlms,
 #     mimokwargs={},
-#     mimoinitargs={},
-#     freeze_global_phase: bool = True,   # ✅ 新增：是否固定权重全局相位（更“绝对”地不吸慢相位）
-#     phase_ref_index: int = 0            # 参考权重元素索引（0 表示用第一个元素做参考）
-# ):
+#     mimoinitargs={}):
+
 #     x, t = signal
-
-#     # time support（保持不变）
 #     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-
-#     # T/2 fractionally-spaced framing（保持不变）
 #     x = xop.frame(x, taps, sps)
-
-#     # adaptive MIMO
 #     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-#     state = scope.variable(
-#         'af_state', 'mimoaf',
-#         lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
-#     )
-
-#     # ✅ 关键：仍然创建 aux_inputs.truth，保证框架里一定有 aux_inputs
-#     truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
-#     _truth = truth_var.value  # 我们保留，但不用它驱动更新（防止相位对齐目标被引入）
-
+#     state = scope.variable('af_state', 'mimoaf',
+#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+#     truth_var = scope.variable('aux_inputs', 'truth',
+#                                lambda *_: None, ())
+#     truth = truth_var.value
+#     if truth is not None:
+#         truth = truth[t.start: truth.shape[0] + t.stop]
 #     af_step, af_stats = state.value
-
-#     # ✅ 不用 truth 做更新（RDE/CMA 不需要 truth；也避免 DDLMS 式的相位吸收）
-#     truth = None
-
-#     af_step, (af_stats, (af_weights, _)) = af.iterate(
-#         mimo_update, af_step, af_stats, x, truth
-#     )
-
-#     # ✅ 可选：固定全局相位（防止权重慢漂，把“相位自由度”钉死）
-#     if freeze_global_phase:
-#         w_flat = af_weights.reshape(-1)
-#         ref = w_flat[phase_ref_index]
-#         # 防止 ref≈0
-#         ref = ref + (1e-12 + 0j)
-#         ph = jnp.angle(ref)
-#         af_weights = af_weights * jnp.exp(-1j * ph)
-
+#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
 #     y = mimo_apply(af_weights, x)
 #     state.value = (af_step, af_stats)
 #     return Signal(y, t)
+
+def mimoaf(
+    scope: Scope,
+    signal,
+    taps=32,
+    rtap=None,
+    dims=2,
+    sps=2,
+    train=False,
+    mimofn=af.rde,          # ✅ 相位不敏感（或 af.cma）
+    mimokwargs={},
+    mimoinitargs={},
+    freeze_global_phase: bool = True,   # ✅ 新增：是否固定权重全局相位（更“绝对”地不吸慢相位）
+    phase_ref_index: int = 0            # 参考权重元素索引（0 表示用第一个元素做参考）
+):
+    x, t = signal
+
+    # time support（保持不变）
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+
+    # T/2 fractionally-spaced framing（保持不变）
+    x = xop.frame(x, taps, sps)
+
+    # adaptive MIMO
+    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+    state = scope.variable(
+        'af_state', 'mimoaf',
+        lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
+    )
+
+    # ✅ 关键：仍然创建 aux_inputs.truth，保证框架里一定有 aux_inputs
+    truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
+    _truth = truth_var.value  # 我们保留，但不用它驱动更新（防止相位对齐目标被引入）
+
+    af_step, af_stats = state.value
+
+    # ✅ 不用 truth 做更新（RDE/CMA 不需要 truth；也避免 DDLMS 式的相位吸收）
+    truth = None
+
+    af_step, (af_stats, (af_weights, _)) = af.iterate(
+        mimo_update, af_step, af_stats, x, truth
+    )
+
+    # ✅ 可选：固定全局相位（防止权重慢漂，把“相位自由度”钉死）
+    if freeze_global_phase:
+        w_flat = af_weights.reshape(-1)
+        ref = w_flat[phase_ref_index]
+        # 防止 ref≈0
+        ref = ref + (1e-12 + 0j)
+        ph = jnp.angle(ref)
+        af_weights = af_weights * jnp.exp(-1j * ph)
+
+    y = mimo_apply(af_weights, x)
+    state.value = (af_step, af_stats)
+    return Signal(y, t)
 
 
 def channel_shuffle(x, groups):
