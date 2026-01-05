@@ -474,11 +474,13 @@ def mimoaf(
     mimokwargs={},
     mimoinitargs={},
     freeze_global_phase: bool = True,
-    freeze_in_train: bool = False,   # False: 只在 tracking(=train False) 时冻结相位；True: 训练期也冻结
+    freeze_in_train: bool = False,   # False: 只在 tracking(=train False) 冻结；True: 训练期也冻结
 ):
+    from jax import tree_util  # ✅ 处理 tuple/pytree 权重
+
     x, t = signal
 
-    # time support（保持一致）
+    # time support
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
 
     # T/2 fractionally-spaced framing
@@ -491,7 +493,7 @@ def mimoaf(
         lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
     )
 
-    # 保留 aux_inputs.truth（你们框架 model_init 需要它）
+    # 保留 aux_inputs.truth（你们框架 model_init 需要这个 collection）
     truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
     truth = truth_var.value
     if truth is not None:
@@ -504,31 +506,49 @@ def mimoaf(
         mimo_update, af_step, af_stats, x, truth
     )
 
-    # -----------------------------
-    # 关键：冻结“共同全局相位”自由度，阻止慢相位被权重吸收
-    # 只移除一个全局 scalar 相位，不影响 2×2 SOP/PMD 的相对相位结构
-    # -----------------------------
+    # -------- 冻结“全局共同相位”自由度：对 pytree/tuple 友好 --------
     if freeze_global_phase:
-        # 在 JAX 下，用 lax.cond 兼容 train 是 traced boolean 的情况
+
+        # 冻结条件：默认只在 train=False 的 tracking 阶段冻结
         do_freeze = jnp.asarray(True)
         if not freeze_in_train:
             do_freeze = jnp.logical_not(jnp.asarray(train))
 
-        def _freeze(w):
-            w_flat = w.reshape(-1)
-            idx = jnp.argmax(jnp.abs(w_flat))
-            ref = w_flat[idx] + (1e-12 + 0j)
-            ph = jnp.angle(ref)
-            ph = lax.stop_gradient(ph)
-            return w * jnp.exp(-1j * ph)
+        def _freeze_pytree(w):
+            leaves, treedef = tree_util.tree_flatten(w)
 
-        af_weights = lax.cond(do_freeze, _freeze, lambda w: w, af_weights)
+            # 找到第一个复数叶子作为参考
+            ref_leaf = None
+            for l in leaves:
+                if hasattr(l, "dtype") and jnp.issubdtype(l.dtype, jnp.complexfloating):
+                    ref_leaf = l
+                    break
+            if ref_leaf is None:
+                return w  # 没有复数权重就不处理
+
+            # 用该叶子中幅度最大的元素取相位（更稳）
+            flat = ref_leaf.reshape(-1)
+            ref = flat[jnp.argmax(jnp.abs(flat))] + (1e-12 + 0j)
+            ph = lax.stop_gradient(jnp.angle(ref))
+            rot = jnp.exp(-1j * ph)
+
+            new_leaves = []
+            for l in leaves:
+                if hasattr(l, "dtype") and jnp.issubdtype(l.dtype, jnp.complexfloating):
+                    new_leaves.append(l * rot)
+                else:
+                    new_leaves.append(l)
+
+            return tree_util.tree_unflatten(treedef, new_leaves)
+
+        af_weights = lax.cond(do_freeze, _freeze_pytree, lambda w: w, af_weights)
 
     # 应用滤波
     y = mimo_apply(af_weights, x)
 
     state.value = (af_step, af_stats)
     return Signal(y, t)
+
 
 
 
