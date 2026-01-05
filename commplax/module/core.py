@@ -469,14 +469,14 @@ def mimoaf(
     rtap=None,
     dims=2,
     sps=2,
-    train=False,
+    train=False,                 # 可能是 bool，也可能是 schedule(step)->bool
     mimofn=af.ddlms,
     mimokwargs={},
     mimoinitargs={},
     freeze_global_phase: bool = True,
-    freeze_in_train: bool = False,   # False: 只在 tracking(=train False) 冻结；True: 训练期也冻结
+    freeze_in_train: bool = False,   # False: 训练阶段不freeze；True: 训练阶段也freeze
 ):
-    from jax import tree_util  # ✅ 处理 tuple/pytree 权重
+    from jax import tree_util
 
     x, t = signal
 
@@ -493,7 +493,7 @@ def mimoaf(
         lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
     )
 
-    # 保留 aux_inputs.truth（你们框架 model_init 需要这个 collection）
+    # 保留 aux_inputs.truth（框架需要）
     truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
     truth = truth_var.value
     if truth is not None:
@@ -506,27 +506,33 @@ def mimoaf(
         mimo_update, af_step, af_stats, x, truth
     )
 
-    # -------- 冻结“全局共同相位”自由度：对 pytree/tuple 友好 --------
+    # -------- 冻结“共同全局相位”自由度（支持 train 是 schedule 函数）--------
     if freeze_global_phase:
 
-        # 冻结条件：默认只在 train=False 的 tracking 阶段冻结
-        do_freeze = jnp.asarray(True)
-        if not freeze_in_train:
-            do_freeze = jnp.logical_not(jnp.asarray(train))
+        # ✅ train 可能是 bool 或 schedule(step)->bool
+        def _train_flag(tr, step):
+            if callable(tr):
+                return jnp.asarray(tr(step))      # 调用 schedule
+            else:
+                return jnp.asarray(tr)            # 普通 bool
+
+        train_flag = _train_flag(train, af_step)  # JAX bool 标量
+
+        # freeze 条件：默认只在 tracking(=not train_flag) 时 freeze
+        do_freeze = jnp.asarray(True) if freeze_in_train else jnp.logical_not(train_flag)
 
         def _freeze_pytree(w):
             leaves, treedef = tree_util.tree_flatten(w)
 
-            # 找到第一个复数叶子作为参考
+            # 找到一个复数叶子作为参考
             ref_leaf = None
             for l in leaves:
                 if hasattr(l, "dtype") and jnp.issubdtype(l.dtype, jnp.complexfloating):
                     ref_leaf = l
                     break
             if ref_leaf is None:
-                return w  # 没有复数权重就不处理
+                return w
 
-            # 用该叶子中幅度最大的元素取相位（更稳）
             flat = ref_leaf.reshape(-1)
             ref = flat[jnp.argmax(jnp.abs(flat))] + (1e-12 + 0j)
             ph = lax.stop_gradient(jnp.angle(ref))
@@ -548,6 +554,7 @@ def mimoaf(
 
     state.value = (af_step, af_stats)
     return Signal(y, t)
+
 
 
 
