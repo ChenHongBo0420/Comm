@@ -470,52 +470,66 @@ def mimoaf(
     dims=2,
     sps=2,
     train=False,
-    mimofn=af.rde,          # ✅ 相位不敏感（或 af.cma）
+    mimofn=af.ddlms,
     mimokwargs={},
     mimoinitargs={},
-    freeze_global_phase: bool = True,   # ✅ 新增：是否固定权重全局相位（更“绝对”地不吸慢相位）
-    phase_ref_index: int = 0            # 参考权重元素索引（0 表示用第一个元素做参考）
+    freeze_global_phase: bool = True,
+    freeze_in_train: bool = False,   # False: 只在 tracking(=train False) 时冻结相位；True: 训练期也冻结
 ):
     x, t = signal
 
-    # time support（保持不变）
+    # time support（保持一致）
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
 
-    # T/2 fractionally-spaced framing（保持不变）
+    # T/2 fractionally-spaced framing
     x = xop.frame(x, taps, sps)
 
-    # adaptive MIMO
+    # adaptive MIMO (DDLMS)
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
     state = scope.variable(
         'af_state', 'mimoaf',
         lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
     )
 
-    # ✅ 关键：仍然创建 aux_inputs.truth，保证框架里一定有 aux_inputs
+    # 保留 aux_inputs.truth（你们框架 model_init 需要它）
     truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
-    _truth = truth_var.value  # 我们保留，但不用它驱动更新（防止相位对齐目标被引入）
+    truth = truth_var.value
+    if truth is not None:
+        truth = truth[t.start: truth.shape[0] + t.stop]
 
     af_step, af_stats = state.value
 
-    # ✅ 不用 truth 做更新（RDE/CMA 不需要 truth；也避免 DDLMS 式的相位吸收）
-    truth = None
-
+    # 迭代更新
     af_step, (af_stats, (af_weights, _)) = af.iterate(
         mimo_update, af_step, af_stats, x, truth
     )
 
-    # ✅ 可选：固定全局相位（防止权重慢漂，把“相位自由度”钉死）
+    # -----------------------------
+    # 关键：冻结“共同全局相位”自由度，阻止慢相位被权重吸收
+    # 只移除一个全局 scalar 相位，不影响 2×2 SOP/PMD 的相对相位结构
+    # -----------------------------
     if freeze_global_phase:
-        w_flat = af_weights.reshape(-1)
-        ref = w_flat[phase_ref_index]
-        # 防止 ref≈0
-        ref = ref + (1e-12 + 0j)
-        ph = jnp.angle(ref)
-        af_weights = af_weights * jnp.exp(-1j * ph)
+        # 在 JAX 下，用 lax.cond 兼容 train 是 traced boolean 的情况
+        do_freeze = jnp.asarray(True)
+        if not freeze_in_train:
+            do_freeze = jnp.logical_not(jnp.asarray(train))
 
+        def _freeze(w):
+            w_flat = w.reshape(-1)
+            idx = jnp.argmax(jnp.abs(w_flat))
+            ref = w_flat[idx] + (1e-12 + 0j)
+            ph = jnp.angle(ref)
+            ph = lax.stop_gradient(ph)
+            return w * jnp.exp(-1j * ph)
+
+        af_weights = lax.cond(do_freeze, _freeze, lambda w: w, af_weights)
+
+    # 应用滤波
     y = mimo_apply(af_weights, x)
+
     state.value = (af_step, af_stats)
     return Signal(y, t)
+
 
 
 def channel_shuffle(x, groups):
