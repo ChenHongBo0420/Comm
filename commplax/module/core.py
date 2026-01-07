@@ -433,35 +433,6 @@ def mimofoeaf(scope: Scope,
 
 
                 
-# def mimoaf(
-#     scope: Scope,
-#     signal,
-#     taps=32,
-#     rtap=None,
-#     dims=2,
-#     sps=2,
-#     train=False,
-#     mimofn=af.ddlms,
-#     mimokwargs={},
-#     mimoinitargs={}):
-
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-#     x = xop.frame(x, taps, sps)
-#     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-#     state = scope.variable('af_state', 'mimoaf',
-#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-#     truth_var = scope.variable('aux_inputs', 'truth',
-#                                lambda *_: None, ())
-#     truth = truth_var.value
-#     if truth is not None:
-#         truth = truth[t.start: truth.shape[0] + t.stop]
-#     af_step, af_stats = state.value
-#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-#     y = mimo_apply(af_weights, x)
-#     state.value = (af_step, af_stats)
-#     return Signal(y, t)
-
 def mimoaf(
     scope: Scope,
     signal,
@@ -469,89 +440,25 @@ def mimoaf(
     rtap=None,
     dims=2,
     sps=2,
-    train=False,                 # 可能是 bool，也可能是 schedule(step)->bool
+    train=False,
     mimofn=af.ddlms,
     mimokwargs={},
-    mimoinitargs={},
-    freeze_global_phase: bool = True,
-    freeze_in_train: bool = False,   # False: 训练阶段不freeze；True: 训练阶段也freeze
-):
-    from jax import tree_util
+    mimoinitargs={}):
 
     x, t = signal
-
-    # time support
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-
-    # T/2 fractionally-spaced framing
     x = xop.frame(x, taps, sps)
-
-    # adaptive MIMO (DDLMS)
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-    state = scope.variable(
-        'af_state', 'mimoaf',
-        lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
-    )
-
-    # 保留 aux_inputs.truth（框架需要）
-    truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
+    state = scope.variable('af_state', 'mimoaf',
+                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+    truth_var = scope.variable('aux_inputs', 'truth',
+                               lambda *_: None, ())
     truth = truth_var.value
     if truth is not None:
         truth = truth[t.start: truth.shape[0] + t.stop]
-
     af_step, af_stats = state.value
-
-    # 迭代更新
-    af_step, (af_stats, (af_weights, _)) = af.iterate(
-        mimo_update, af_step, af_stats, x, truth
-    )
-
-    # -------- 冻结“共同全局相位”自由度（支持 train 是 schedule 函数）--------
-    if freeze_global_phase:
-
-        # ✅ train 可能是 bool 或 schedule(step)->bool
-        def _train_flag(tr, step):
-            if callable(tr):
-                return jnp.asarray(tr(step))      # 调用 schedule
-            else:
-                return jnp.asarray(tr)            # 普通 bool
-
-        train_flag = _train_flag(train, af_step)  # JAX bool 标量
-
-        # freeze 条件：默认只在 tracking(=not train_flag) 时 freeze
-        do_freeze = jnp.asarray(True) if freeze_in_train else jnp.logical_not(train_flag)
-
-        def _freeze_pytree(w):
-            leaves, treedef = tree_util.tree_flatten(w)
-
-            # 找到一个复数叶子作为参考
-            ref_leaf = None
-            for l in leaves:
-                if hasattr(l, "dtype") and jnp.issubdtype(l.dtype, jnp.complexfloating):
-                    ref_leaf = l
-                    break
-            if ref_leaf is None:
-                return w
-
-            flat = ref_leaf.reshape(-1)
-            ref = flat[jnp.argmax(jnp.abs(flat))] + (1e-12 + 0j)
-            ph = lax.stop_gradient(jnp.angle(ref))
-            rot = jnp.exp(-1j * ph)
-
-            new_leaves = []
-            for l in leaves:
-                if hasattr(l, "dtype") and jnp.issubdtype(l.dtype, jnp.complexfloating):
-                    new_leaves.append(l * rot)
-                else:
-                    new_leaves.append(l)
-
-            return tree_util.tree_unflatten(treedef, new_leaves)
-
-        af_weights = lax.cond(do_freeze, _freeze_pytree, lambda w: w, af_weights)
-
-    # 应用滤波
+    af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
-
     state.value = (af_step, af_stats)
     return Signal(y, t)
 
