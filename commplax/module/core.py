@@ -433,36 +433,6 @@ def mimofoeaf(scope: Scope,
 
 
                 
-# def mimoaf(
-#     scope: Scope,
-#     signal,
-#     taps=32,
-#     rtap=None,
-#     dims=2,
-#     sps=2,
-#     train=False,
-#     mimofn=af.ddlms,
-#     mimokwargs={},
-#     mimoinitargs={}):
-
-#     x, t = signal
-#     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-#     x = xop.frame(x, taps, sps)
-#     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-#     state = scope.variable('af_state', 'mimoaf',
-#                            lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
-#     truth_var = scope.variable('aux_inputs', 'truth',
-#                                lambda *_: None, ())
-#     truth = truth_var.value
-#     if truth is not None:
-#         truth = truth[t.start: truth.shape[0] + t.stop]
-#     af_step, af_stats = state.value
-#     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
-#     y = mimo_apply(af_weights, x)
-#     state.value = (af_step, af_stats)
-#     return Signal(y, t)
-
-
 def mimoaf(
     scope: Scope,
     signal,
@@ -471,69 +441,27 @@ def mimoaf(
     dims=2,
     sps=2,
     train=False,
-    mimofn=af.ddlms,          # ✅ 仍支持 af.ddlms/af.rde... 也支持 mimofn="static_fir"
+    mimofn=af.ddlms,
     mimokwargs={},
-    mimoinitargs={}
-):
-    """
-    模式：
-      - 自适应闭环（原版）：mimofn 是 af.ddlms / af.rde / af.cma ...
-      - 静态前馈（推荐消融）：mimofn="static_fir"
-        => 仍是 taps 抽头的 2x2 MIMO FIR，但无 af_state 更新（无闭环）
-    """
-    import jax.numpy as jnp
+    mimoinitargs={}):
 
     x, t = signal
-
-    # time support：保持原口径
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
-
-    # fractionally-spaced framing：保持原口径
-    x = xop.frame(x, taps, sps)   # 通常形状 [N, taps, dims]
-
-    # ✅ 保证 aux_inputs.truth 存在（否则外部可能 KeyError: 'aux_inputs'）
-    truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
+    x = xop.frame(x, taps, sps)
+    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
+    state = scope.variable('af_state', 'mimoaf',
+                           lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ())
+    truth_var = scope.variable('aux_inputs', 'truth',
+                               lambda *_: None, ())
     truth = truth_var.value
     if truth is not None:
         truth = truth[t.start: truth.shape[0] + t.stop]
-
-    # -----------------------------
-    # (A) Static multi-tap MIMO FIR
-    # -----------------------------
-    if isinstance(mimofn, str) and mimofn.lower() in ("static_fir", "static", "static_mimo"):
-        if rtap is None:
-            rtap = (taps - 1) // 2
-
-        # 参数：W[k, i, o]，k=抽头，i=输入偏振，o=输出偏振
-        # 初始化为“中心 tap = I，其余为 0”，等价于最小扰动起点
-        def _init_W(key, shape, dtype=jnp.complex64):
-            W = jnp.zeros(shape, dtype=dtype)           # [taps, dims, dims]
-            I = jnp.eye(shape[1], shape[2], dtype=dtype)
-            W = W.at[rtap].set(I)
-            return W
-
-        W = scope.param('W_static_mimo_fir', _init_W, (taps, dims, dims), jnp.complex64)
-
-        # y[n, o] = Σ_k Σ_i x[n, k, i] * W[k, i, o]
-        y = jnp.einsum('nki,kio->no', x, W)  # [N, dims]
-        return Signal(y, t)
-
-    # -----------------------------
-    # (B) Original adaptive closed-loop
-    # -----------------------------
-    mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
-
-    state = scope.variable(
-        'af_state', 'mimoaf',
-        lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)),
-        ()
-    )
-
     af_step, af_stats = state.value
     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
     state.value = (af_step, af_stats)
     return Signal(y, t)
+
 
 
 
