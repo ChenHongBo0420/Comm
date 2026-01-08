@@ -471,69 +471,70 @@ def mimoaf(
     dims=2,
     sps=2,
     train=False,
-    mimofn=af.ddlms,          # ✅ 原来是 af.ddlms；现在也支持 mimofn="static2x2"
+    mimofn=af.ddlms,          # ✅ 仍支持 af.ddlms/af.rde... 也支持 mimofn="static_fir"
     mimokwargs={},
-    mimoinitargs={}):
+    mimoinitargs={}
+):
     """
-    两种模式：
-      1) 自适应（原版）：mimofn 是函数（如 af.ddlms / af.rde / af.cma）
-      2) 静态2×2：mimofn="static2x2"   -> 只做 1-tap Jones 矩阵，不做闭环状态更新
+    模式：
+      - 自适应闭环（原版）：mimofn 是 af.ddlms / af.rde / af.cma ...
+      - 静态前馈（推荐消融）：mimofn="static_fir"
+        => 仍是 taps 抽头的 2x2 MIMO FIR，但无 af_state 更新（无闭环）
     """
-
     import jax.numpy as jnp
 
     x, t = signal
 
-    # ---- 保持与原版一致的时间支撑（避免对齐/overlap 口径变掉）----
+    # time support：保持原口径
     t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
 
-    # ---- 保持与原版一致的 framing（输出长度与原版一致）----
-    x = xop.frame(x, taps, sps)   # 通常形状: [N, taps, dims]
+    # fractionally-spaced framing：保持原口径
+    x = xop.frame(x, taps, sps)   # 通常形状 [N, taps, dims]
 
-    # ✅ 一定要创建 aux_inputs.truth（否则外部 model_init 会 KeyError: 'aux_inputs'）
+    # ✅ 保证 aux_inputs.truth 存在（否则外部可能 KeyError: 'aux_inputs'）
     truth_var = scope.variable('aux_inputs', 'truth', lambda *_: None, ())
     truth = truth_var.value
     if truth is not None:
         truth = truth[t.start: truth.shape[0] + t.stop]
 
-    # =========================================================
-    # (A) 静态 2×2 模式：mimofn="static2x2"
-    # =========================================================
-    if isinstance(mimofn, str) and mimofn.lower() in ("static2x2", "static"):
+    # -----------------------------
+    # (A) Static multi-tap MIMO FIR
+    # -----------------------------
+    if isinstance(mimofn, str) and mimofn.lower() in ("static_fir", "static", "static_mimo"):
         if rtap is None:
-            rtap = (taps - 1) // 2  # 与 conv1d_t 默认一致
+            rtap = (taps - 1) // 2
 
-        # 只取参考 tap（1-tap demux，不做ISI/PMD时域均衡）
-        x0 = x[:, rtap, :]  # [N, dims]
-
+        # 参数：W[k, i, o]，k=抽头，i=输入偏振，o=输出偏振
+        # 初始化为“中心 tap = I，其余为 0”，等价于最小扰动起点
         def _init_W(key, shape, dtype=jnp.complex64):
-            # identity init: 不扰动原链路，训练更稳
-            return jnp.eye(shape[0], shape[1], dtype=dtype)
+            W = jnp.zeros(shape, dtype=dtype)           # [taps, dims, dims]
+            I = jnp.eye(shape[1], shape[2], dtype=dtype)
+            W = W.at[rtap].set(I)
+            return W
 
-        # 可训练的静态 Jones 矩阵（参数，不是闭环状态）
-        W = scope.param('W_static2x2', _init_W, (dims, dims))
+        W = scope.param('W_static_mimo_fir', _init_W, (taps, dims, dims), jnp.complex64)
 
-        # 线性混合：y[n,:] = x0[n,:] @ W
-        y = jnp.matmul(x0, W)  # [N, dims]
-
+        # y[n, o] = Σ_k Σ_i x[n, k, i] * W[k, i, o]
+        y = jnp.einsum('nki,kio->no', x, W)  # [N, dims]
         return Signal(y, t)
 
-    # =========================================================
-    # (B) 原版自适应模式：mimofn 是 af.ddlms / af.rde / af.cma ...
-    # =========================================================
+    # -----------------------------
+    # (B) Original adaptive closed-loop
+    # -----------------------------
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
 
     state = scope.variable(
         'af_state', 'mimoaf',
-        lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)), ()
+        lambda *_: (0, mimo_init(dims=dims, taps=taps, **mimoinitargs)),
+        ()
     )
 
     af_step, af_stats = state.value
     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
-
     state.value = (af_step, af_stats)
     return Signal(y, t)
+
 
 
 
